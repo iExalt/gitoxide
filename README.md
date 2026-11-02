@@ -1,6 +1,9 @@
-[![CI](https://github.com/GitoxideLabs/gitoxide/workflows/ci/badge.svg)](https://github.com/GitoxideLabs/gitoxide/actions)
+[![Fork CI](https://github.com/iExalt/gitoxide/actions/workflows/fork-ci.yml/badge.svg)](https://github.com/iExalt/gitoxide/actions/workflows/fork-ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/gitoxide.svg)](https://crates.io/crates/gitoxide)
 <img src="etc/msrv-badge.svg">
+
+This is the development fork for acyclic. See [FORK.md](FORK.md) for setup,
+upstream updates, Cargo consumption, and the approval boundary for fork releases.
 
 `gitoxide` is an implementation of `git` written in Rust for developing future-proof applications which strive for correctness and
 performance while providing a pleasant and unsurprising developer experience.

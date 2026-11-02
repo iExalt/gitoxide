@@ -234,32 +234,6 @@ check-mode:
 clear-target:
     cargo clean
 
-# Publish crates, allowing empty release messages and fully generated changelogs
-[group('Releases')]
-[positional-arguments]
-release *args:
-    cargo smart-release --publish-uses-docs-rs-metadata --allow-empty-release-message --allow-fully-generated-changelogs --auto-publish-of-stable-crates "$@"
-
-# Get the unique `v*` tag at `HEAD`, or fail with an error
-[group('Releases')]
-unique-v-tag:
-    etc/scripts/unique-v-tag.sh
-
-# Trigger the `release.yml` workflow on the current `v*` tag
-[group('Releases')]
-run-release-workflow repo='':
-    optional_repo_arg={{ quote(repo) }} && \
-        export GH_REPO="${optional_repo_arg:-"${GH_REPO:-GitoxideLabs/gitoxide}"}" && \
-        tag_name="$({{ j }} unique-v-tag)" && \
-        printf 'Running release.yml in %s repo for %s tag.\n' "$GH_REPO" "$tag_name" && \
-        gh workflow run release.yml --ref "refs/tags/$tag_name"
-
-# Run `cargo smart-release` and then trigger `release.yml` for the `v*` tag
-[group('Releases')]
-roll-release *csr-args:
-    cargo smart-release {{ csr-args }}
-    {{ j }} run-release-workflow
-
 # Run checks, docs, and unit tests
 [group('QA')]
 qa-test:
