@@ -350,10 +350,7 @@ pub(super) fn normalize(mut command: Command) -> Command {
     if !command.env.contains_key("GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI") {
         command.env.insert("GIX_TEST_IGNORE_ARCHIVES".into(), "1".into());
     }
-    command
-        .env
-        .entry("RUSTUP_TOOLCHAIN".into())
-        .or_insert_with(|| "stable".into());
+    // Inherit the developer's pinned toolchain unless this task selects its own.
     command.env.insert("CI".into(), "true".into());
     command.env.insert("INSTA_UPDATE".into(), "no".into());
     command.env.insert("INSTA_FORCE_PASS".into(), "0".into());
@@ -459,6 +456,12 @@ mod tests {
 
     #[test]
     fn shared_environment_prevents_local_bypasses_and_preserves_variants() -> gix_error::TestResult {
+        assert!(
+            !normalize(Command::new("cargo", &["check"]))
+                .env
+                .contains_key("RUSTUP_TOOLCHAIN"),
+            "ordinary QA commands inherit the toolchain selected by mise"
+        );
         let mut command = Command::new("cargo", &["nextest", "run"]);
         command.env.insert("RUSTUP_TOOLCHAIN".into(), "1.99.0".into());
         command.env.insert("GIX_TEST_FIXTURE_HASH".into(), "sha256".into());
