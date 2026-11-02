@@ -8,16 +8,25 @@ in the sibling `gitoxide-upstream` checkout.
 ## Branches and upstream updates
 
 `origin` is <https://github.com/iExalt/gitoxide>; `upstream` is
-<https://github.com/GitoxideLabs/gitoxide>. `main` is the fork's integration branch.
-Open development PRs against `iExalt/gitoxide:main`, and squash-merge after checks
+<https://github.com/GitoxideLabs/gitoxide>. `dev` is the fork's default and integration branch.
+Open development PRs against `iExalt/gitoxide:dev`, and squash-merge after checks
 and review. Preserve upstream history, copyright notices, and licenses.
 
-Acyclic uses `main`; Paseo uses `dev` and an upstream mirror. This fork needs only
-`main` plus the `upstream` remote. For an update, fetch upstream, create an update
-branch from fork `main`, merge the chosen upstream revision, resolve conflicts,
-run thorough QA, and review a PR into fork `main`. Preserve the merge ancestry for
+Acyclic uses `main`; this fork follows Paseo's `dev` and `upstream/main` convention.
+The latter is an upstream mirror, not a development target. The original `main`
+branch remains at the fork's starting revision for reference; it is not maintained.
+For an update, fetch origin, create an update branch from fork `dev`, merge the
+chosen `origin/upstream/main` revision, resolve conflicts, run thorough QA, and
+review a PR into fork `dev`. Preserve the merge ancestry for
 upstream updates (use a merge commit rather than squashing that PR). Do not rebase
-published fork history. There are no automated upstream merges or rebases.
+published fork history. There are no automated merges or rebases into `dev`.
+
+`upstream-sync.yml` runs daily at 07:23 UTC (02:23 Toronto standard time;
+03:23 daylight time) and on manual dispatch from `dev`. It updates only
+`upstream/main`, using GitHub's atomic non-forced ref update. A diverged mirror
+fails; the workflow never force-pushes, merges, or changes `dev`. The mirror must
+exist before the first run and is initialized from upstream during fork setup.
+No upstream files or scripts are checked out or executed by the sync job.
 
 ## Tools and checks
 
@@ -40,9 +49,9 @@ and the root CLI's declared MSRV remains 1.91. Explicit task toolchains override
 the inherited mise toolchain. Do not update the machine-wide `stable` alias to run QA.
 
 The fork CI runs exhaustive host QA and MSRV builds on Ubuntu 24.04 for every PR
-and push to `main`. Check names are `Fork QA` and `Fork MSRV`. Release PRs use the
+and push to `dev`. Check names are `Fork QA` and `Fork MSRV`. Release PRs use the
 same trigger. Workflow actions are pinned to commit IDs; checkout credentials are
-not persisted. All six inherited workflows were removed, including upstream
+not persisted. All six inherited workflows were removed from development, including upstream
 publishing, schedules, CodeQL uploads, fuzzing, and security-analysis jobs.
 
 This deliberately smaller CI does not reproduce upstream's cross-platform and
@@ -93,6 +102,17 @@ trigger PR CI. Once configured, verify an App-created release PR actually gets
 both fork checks before declaring release automation live. See the
 [release-please action documentation](https://github.com/googleapis/release-please-action#github-credentials).
 
+The mirror uses a separate sync App, following Paseo's pattern. Install it on
+**iExalt/gitoxide** with Contents and Workflows read/write permissions; upstream
+commits can change workflow files, which the default `GITHUB_TOKEN` cannot update.
+Set variable `GITOXIDE_SYNC_APP_CLIENT_ID` and secret
+`GITOXIDE_SYNC_APP_PRIVATE_KEY`. Its token is scoped to this repository and those
+permissions. Without the client ID, sync is skipped; an invalid key fails visibly.
+The mirror necessarily contains upstream workflows as data; keep their push
+filters under review during updates. Scheduled workflows run from default `dev`.
+Do not reuse another repository's App credentials without explicitly configuring
+and authorizing this installation.
+
 ### Consuming from acyclic
 
 Use an immutable commit revision until an approved fork tag exists:
@@ -130,6 +150,7 @@ dependency deliberately. No acyclic dependency changes are part of fork setup.
 - [ ] Validate full QA and record measured timings.
 - [ ] Preview release files and merge the infrastructure PR after checks/review.
 - [ ] Install/configure the release App and verify its release PR receives CI.
+- [ ] Install/configure the sync App and verify the scheduled mirror workflow.
 
 Initial pre-change QA planner baseline: 39 tests passed in 1.79 seconds, with a
 15.13-second initial QA build. Timings are observations, not budgets. Full-run

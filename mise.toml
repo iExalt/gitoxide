@@ -17,7 +17,7 @@ GIX_TEST_IGNORE_ARCHIVES = "1"
 
 [tasks.check]
 description = "Affected-package QA; global inputs conservatively select the workspace"
-run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --stage self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"]
+run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"]
 
 [tasks."check:thorough"]
 description = "Full host feature matrix, tests, docs, API compatibility and journeys"
@@ -33,7 +33,7 @@ run = "cargo build --locked"
 
 [tasks."lint:workflows"]
 description = "Validate GitHub workflow expressions and embedded shell scripts"
-run = "actionlint"
+run = ["actionlint", "node --test .github/scripts/sync-upstream.test.cjs"]
 
 [tasks."release:preview"]
 description = "Read-only release PR preview; requires GH_TOKEN (never creates tags or releases)"
