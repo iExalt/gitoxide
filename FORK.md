@@ -26,7 +26,7 @@ published fork history. There are no automated merges or rebases into `dev`.
 `upstream/main`, using GitHub's atomic non-forced ref update. A diverged mirror
 fails; the workflow never force-pushes, merges, or changes `dev`. The mirror must
 exist before the first run and is initialized from upstream during fork setup.
-No upstream files or scripts are checked out or executed by the sync job.
+The job checks out `dev` only; it never executes scripts from the mirrored tip.
 
 ## Tools and checks
 
@@ -53,6 +53,9 @@ and push to `dev`. Check names are `Fork QA` and `Fork MSRV`. Release PRs use th
 same trigger. Workflow actions are pinned to commit IDs; checkout credentials are
 not persisted. All six inherited workflows were removed from development, including upstream
 publishing, schedules, CodeQL uploads, fuzzing, and security-analysis jobs.
+Their GitHub workflow registrations are also disabled, so copies on historical
+branches and the mirror cannot run accidentally. Only fork-owned workflows are
+enabled; revisit this if upstream adds a new workflow filename.
 
 This deliberately smaller CI does not reproduce upstream's cross-platform and
 32-bit runners, downstream consumer builds, Docker pure-Rust check, package-size
@@ -147,11 +150,28 @@ dependency deliberately. No acyclic dependency changes are part of fork setup.
 - [x] Reuse the existing fork and add the upstream remote.
 - [x] Replace inherited workflows and add pinned mise tasks.
 - [x] Configure independent, PR-only fork versioning.
-- [ ] Validate full QA and record measured timings.
-- [ ] Preview release files and merge the infrastructure PR after checks/review.
+- [x] Preview version 0.1.0, tag `gitoxide-fork-v0.1.0`, and the three fork-only release files.
 - [ ] Install/configure the release App and verify its release PR receives CI.
 - [ ] Install/configure the sync App and verify the scheduled mirror workflow.
 
 Initial pre-change QA planner baseline: 39 tests passed in 1.79 seconds, with a
-15.13-second initial QA build. Timings are observations, not budgets. Full-run
-timings and live verification results will be recorded after validation.
+15.13-second initial QA build. After the toolchain fix, the focused planner run
+took 6.58 seconds overall (39 tests, 1.88 seconds in the test binary). Workflow
+lint took 0.77 seconds before adding the two sync tests, which took 0.11 seconds.
+Both local gix MSRV configurations passed in 95.18 seconds including build-lock
+waiting (individual builds: 62 seconds and 30.54 seconds). The archived-fixture
+native suite passed 5,296 tests in 287.46 seconds, with eight expected skips.
+
+These are initial observations on macOS arm64, not budgets or comparable warm
+benchmark samples. Tool downloads, initial compilation, fixture generation, and
+concurrent machine load affect them. No prior equivalent full-fork baseline was
+available and no check was removed to meet a time target. The 120-minute CI
+timeout is a runaway guard, not a performance budget. Review growth against the
+same task, tool versions, platform, and cache state.
+
+Full QA, final runtime receipts, review, and the infrastructure merge are tracked
+in [fork PR #1](https://github.com/iExalt/gitoxide/pull/1). Require both `Fork QA`
+and `Fork MSRV` to pass before merging. At setup, the repository had no branch
+protection or rulesets; no required human approval was bypassed. The App checklist
+above remains separate from passing CI: installation-token workflow execution
+cannot be verified until the repository's App variables and secrets are set.
