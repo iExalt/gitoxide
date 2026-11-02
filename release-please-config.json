@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "9dd78c800d554c18fc99816bf922c93d71402881",
+  "include-component-in-tag": true,
+  "include-v-in-tag": true,
+  "tag-separator": "-",
+  "bump-minor-pre-major": true,
+  "pull-request-header": "Proposed gitoxide fork release. Requires explicit owner approval naming the version before merging.",
+  "pull-request-footer": "Automation only maintains this PR. Tagging and GitHub release creation are separate, explicitly approved operations. Never auto-merge release PRs.",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "initial-version": "0.1.0",
+      "component": "gitoxide-fork",
+      "version-file": "fork-version.txt",
+      "changelog-path": "CHANGELOG.fork.md",
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug fixes" },
+        { "type": "perf", "section": "Performance" },
+        { "type": "chore", "section": "Fork maintenance" }
+      ]
+    }
+  }
+}
