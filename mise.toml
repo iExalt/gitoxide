@@ -1,0 +1,40 @@
+[tools]
+just = "1.58.0"
+"github:nextest-rs/nextest" = { version = "0.9.122", version_prefix = "cargo-nextest-" }
+"github:EmbarkStudios/cargo-deny" = "0.20.2"
+"github:bnjbvr/cargo-machete" = "0.9.1"
+"github:obi1kenobi/cargo-semver-checks" = "0.51.0"
+"aqua:rhysd/actionlint" = "1.7.12"
+"aqua:koalaman/shellcheck" = "0.11.0"
+node = "24.22.0"
+# Match the dependency bundled in the pinned release-please action.
+"npm:release-please" = "17.6.0"
+rust = { version = "1.99.0", components = "rustfmt,clippy" }
+
+[env]
+# Exercise fixture generation; required on macOS and Windows as well.
+GIX_TEST_IGNORE_ARCHIVES = "1"
+
+[tasks.check]
+description = "Affected-package QA; global inputs conservatively select the workspace"
+run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"]
+
+[tasks."check:thorough"]
+description = "Full host feature matrix, tests, docs, API compatibility and journeys"
+run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --thorough --stage self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"]
+
+[tasks."check:msrv"]
+description = "Build gix at its declared MSRV in both supported configurations"
+run = ["mise install rust@1.88.0", "just check-rust-version 1.88.0"]
+
+[tasks.build]
+description = "Build the default CLI without publishing"
+run = "cargo build --locked"
+
+[tasks."lint:workflows"]
+description = "Validate GitHub workflow expressions and embedded shell scripts"
+run = ["actionlint", "node --test .github/scripts/sync-upstream.test.cjs"]
+
+[tasks."release:preview"]
+description = "Read-only release PR preview; requires GH_TOKEN (never creates tags or releases)"
+run = 'bash etc/scripts/fork-release-preview.sh'

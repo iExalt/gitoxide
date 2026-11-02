@@ -29,7 +29,7 @@ struct Selection {
     #[arg(long, default_value = "fast", value_parser = ["fast", "exhaustive"])]
     mode: String,
     /// Compare from the merge base with this revision, including local edits.
-    #[arg(long, default_value = "origin/main")]
+    #[arg(long, default_value = "origin/dev")]
     base: String,
 }
 
