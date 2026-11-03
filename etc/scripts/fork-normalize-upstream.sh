@@ -2,7 +2,7 @@
 # Print a commit that is an upstream revision with its manifests moved to the fork's lockstep
 # versioning, and the normalized base `dev` currently sits on.
 #
-# Usage: fork-normalize-upstream.sh [REVISION]   (default: origin/upstream/main)
+# Usage: fork-normalize-upstream.sh [REVISION [DEV]]   (defaults: origin/upstream/main, origin/dev)
 #
 # `dev` is a normalized upstream commit with the fork's commits on top. To update, rebase those
 # commits from the current base onto a newly normalized revision:
@@ -13,10 +13,12 @@
 # manifests whenever upstream bumps versions. The normalized commit has REVISION as its only
 # parent, and REVISION's tree with only manifests and `Cargo.lock` changed. It always uses the
 # version `0.0.0`; release commits on top carry the fork version. It runs `cargo update` inside
-# REVISION, so upstream's `.cargo/config.toml` applies there.
+# REVISION, so upstream's `.cargo/config.toml` applies there. The `rebase-dev` workflow passes
+# DEV, the `dev` commit it captured, and signs the normalized commit before rebasing onto it.
 set -euo pipefail
 
 revision=${1:-origin/upstream/main}
+dev=${2:-origin/dev}
 root=$(git rev-parse --show-toplevel)
 upstream_commit_id=$(git -C "$root" rev-parse --verify "$revision^{commit}")
 trailer=Normalized-upstream
@@ -31,13 +33,13 @@ while read -r candidate_commit_id; do
         base_commit_id=$candidate_commit_id
         break
     fi
-done < <(git -C "$root" log origin/dev --first-parent --format=%H --grep="^$trailer: [0-9a-f]\{40\}$")
+done < <(git -C "$root" log "$dev" --first-parent --format=%H --grep="^$trailer: [0-9a-f]\{40\}$")
 if [[ -z $base_commit_id ]]; then
-    echo "origin/dev has no normalized upstream base" >&2
+    echo "$dev has no normalized upstream base" >&2
     exit 1
 fi
 if git -C "$root" merge-base --is-ancestor "$upstream_commit_id" "$base_commit_id"; then
-    echo "$revision is already part of dev's base $base_commit_id" >&2
+    echo "$revision is already part of the base of $dev, $base_commit_id" >&2
     exit 1
 fi
 

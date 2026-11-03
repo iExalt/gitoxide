@@ -1,0 +1,91 @@
+{
+  "_comment": "Recorded from GitHub for a Fork CI workflow_dispatch run on a candidate branch and the push run of the same SHA on dev, trimmed to the fields rebase-dev.mjs reads.",
+  "workflow_runs": [
+    {
+      "id": 41649877929,
+      "name": "Fork CI",
+      "path": ".github/workflows/fork-ci.yml",
+      "event": "push",
+      "head_branch": "dev",
+      "head_sha": "8b21b7aa05e1e5fddb602ac40e479cdfb96883d5",
+      "status": "completed",
+      "conclusion": "success",
+      "check_suite_id": 112862125498,
+      "run_attempt": 1
+    },
+    {
+      "id": 41648484118,
+      "name": "Fork CI",
+      "path": ".github/workflows/fork-ci.yml",
+      "event": "workflow_dispatch",
+      "head_branch": "linearize/candidate",
+      "head_sha": "8b21b7aa05e1e5fddb602ac40e479cdfb96883d5",
+      "status": "completed",
+      "conclusion": "success",
+      "check_suite_id": 112858202852,
+      "run_attempt": 1
+    }
+  ],
+  "check_runs": [
+    {
+      "id": 125968781958,
+      "name": "Fork CI required",
+      "head_sha": "8b21b7aa05e1e5fddb602ac40e479cdfb96883d5",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {
+        "id": 15368,
+        "slug": "github-actions"
+      },
+      "check_suite": {
+        "id": 112862125498
+      },
+      "details_url": "https://github.com/iExalt/gitoxide/actions/runs/41649877929/job/125968781958"
+    },
+    {
+      "id": 125964901478,
+      "name": "Fork MSRV",
+      "head_sha": "8b21b7aa05e1e5fddb602ac40e479cdfb96883d5",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {
+        "id": 15368,
+        "slug": "github-actions"
+      },
+      "check_suite": {
+        "id": 112862125498
+      },
+      "details_url": "https://github.com/iExalt/gitoxide/actions/runs/41649877929/job/125964901478"
+    },
+    {
+      "id": 125964032734,
+      "name": "Fork CI required",
+      "head_sha": "8b21b7aa05e1e5fddb602ac40e479cdfb96883d5",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {
+        "id": 15368,
+        "slug": "github-actions"
+      },
+      "check_suite": {
+        "id": 112858202852
+      },
+      "details_url": "https://github.com/iExalt/gitoxide/actions/runs/41648484118/job/125964032734"
+    },
+    {
+      "id": 125960047109,
+      "name": "Fork MSRV",
+      "head_sha": "8b21b7aa05e1e5fddb602ac40e479cdfb96883d5",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {
+        "id": 15368,
+        "slug": "github-actions"
+      },
+      "check_suite": {
+        "id": 112858202852
+      },
+      "details_url": "https://github.com/iExalt/gitoxide/actions/runs/41648484118/job/125960047109"
+    }
+  ]
+}
