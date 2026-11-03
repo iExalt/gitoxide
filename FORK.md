@@ -47,7 +47,8 @@ Run `mise trust` and `mise install` after reviewing `mise.toml`.
 artifacts with the exhaustive native tests by unifying features across the whole workspace,
 so it can hide a crate's missing feature declaration. It also skips doctests, feature and
 hash variants, the archived-fixture pass and the guard against tests modifying source files.
-`check` and CI keep all of those.
+`check` and CI keep all of those. QA commands set `CI=true`; plain `cargo test` without
+it builds separate artifacts, so stick to the mise tasks to reuse their builds.
 
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
 comes from Cargo QA metadata: small, lean, lean-async, max, max-pure and declared

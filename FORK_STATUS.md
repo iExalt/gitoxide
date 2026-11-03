@@ -11,9 +11,9 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 1: iteration speed. A and B are done; C is next |
+| Current phase | 1: iteration speed. A, B and C are done; D is next |
 | Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
-| Immediate focus | Local fast loop (C) |
+| Immediate focus | Routine/deep split and the required gate (D) |
 | Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
 
 ## Goals
@@ -22,7 +22,7 @@ changes it.
 | --- | --- | --- | --- |
 | A: baseline and cheaper builds | complete | verified | Comparable baseline recorded; build cost cut without dropping checks |
 | B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
-| C: local fast loop | planned | — | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
+| C: local fast loop | complete | verified (limits below) | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | planned | — | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
 | F: tagged releases | planned | — | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
@@ -110,6 +110,36 @@ saved the per-lane caches.
 sccache, measured on the station, saved 42% of cold-build wall time but no CPU, because test
 harnesses, binaries and proc-macros can't be cached. It stays deferred unless warm lanes stay
 compile-bound.
+
+### C: local fast loop
+
+Evidence state: verified for upper-layer crates; core plumbing crates exceed the 60 s target.
+
+`mise run test` runs nextest for the planner's affected packages and their dependents. It builds
+exactly the exhaustive native-test package set, so it shares artifacts with `check` (shown by
+counting compiled units: after a loop run, the exhaustive build with QA's environment compiled
+nothing). The old fast path, `--stage default-tests`, took 133–150 s for a `gix-url` edit
+because each selection changed feature unification.
+
+Measured with one appended comment per run, warm, at load 0.6–9 on the shared host (the
+load rose during the set, so later rows are slower than an idle host):
+
+| Edited | Wall | CPU | Tests run |
+| --- | --- | --- | --- |
+| `gix-url` (leaf) | 48 s, 48 s | 226 s | 2,042 in 14 s |
+| `gix` (top) | 47 s warm (68 s after a wider rebuild) | 203 s | 1,624 in 13 s |
+| `gix-ref` (core plumbing) | 94 s, 104 s | 585–631 s | 5,326 in 30–36 s |
+| `gix-hash` (worst case) | 107 s | 654 s | 5,326 in 35 s |
+| `Cargo.toml` (global input) | 109 s | 676 s | 5,333 in 37 s |
+
+The planner and launcher add about 0.3 s. Core plumbing crates such as `gix-ref`, `gix-hash` and
+`gix-object` reach nearly every test, and `Cargo.toml` builds them with `opt-level = 3`. An edit
+there therefore relinks about 60 test binaries and runs the whole suite. That's the reason for the
+~100 s cases; trimming them would mean changing upstream's test-speed profile choices.
+
+QA commands run with `CI=true`. Plain `cargo test` or `cargo nextest` without it builds a separate
+set of artifacts, so switching between the two rebuilds changed crates once more. A bisection on
+the host showed `CI` is the only variable among QA's settings that has this effect.
 
 ## Deferred findings
 
