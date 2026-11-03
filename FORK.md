@@ -3,7 +3,8 @@
 This fork supports acyclic's Git storage and synchronization backend. It lets us
 develop in-process push without depending on upstream review capacity. Fork setup
 does not implement push. The existing investigation and prototype remain separate
-in the sibling `gitoxide-upstream` checkout.
+in the sibling `gitoxide-upstream` checkout. [FORK_STATUS.md](FORK_STATUS.md) tracks
+iteration-speed and release work in progress, with its measurements.
 
 ## Branches and upstream updates
 
