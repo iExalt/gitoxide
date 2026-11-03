@@ -27,7 +27,7 @@ changes it.
 | E: renumber to 0.1.0 in lockstep | complete | verified: release PR #2 bumps exactly the 71 lockfile entries and the workspace version; its deep run 41646760783 passed | Every crate shares one release-please-managed version |
 | F: tagged releases | implemented | `skip-github-release: false` merged (#10); first live tag awaits 0.1.0 | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
 
-| R1: linear `dev` and rebase merges | active | candidate replayed onto N0 with an identical tree; deep run pending | `dev` is N0 plus linear fork commits; only rebase merges allowed; policy docs updated |
+| R1: linear `dev` and rebase merges | active | `dev` replaced by the linear candidate `8b21b7aa0` (identical tree, deep run 41648484118 green, backup `backup/linearize/2026-11-03`); policy PR #11 pending | `dev` is N0 plus linear fork commits; only rebase merges allowed; policy docs updated |
 | R2: rebase-dev workflow | planned | — | Paseo's workflow ported with normalization, rerere cache, fixups, deletions, signing and release boundaries |
 | R3: first rebase | planned | — | `dev` rebased onto current upstream by the workflow; release notes contain no upstream commits |
 
@@ -203,6 +203,15 @@ release-please updaters. The `qa exec manifests` housekeeping check keeps manife
   `upstream/normalized` chain was retired before any upstream update used it. Rehearsing
   upstream's `gix-v0.89.0` to fork-point changes (74 manifests changed upstream) showed why
   normalization is needed: a raw merge conflicted in all 74 manifests.
+- Rehearsed on the station (2026-11-03): a release bump replays cleanly onto a newer normalized
+  base, both from N0 onto N(upstream tip `689fe4578`) and from N(`gix-v0.89.0`) onto N(fork
+  point), where upstream changed 74 manifests. The synthetic bump used there changes the same
+  144 lines of `Cargo.toml` and `Cargo.lock` as release-please's bump in #2.
+- `upstream:normalize` on the linear `dev` prints `base=5c38bd661`, refuses `9dd78c800^` as
+  already part of the base, and normalizes upstream `689fe4578` into a single-parent commit that
+  changes only manifests and `Cargo.lock`.
+- Rebasing the fork onto upstream `689fe4578` conflicts in `tests/it/src/qa/catalog.rs`, which
+  both sides changed. R3 needs that as its first recorded resolution.
 - Linear history removes the release-notes concern the merge design had: upstream commits sit
   below the fork's, so release-please never walks them, provided each rebase moves
   `bootstrap-sha` or `last-release-sha` as `FORK.md` describes.
@@ -217,6 +226,9 @@ release-please updaters. The `qa exec manifests` housekeeping check keeps manife
   under umask 0002. These are test-isolation defects, not regressions.
 - `gix-command` `spawn::with_shell::command_in_path_with_args` failed once out of six runs under load
   (`ls -l` in the test snapshot exited non-zero). The cause is unconfirmed; a race with a concurrent tempdir deletion is suspected.
+- Fork QA logic lives mostly in upstream's `tests/it/src/qa` files, which upstream still changes,
+  so upstream QA edits will keep needing recorded resolutions. If they recur, move fork logic
+  (sharding, `local-tests`) into fork-owned modules with small hooks in `catalog.rs`.
 - Nothing semver-checks one fork release against the previous one; the `api` stage only tests
   the checker on synthetic fixtures.
 - The `upstream/main` mirror trails upstream by 8 commits on 2026-11-03 because the sync App
