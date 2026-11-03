@@ -5,8 +5,8 @@
   "include-v-in-tag": true,
   "tag-separator": "-",
   "bump-minor-pre-major": true,
-  "pull-request-header": "Proposed gitoxide fork release. Requires explicit owner approval naming the version before merging.",
-  "pull-request-footer": "Automation only maintains this PR. Tagging and GitHub release creation are separate, explicitly approved operations. Never auto-merge release PRs.",
+  "pull-request-header": "Proposed gitoxide fork release. Merge only with explicit owner approval naming the version.",
+  "pull-request-footer": "Merging this PR tags the release and publishes its GitHub release. Never auto-merge release PRs.",
   "packages": {
     ".": {
       "release-type": "simple",
@@ -21,6 +21,9 @@
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug fixes" },
+        { "type": "change", "section": "Changes" },
+        { "type": "rename", "section": "Changes" },
+        { "type": "remove", "section": "Changes" },
         { "type": "perf", "section": "Performance" },
         { "type": "chore", "section": "Fork maintenance" }
       ]
