@@ -23,7 +23,7 @@ changes it.
 | A: baseline and cheaper builds | complete | verified | Comparable baseline recorded; build cost cut without dropping checks |
 | B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
 | C: local fast loop | complete | verified; owner accepted 94–109 s for core plumbing edits | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
-| D: routine/deep split and required gate | planned | — | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
+| D: routine/deep split and required gate | active | implemented; warm routine timings pending | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
 | F: tagged releases | planned | — | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
 
@@ -140,6 +140,17 @@ there therefore relinks about 60 test binaries and runs the whole suite. That's 
 QA commands run with `CI=true`. Plain `cargo test` or `cargo nextest` without it builds a separate
 set of artifacts, so switching between the two rebuilds changed crates once more. A bisection on
 the host showed `CI` is the only variable among QA's settings that has this effect.
+
+### D: routine/deep split and required gate
+
+Evidence state: implemented. Code reviewed through `2bed0531c`; warm routine timings pending.
+
+Ordinary PRs run the routine selection, while release PRs, `dev` pushes and manual runs run the
+deep set. `Fork CI required` passed on PR #4 (run 41628980348: 11m14s, all 17 jobs green). That
+PR changes global inputs, so its routine selection was the whole workspace, and its caches were
+cold, because `dev` had saved no lane caches yet. The `dev` ruleset requiring that check was
+created on 2026-11-03 with no bypass actors. Next: warm routine runs on a leaf-crate PR after
+`dev` saves its lane caches.
 
 ## Deferred findings
 

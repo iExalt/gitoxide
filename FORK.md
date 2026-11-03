@@ -76,7 +76,7 @@ the group has independent cases. Each lane runs `mise run ci:job` with its own R
 only `dev` pushes save. The plan job fetches full history: fast selection compares against the PR
 base, and `--require-base` fails the plan instead of silently testing everything. The `Fork MSRV`
 job runs in both modes. `Fork CI required` passes only when the planner, every lane and MSRV
-succeeded; a skipped or cancelled job fails it. It will be the only check the `dev` ruleset requires.
+succeeded; a skipped or cancelled job fails it. It is the only check the `dev` ruleset ("dev requires Fork CI") requires; the ruleset has no bypass actors.
 Workflow actions are pinned to commit IDs; checkout credentials are
 not persisted. All six inherited workflows were removed from development, including upstream
 publishing, schedules, CodeQL uploads, fuzzing, and security-analysis jobs.
