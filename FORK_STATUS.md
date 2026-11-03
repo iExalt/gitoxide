@@ -107,7 +107,7 @@ repositories. With 18 jobs per run, this run's parallelism depends on their CI b
 time was 2–13 s per lane in both runs. These figures are cold. Re-measure once a `dev` push has
 saved the per-lane caches.
 
-sccache, measured on the station, saved 42% of cold-build wall time but no CPU, because test
+sccache, measured on the shared Linux host, saved 42% of cold-build wall time but no CPU, because test
 harnesses, binaries and proc-macros can't be cached. It stays deferred unless warm lanes stay
 compile-bound.
 
