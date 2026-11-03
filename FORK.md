@@ -36,40 +36,58 @@ owner emergencies.
 ### The rebase workflow
 
 `rebase-dev.yml` ("Rebase dev onto upstream") performs the update. Dispatch it from `dev` as
-`iExalt`; it runs `.github/scripts/rebase-dev.mjs` one subcommand per step, and publishes nothing
-unless every step succeeds:
+`iExalt`. Its two jobs run `.github/scripts/rebase-dev.mjs`, one subcommand per step, and nothing
+is published unless every step succeeds.
+
+Cargo reads upstream's `.cargo/config.toml`, which can run upstream-controlled programs (a
+`build.rustc-wrapper`, for example). Such code could leave something behind on the runner for
+later steps, so it runs only in the **prepare** job, which has no secrets and only reads the
+repository:
 
 1. **Capture.** It reads `dev`, `upstream/main` and `rebase-resolutions` once and works only from
-   those SHAs. Later steps run the captured `dev`'s copy of the script.
+   those SHAs. The captured `dev` must be the commit the run started from.
 2. **Normalize.** The captured `dev`'s normalizer, `fork-normalize-upstream.sh <upstream> <dev>`,
    builds `qa` from that checkout and prints the current base and a new normalized commit. The
    script checks that both have the upstream commit their trailer names as their only parent and
    change only `Cargo.toml` files and `Cargo.lock`.
-3. **Rebase and sign.** It imports the recorded resolutions and runs
+3. **Replay.** It imports the recorded resolutions and runs
    `git rebase --merge --keep-empty --reapply-cherry-picks --empty=stop --onto <normalized> <base>`.
    A stop is continued only when every conflict was resolved by a recorded resolution: Git's
    output says it staged a previous resolution, or a deletion record applied; nothing is
    unmerged; and the rebase moves on. When a reused resolution settles on upstream's side, the
    pick replays as an empty commit with its own author and message, keeping the replay one to
-   one. A pick that becomes empty without a conflict, an unknown conflict, a merge commit in
-   `dev` or a workflow file that upstream added stops the run. The normalized commit and every
-   replayed commit are then rebuilt with their original author, timestamps and exact message
-   bytes, signed with the SSH key in `GITOXIDE_REBASE_SSH_SIGNING_KEY`, and verified against the
-   public key pinned in the script. GitHub marks a commit verified only when its committer email
-   is a verified email of the account that registered the key: a committer in
-   `GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS` or the signing email is kept exactly; GitHub's own
-   web-flow committer (rebase merges made on GitHub) becomes the signing identity
-   (`GITOXIDE_REBASE_SIGNING_NAME`, `GITOXIDE_REBASE_SIGNING_EMAIL`) at the original time; any
-   other committer stops the run.
-4. **Adapt.** It may add up to two signed commits of its own: `chore(gix): adapt incorporated
-   upstream to the fork` applies a reviewed fixup patch (below), and a release-boundary commit
-   updates `release-please-config.json` (see [Fork releases](#fork-releases)).
-5. **Check.** `target/debug/qa exec manifests` and `cargo metadata --locked` must pass on the
+   one. A pick that becomes empty without a conflict, an unknown conflict or a merge commit in
+   `dev` stops the run. A reviewed fixup patch (below) then becomes `chore(gix): adapt
+   incorporated upstream to the fork`. The fork-owned `.github/workflows` and `.github/scripts`
+   must end up exactly as in the captured `dev`, so a workflow upstream added stops the run.
+4. **Check.** `target/debug/qa exec manifests` and `cargo metadata --locked` must pass on the
    result. `--no-deps` would skip dependency resolution, so it would miss a stale lockfile.
-6. **Validate.** It pushes the result to `rebase/candidate/<run-id>-<attempt>`, dispatches Fork CI
+5. **Bundle.** A `git bundle` of the replayed commits and a file of the captured SHAs become the
+   `rebase-dev-prepared` artifact.
+
+The **publish** job starts on a fresh runner from the workflow's own commit, which is the captured
+`dev`, and runs only Git and Node against the replayed tree. After it checks out that tree, it
+calls the Node binary directly rather than through mise, whose configuration upstream could change.
+It alone holds the signing key, `actions: write`, `checks: read` and the App tokens:
+
+6. **Sign.** It takes nothing from the prepare job on trust. The captured upstream and resolution
+   commits must be on the remote branches. Both bases must be normalized commits, the old one in
+   `dev`. The replay must map one to one onto `dev`'s commits with the same authors and messages.
+   It then rebuilds the normalized commit and every replayed commit with their original author,
+   timestamps and exact message bytes, signs them with the SSH key in
+   `GITOXIDE_REBASE_SSH_SIGNING_KEY`, and verifies each signature against the public key pinned in
+   the script. It applies the fixup again itself and requires the prepared tree, so the prepare
+   job's checks still hold. It then adds the signed release-boundary commit, which changes only
+   `release-please-config.json` (see [Fork releases](#fork-releases)). GitHub marks a commit
+   verified only when its committer email is a verified email of the account that registered the
+   key. A committer in `GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS`, or the signing email, is kept
+   exactly. GitHub's own web-flow committer (rebase merges made on GitHub) becomes the signing
+   identity (`GITOXIDE_REBASE_SIGNING_NAME`, `GITOXIDE_REBASE_SIGNING_EMAIL`) at the original
+   time. Any other committer stops the run.
+7. **Validate.** It pushes the result to `rebase/candidate/<run-id>-<attempt>`, dispatches Fork CI
    there (dispatched runs are deep) and waits up to 110 minutes for its result. It does not run
    tests itself.
-7. **Publish.** Because the ruleset bypass would accept the push either way, the script queries
+8. **Publish.** Because the ruleset bypass would accept the push either way, the script queries
    the candidate's check runs again and requires a completed, successful `Fork CI required` from
    the GitHub Actions app, in the check suite of the `fork-ci.yml` run dispatched on the candidate
    branch, for the exact candidate SHA. Missing, pending, failed, skipped or cancelled results
@@ -78,16 +96,15 @@ unless every step succeeds:
    candidate branch.
 
 A failed run writes its captured SHAs, Git status and conflict diff to the step summary and the
-`rebase-dev-diagnostics` artifact. A candidate branch left by a failed validation names the
-failed Fork CI run; delete it after diagnosis.
+`rebase-dev-prepare-diagnostics` or `rebase-dev-publish-diagnostics` artifact. A candidate branch
+left by a failed validation names the failed Fork CI run; delete it after diagnosis.
 
-Credentials: the signing key is only in the rebase step's environment, and the script deletes it
-from its own environment before running Git. Normalization, which builds and runs code, happens
-before the key or any App token enters the job. The job's `GITHUB_TOKEN` has `contents: read`,
-`actions: write` (to dispatch Fork CI and read its runs; a dispatch is the one event a
-`GITHUB_TOKEN` can trigger) and `checks: read`. `GITHUB_TOKEN` cannot push commits that change
-workflow files, which every rebase does, so the sync App pushes: one token minted after the
-checks for the candidate push, and another minted after validation for the publish push.
+Credentials: the signing key is only in the sign step's environment, and the script deletes it
+from its own environment before running Git. The publish job's `GITHUB_TOKEN` has
+`contents: read`, `actions: write` (to dispatch Fork CI and read its runs; a dispatch is the one
+event a `GITHUB_TOKEN` can trigger) and `checks: read`. `GITHUB_TOKEN` cannot push commits that
+change workflow files, which every rebase does, so the sync App pushes: one token minted after
+signing for the candidate push, and another minted after validation for the publish push.
 
 ### Resolution branch format
 

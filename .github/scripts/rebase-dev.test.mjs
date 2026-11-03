@@ -26,7 +26,12 @@ import {
   parseReleaseTags,
   publishRebase,
   pushCandidate,
-  rebaseDev,
+  replayDev,
+  signPrepared,
+  writePrepared,
+  loadPrepared,
+  verifyMapping,
+  assertSameTree,
   releaseBoundary,
   releaseConfigUpdate,
   replayCommitter,
@@ -317,12 +322,29 @@ function cloneFixture(fixture, name) {
   return clone;
 }
 
-// Runs the snapshot, normalize and rebase steps as the workflow does.
-async function rebaseClone(clone, options = {}) {
+// Runs the prepare job's steps, handing over through a bundle as the workflow does.
+async function prepareClone(clone) {
   const snapshots = await snapshotRefs({ repositoryPath: clone });
   const normalizedBase = await normalizeUpstream({ repositoryPath: clone, dev: snapshots.dev, upstream: snapshots.upstream, identity, runNormalizer: fakeNormalizer });
-  const result = await rebaseDev({ repositoryPath: clone, snapshots, ...normalizedBase, signingKey, publicKey, identity, ...options });
-  return { snapshots, ...normalizedBase, result };
+  const replayed = await replayDev({ repositoryPath: clone, snapshots, ...normalizedBase, identity });
+  const directory = `${clone}.prepared`;
+  const prepared = { ...snapshots, ...normalizedBase, head: replayed.head };
+  await writePrepared({ repositoryPath: clone, directory, prepared });
+  return { directory, prepared, replayed };
+}
+
+// Runs the publish job's signing step in `clone`, checked out at the captured dev.
+async function signClone(clone, directory, options = {}) {
+  const dev = JSON.parse(readFileSync(join(directory, 'prepared.json'), 'utf8')).dev;
+  git(clone, 'checkout', '--quiet', '--detach', dev);
+  const prepared = await loadPrepared({ repositoryPath: clone, directory, dev });
+  return signPrepared({ repositoryPath: clone, prepared, signingKey, publicKey, identity, ...options });
+}
+
+// Both jobs, in one clone for brevity; the first fixture test uses a fresh clone to sign.
+async function rebaseClone(clone) {
+  const { directory, prepared } = await prepareClone(clone);
+  return { prepared, result: await signClone(clone, directory) };
 }
 
 const remoteRefs = (clone) => git(clone, 'ls-remote', '--refs', 'origin');
@@ -505,27 +527,37 @@ test('validation dispatches Fork CI once and waits only while the result is pend
   );
 });
 
-test('the workflow is manual, guarded, and scopes each credential to its own step', () => {
+test('the workflow keeps upstream-controlled code away from every credential', () => {
   const text = readFileSync(new URL('../workflows/rebase-dev.yml', import.meta.url), 'utf8');
   assert.match(text, /^on:\n  workflow_dispatch:\n\n/m);
   assert.match(text, /^permissions: \{\}$/m);
   assert.match(text, /github\.repository == 'iExalt\/gitoxide' && github\.ref == 'refs\/heads\/dev' && github\.actor == 'iExalt'/);
-  const steps = text.slice(text.indexOf('    steps:\n')).split(/^ {6}- /m).slice(1);
+  const prepareJob = text.slice(text.indexOf('\n  prepare:\n'), text.indexOf('\n  publish:\n'));
+  const publishJob = text.slice(text.indexOf('\n  publish:\n'));
+  assert.match(prepareJob, /permissions:\n {6}contents: read\n {4}steps:/, 'the prepare job only reads');
+  assert.doesNotMatch(prepareJob, /secrets\.|token/, 'the prepare job sees no secret');
+  assert.match(publishJob, /needs: prepare\n/);
+  const steps = text.split(/^ {6}- /m).slice(1);
   const index = (pattern) => {
     const matches = steps.flatMap((step, position) => (pattern.test(step) ? [position] : []));
     assert.equal(matches.length, 1, `exactly one step matches ${pattern}`);
     return matches[0];
   };
-  const order = ['snapshot', 'normalize', 'rebase', 'check', 'candidate', 'validate', 'publish'].map((command) => index(new RegExp(`rebase-dev\\.mjs"? ${command}$`, 'm')));
+  const commands = ['snapshot', 'normalize', 'replay', 'check', 'bundle', 'sign', 'candidate', 'validate', 'publish'];
+  const order = commands.map((command) => index(new RegExp(`rebase-dev\\.mjs"? ${command}'?$`, 'm')));
   assert.deepEqual(order, [...order].sort((a, b) => a - b), 'steps run in order');
-  assert.equal(index(/secrets\.GITOXIDE_REBASE_SSH_SIGNING_KEY/), order[2], 'only the rebase step sees the signing key');
-  assert.equal(index(/steps\.candidate-token\.outputs\.token/), order[4]);
-  assert.equal(index(/steps\.token\.outputs\.token/), order[6], 'only the publish step sees the publish token');
+  const sign = order[commands.indexOf('sign')];
+  assert.equal(index(/secrets\.GITOXIDE_REBASE_SSH_SIGNING_KEY/), sign, 'only the sign step sees the signing key');
+  assert.equal(index(/steps\.candidate-token\.outputs\.token/), order[commands.indexOf('candidate')]);
+  assert.equal(index(/steps\.token\.outputs\.token/), order[commands.indexOf('publish')], 'only the publish step sees the publish token');
   const tokenIndex = index(/id: token$/m);
-  assert.ok(order[5] < tokenIndex && tokenIndex < order[6], 'the publish token is minted after validation');
-  assert.ok(order[3] < index(/id: candidate-token$/m), 'no App token exists while the rebased tree is checked');
+  assert.ok(order[commands.indexOf('validate')] < tokenIndex && tokenIndex < order[commands.indexOf('publish')], 'the publish token is minted after validation');
+  for (const step of steps.slice(sign).filter((candidate) => /\brun: /.test(candidate))) {
+    assert.doesNotMatch(step, /\bmise\b|\bcargo\b/, 'after checking out the replayed tree, nothing resolves tools through it');
+    if (!/if: failure\(\)/.test(step)) assert.match(step, /"\$REBASE_NODE" "\$RUNNER_TEMP\/rebase-dev\.mjs"/);
+  }
   for (const step of steps.filter((candidate) => /^uses: /.test(candidate))) assert.match(step, /^uses: [\w./-]+@[0-9a-f]{40} # v/, 'actions are pinned');
-  assert.match(steps[0], /persist-credentials: false/);
+  for (const step of steps.filter((candidate) => /^uses: actions\/checkout@/.test(candidate))) assert.match(step, /persist-credentials: false/);
 });
 
 fixtureTest('known resolutions replay onto the signed normalized base with metadata, signatures and the release bootstrap', async () => {
@@ -533,21 +565,24 @@ fixtureTest('known resolutions replay onto the signed normalized base with metad
   advanceUpstream(fixture, 'upstream far', 'upstream changes unrelated context');
   extendDev(fixture, (seed) => gitWithEnv(seed, devMetadata('Empty Author', 'empty@example.invalid', '1700000100 -0700', SIGNER, '1700000101 +0545'),
     'commit', '--quiet', '--allow-empty', '-m', 'originally empty dev commit\n\nkept as an original empty commit\n'));
-  const clone = cloneFixture(fixture, 'checkout');
-  const before = remoteRefs(clone);
-  const snapshots = await snapshotRefs({ repositoryPath: clone });
-  const { base, normalized } = await normalizeUpstream({ repositoryPath: clone, dev: snapshots.dev, upstream: snapshots.upstream, identity, runNormalizer: fakeNormalizer });
-  assert.equal(base, fixture.baseSha);
+  const preparer = cloneFixture(fixture, 'prepare');
+  const before = remoteRefs(preparer);
+  const { directory, prepared } = await prepareClone(preparer);
+  assert.equal(prepared.base, fixture.baseSha);
+  assert.match(git(preparer, 'log', '--format=%G?', `${prepared.upstream}..${prepared.head}`).replace(/\n/g, ''), /^N+$/, 'the prepare job signs nothing');
+
+  // The publish job runs on a fresh clone, from the captured dev.
+  const clone = cloneFixture(fixture, 'publish');
   for (const [options, error] of [
     [{ signingKey: undefined }, /SSH_SIGNING_KEY is required/],
     [{ signingKey: readFileSync(wrongKeyPath, 'utf8') }, /does not match the trusted public key/],
   ]) {
-    await assert.rejects(rebaseDev({ repositoryPath: clone, snapshots, base, normalized, signingKey, publicKey, identity, ...options }), error);
-    assert.equal(git(clone, 'rev-parse', 'HEAD'), fixture.devSha, 'a bad key stops before the rebase');
+    await assert.rejects(signClone(clone, directory, options), error);
+    assert.equal(git(clone, 'rev-parse', 'HEAD'), fixture.devSha, 'a bad key stops before signing');
   }
-
-  const result = await rebaseDev({ repositoryPath: clone, snapshots, base, normalized, signingKey: signingKey.trimEnd(), publicKey, identity });
-  assert.equal(remoteRefs(clone), before, 'the rebase step publishes nothing');
+  const result = await signClone(clone, directory, { signingKey: signingKey.trimEnd() });
+  const { normalized } = prepared;
+  assert.equal(remoteRefs(clone), before, 'signing publishes nothing');
   assert.equal(git(clone, 'status', '--porcelain'), '');
   assert.equal(git(clone, 'show', 'HEAD:shared.txt'), content({ target: 'resolved target', far: 'upstream far' }).trimEnd());
   assert.equal(git(clone, 'show', 'HEAD:Cargo.toml'), manifest('0.0.0').trimEnd(), "upstream's version bump is normalized away");
@@ -623,6 +658,71 @@ fixtureTest('publication requires the validated check, then saves dev and moves 
     'a stale dev lease rejects the whole push',
   );
   assert.equal(git(clone, 'ls-remote', '--refs', 'origin', 'refs/heads/backup/rebase-dev/90002-1'), '');
+});
+
+test('mapping and tree checks compare commits, not their SHAs', async () => {
+  const repository = join(root, 'mapping');
+  initRepo(repository);
+  const make = (file, message, metadata = {}) => {
+    writeFileSync(join(repository, file), `${file} ${message}\n`);
+    commit(repository, message, metadata);
+    return git(repository, 'rev-parse', 'HEAD');
+  };
+  const author = devMetadata('Author', 'author@example.invalid', '1700000000 +0000');
+  make('base.txt', 'base');
+  const original = [make('a.txt', 'first', author), make('b.txt', 'second', author)];
+  git(repository, 'checkout', '--quiet', '--detach', 'HEAD~2');
+  const rewritten = [make('a.txt', 'first', author), make('c.txt', 'second', author)];
+  await verifyMapping(repository, original, rewritten);
+  await assert.rejects(verifyMapping(repository, original, rewritten.slice(1)), /count changed \(2 original, 1 rewritten\)/);
+  const reworded = make('d.txt', 'reworded', author);
+  await assert.rejects(verifyMapping(repository, original, [rewritten[0], reworded]), /changed the author or message while mapping/);
+  const reauthored = make('e.txt', 'second', devMetadata('Someone Else', 'else@example.invalid', '1700000000 +0000'));
+  await assert.rejects(verifyMapping(repository, original, [rewritten[0], reauthored]), /changed the author or message/);
+
+  await assertSameTree(repository, rewritten[1], rewritten[1]);
+  await assertSameTree(repository, rewritten[1], reworded, ['d.txt']);
+  await assert.rejects(assertSameTree(repository, original[1], rewritten[1]), /differs from the prepared tree in b\.txt, c\.txt/);
+});
+
+fixtureTest('the publish job verifies the handed-over replay instead of trusting it', async () => {
+  const fixture = await plainFixture('verify-prepared');
+  const preparer = cloneFixture(fixture, 'prepare');
+  const { prepared } = await prepareClone(preparer);
+  const publisher = cloneFixture(fixture, 'publish');
+  let variant = 0;
+  // Hands over `prepared` with changes, as a prepare job running hostile code could.
+  const handOver = async (changes) => {
+    const directory = join(fixture.directory, `variant-${(variant += 1)}`);
+    await writePrepared({ repositoryPath: preparer, directory, prepared: { ...prepared, ...changes } });
+    return directory;
+  };
+  // A commit on the prepared head, made with plumbing in the prepare clone.
+  const amendHead = (message, edit = () => {}) => {
+    git(preparer, 'checkout', '--quiet', '--detach', prepared.head);
+    edit();
+    git(preparer, 'add', '-A');
+    const tree = git(preparer, 'write-tree');
+    const raw = rawCommit(preparer, prepared.head);
+    const authorLine = header(raw, 'author').replace(/^author /, '');
+    const [, name, email, date] = /^(.*) <(.*)> (.*)$/.exec(authorLine);
+    return gitWithEnv(preparer, { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date },
+      'commit-tree', tree, '-p', `${prepared.head}~1`, '-m', message ?? raw.message.toString('utf8'));
+  };
+
+  await assert.rejects(loadPrepared({ repositoryPath: publisher, directory: await handOver({}), dev: prepared.base }), /this job runs/);
+  for (const [changes, error] of [
+    [{ upstream: prepared.base }, /captured upstream .* is not part of refs\/remotes\/origin\/upstream\/main/],
+    [{ base: prepared.normalized }, /normalized base .* is not part of/],
+    [{ head: amendHead('reworded message') }, /changed the author or message/],
+    [{ head: prepared.normalized }, /prepared replay has 0 commits for 2 in dev/],
+    [{ head: amendHead(undefined, () => writeFileSync(join(preparer, '.github', 'workflows', 'fork.yml'), 'on: workflow_dispatch\n')) },
+      /fork-owned paths: \.github\/workflows\/fork\.yml/],
+  ]) {
+    await assert.rejects(signClone(publisher, await handOver(changes)), error);
+    git(publisher, 'reset', '--quiet', '--hard');
+  }
+  assert.equal((await signClone(publisher, await handOver({}))).signedCommits, 2, 'the untouched handover signs');
 });
 
 test('post-replay checks run on the exact clean rebased SHA', async () => {
@@ -790,7 +890,7 @@ fixtureTest('a workflow added upstream stops the run until a fixup deletes it', 
   commit(seed, 'ci: add upstream workflow');
   git(seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/upstream/main');
   const upstreamSha = git(seed, 'rev-parse', 'HEAD');
-  await assert.rejects(rebaseClone(cloneFixture(fixture, 'inherited')), /upstream workflows to dev: \.github\/workflows\/upstream\.yml/);
+  await assert.rejects(rebaseClone(cloneFixture(fixture, 'inherited')), /fork-owned paths: \.github\/workflows\/upstream\.yml/);
 
   mkdirSync(join(fixture.resolverPath, 'fixups'));
   writeFileSync(
