@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-utils"
-version = "0.5.2"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Utilities shared by the gitoxide crates"
@@ -10,6 +10,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*"]
+publish.workspace = true
 
 [lib]
 doctest = true
@@ -46,7 +47,7 @@ io-pipe = ["dep:bytes"]
 cache-efficiency-debug = []
 
 [dependencies]
-gix-error = { version = "^0.5.2", path = "../gix-error", optional = true }
+gix-error = { path = "../gix-error", optional = true }
 prodash = { version = "31.0.1", optional = true }
 bytesize = { version = "2.3.1", optional = true }
 bytes = { version = "1.11.1", optional = true }

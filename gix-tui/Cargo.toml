@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-tui"
-version = "0.0.0"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dedicated to a terminal user interface to interact with git repositories"
@@ -10,6 +10,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*"]
+publish.workspace = true
 
 [[bin]]
 name = "gixi"

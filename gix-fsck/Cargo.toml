@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-fsck"
-version = "0.27.1"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Cameron Esfahani <cesfahani@gmail.com>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
@@ -10,6 +10,7 @@ description = "Verifies the connectivity and validity of objects in the database
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
 rust-version = "1.88"
+publish.workspace = true
 
 [lib]
 doctest = false
@@ -21,10 +22,10 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 
 [dependencies]
-gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-hashtable = { version = "^0.18.1", path = "../gix-hashtable" }
-gix-object = { version = "^0.66.1", path = "../gix-object" }
+gix-error = { path = "../gix-error" }
+gix-hash = { path = "../gix-hash" }
+gix-hashtable = { path = "../gix-hashtable" }
+gix-object = { path = "../gix-object" }
 
 [dev-dependencies]
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }

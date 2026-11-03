@@ -24,6 +24,7 @@ pub fn execute(root: &Path, args: &[String]) -> Result<()> {
             Ok(())
         }
         "check-clean" => check_clean(root, args),
+        "manifests" => super::manifests::execute(root, args),
         "no-git" => no_git(root, args),
         "pure-rust" if args.is_empty() => pure_rust(root),
         _ => bail!("Unknown QA operation or invalid arguments: {operation} {args:?}"),

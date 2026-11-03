@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-config"
-version = "0.62.2"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 description = "A git-config file parser and editor from the gitoxide project"
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,7 @@ keywords = ["git-config", "git", "config", "gitoxide"]
 categories = ["config", "parser-implementations"]
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
 rust-version = "1.88"
+publish.workspace = true
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
@@ -22,15 +23,15 @@ sha256 = ["gix-ref/sha256"]
 serde = ["dep:serde", "bstr/serde", "gix-sec/serde", "gix-ref/serde", "gix-glob/serde", "gix-config-value/serde"]
 
 [dependencies]
-gix-trace = { version = "^0.3.1", path = "../gix-trace" }
-gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
-gix-config-value = { version = "^0.21.1", path = "../gix-config-value" }
-gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
-gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-sec = { version = "^0.16.1", path = "../gix-sec" }
-gix-ref = { version = "^0.69.1", path = "../gix-ref" }
-gix-glob = { version = "^0.29.1", path = "../gix-glob" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["bstr"] }
+gix-trace = { path = "../gix-trace" }
+gix-parallel = { path = "../gix-parallel" }
+gix-config-value = { path = "../gix-config-value" }
+gix-error = { path = "../gix-error", features = ["bstr"] }
+gix-path = { path = "../gix-path" }
+gix-sec = { path = "../gix-sec" }
+gix-ref = { path = "../gix-ref" }
+gix-glob = { path = "../gix-glob" }
+gix-utils = { path = "../gix-utils", features = ["bstr"] }
 
 unicode-bom = { version = "2.0.3" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
