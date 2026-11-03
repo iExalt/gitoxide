@@ -333,11 +333,12 @@ email of that account, or GitHub won't mark the replayed commits verified. The
 
 ### Consuming from acyclic
 
-Use an immutable commit revision until an approved fork tag exists:
+Pin a fork release tag such as `gitoxide-fork-v0.1.0`, or an immutable commit revision. Tags keep
+pointing at their release commit after `dev` is rebased:
 
 ```toml
 [dependencies]
-gix = { git = "https://github.com/iExalt/gitoxide", rev = "<full-commit-sha>" }
+gix = { git = "https://github.com/iExalt/gitoxide", tag = "gitoxide-fork-v0.1.0" }
 ```
 
 Keep the features required by acyclic; this example does not select its backend
@@ -349,8 +350,8 @@ where its version requirement matches the fork version, which upstream's numberi
 
 ```toml
 [patch.crates-io]
-gix = { git = "https://github.com/iExalt/gitoxide", rev = "<same-full-commit-sha>" }
-gix-hash = { git = "https://github.com/iExalt/gitoxide", rev = "<same-full-commit-sha>" }
+gix = { git = "https://github.com/iExalt/gitoxide", tag = "gitoxide-fork-v0.1.0" }
+gix-hash = { git = "https://github.com/iExalt/gitoxide", tag = "gitoxide-fork-v0.1.0" }
 ```
 
 `gix-hash` is illustrative, not a complete patch list. Inspect `cargo tree -d` and

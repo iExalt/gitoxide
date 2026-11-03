@@ -11,10 +11,10 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 3: rebase-based upstream updates, as in Paseo. R1 is active |
+| Current phase | Phases 1–3 are complete; nothing is active |
 | Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
-| Immediate focus | Linear `dev` and rebase-merge policy (R1) |
-| Release readiness | No fork release or tag exists. Release PR #2 proposes 0.1.0 with green deep CI; the owner approved merging it after R3 |
+| Immediate focus | None. The next upstream rebase is the first live test of the `last-release-sha` boundary |
+| Release readiness | `gitoxide-fork-v0.1.0` released on 2026-11-03 at `b7945d6eb` from release PR #2 (deep run 41664893236 green) |
 
 ## Goals
 
@@ -25,11 +25,10 @@ changes it.
 | C: local fast loop | complete | verified; owner accepted 94–109 s for core plumbing edits | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | complete | verified: warm routine PR runs 261 s and 257 s; deep `dev` run 481 s | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | complete | verified: release PR #2 bumps exactly the 71 lockfile entries and the workspace version; its deep run 41646760783 passed | Every crate shares one release-please-managed version |
-| F: tagged releases | implemented | `skip-github-release: false` merged (#10); first live tag awaits 0.1.0 | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
-
-| R1: linear `dev` and rebase merges | active | `dev` replaced by the linear candidate `8b21b7aa0` (identical tree, deep run 41648484118 green, backup `backup/linearize/2026-11-03`); policy PR #11 pending | `dev` is N0 plus linear fork commits; only rebase merges allowed; policy docs updated |
-| R2: rebase-dev workflow | implemented | `rebase-dev.yml` and its script; 26 script tests pass, 14 of them on Git fixtures, with prepare and publish in separate jobs. Not yet run on GitHub: needs the signing key, the identity variables, the sync App and the `rebase-resolutions` branch | Paseo's workflow ported with normalization, rerere cache, fixups, deletions, signing and release boundaries |
-| R3: first rebase | planned | — | `dev` rebased onto current upstream by the workflow; release notes contain no upstream commits |
+| F: tagged releases | complete | verified: merging #2 tagged `gitoxide-fork-v0.1.0` at its merge commit and published the release; #2 is `autorelease: tagged` and no new release PR opened | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
+| R1: linear `dev` and rebase merges | complete | verified: `dev` replaced by `8b21b7aa0` (identical tree, deep run 41648484118, backup `backup/linearize/2026-11-03`); policy merged as #11; repository allows rebase merges only | `dev` is N0 plus linear fork commits; only rebase merges allowed; policy docs updated |
+| R2: rebase-dev workflow | complete | verified: merged as #12 and #13 after three review rounds (material 1, 1, 0); prepare and publish run in separate jobs | Paseo's workflow ported with normalization, rerere cache, fixups, deletions, signing and release boundaries |
+| R3: first rebase | complete | verified: run 41662996232 put `dev` on signed N `b9ca8b5ba` (parent upstream `689fe4578`) with 18 replayed commits and a `bootstrap-sha` commit, all GitHub-verified; `release:preview` listed only fork commits | `dev` rebased onto current upstream by the workflow; release notes contain no upstream commits |
 
 Decisions from the owner (2026-11-03): "Edit gitoxide to rebase rather than merge, and only allow
 rebase merges in the repo"; "I'd like gitoxide to operate like Paseo with the rebase-resolutions
@@ -229,10 +228,16 @@ release-please updaters. The `qa exec manifests` housekeeping check keeps manife
 - Fork QA logic lives mostly in upstream's `tests/it/src/qa` files, which upstream still changes,
   so upstream QA edits will keep needing recorded resolutions. If they recur, move fork logic
   (sharding, `local-tests`) into fork-owned modules with small hooks in `catalog.rs`.
+- First live rebase (2026-11-03): run 41659753663 stopped at the expected `catalog.rs` conflict,
+  resolved on the station and recorded in `rebase-resolutions`; run 41660412629 reused it but its
+  mapping check caught `rebase --continue` stripping Markdown headings from the replayed message,
+  fixed by #13; run 41662996232 published.
+- Untested live: the `last-release-sha` boundary, which the next rebase after a release adds
+  (unit-tested). Check it on the first rebase after 0.1.0.
+- Deferred hardening: the publish job could redo the Git-only replay from the verified normalized
+  commit and require the bundle's tree, so it never signs files the secret-free job produced.
 - Nothing semver-checks one fork release against the previous one; the `api` stage only tests
   the checker on synthetic fixtures.
-- The `upstream/main` mirror trails upstream by 8 commits on 2026-11-03 because the sync App
-  isn't configured (`GITOXIDE_SYNC_APP_CLIENT_ID` is unset, so the only run was skipped). Until
-  it is, fetch upstream directly for updates.
+- The upstream mirror sync runs with the `iexalt-gitoxide-sync` App since 2026-11-03.
 - The exhaustive archived-fixture pass rewrites tracked `generated-archives/*.tar` files in the
   working tree. Never commit those rewritten archives.
