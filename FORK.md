@@ -54,7 +54,10 @@ repository:
    `git rebase --merge --keep-empty --reapply-cherry-picks --empty=stop --onto <normalized> <base>`.
    A stop is continued only when every conflict was resolved by a recorded resolution: Git's
    output says it staged a previous resolution, or a deletion record applied; nothing is
-   unmerged; and the rebase moves on. When a reused resolution settles on upstream's side, the
+   unmerged; and the rebase moves on. Upstream keeps editing the workflows the fork deleted, so a
+   modify/delete conflict resolves by deletion without a record when upstream modified the file,
+   the replayed fork commit deleted it, it is under `.github/workflows/`, and the captured `dev`
+   doesn't have it. When a reused resolution settles on upstream's side, the
    pick replays as an empty commit with its own author and message, keeping the replay one to
    one. A pick that becomes empty without a conflict, an unknown conflict or a merge commit in
    `dev` stops the run. A reviewed fixup patch (below) then becomes `chore(gix): adapt
