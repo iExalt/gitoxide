@@ -11,17 +11,17 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 1: iteration speed. Chunk A is implemented and B is next |
-| Overall state | A warm local run of the full QA set takes 9–10 min (530–603 s) on an 8-vCPU Linux host, against 40 min on fork CI |
-| Immediate focus | Get CI's compilation cache to include workspace crates and parallelize CI lanes (B) |
+| Current phase | 1: iteration speed. A is done; B is implemented and in review |
+| Overall state | Fork CI runs the full QA set in parallel lanes: 10m22s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
+| Immediate focus | Confirm the rebalanced lanes, then the local fast loop (C) |
 | Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
 
 ## Goals
 
 | Goal | Workflow | Evidence | Exit condition |
 | --- | --- | --- | --- |
-| A: baseline and cheaper builds | active | implemented | Comparable baseline recorded; build cost cut without dropping checks |
-| B: parallel CI with warm caches | next | — | The full task set runs in parallel lanes; deep-run wall time is measured against A |
+| A: baseline and cheaper builds | complete | verified | Comparable baseline recorded; build cost cut without dropping checks |
+| B: parallel CI lanes | active | implemented | The full task set runs in parallel lanes; deep-run wall time is measured against A |
 | C: local fast loop | planned | — | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | planned | — | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
@@ -69,7 +69,7 @@ Compilation, not test execution, dominates CI time.
 
 ### A: cheaper debug builds
 
-Evidence state: implemented. Not yet reviewed or committed.
+Evidence state: verified. Reviewed; committed as `a152ba41f`.
 
 `[profile.dev] debug = "line-tables-only"` in `Cargo.toml`. Panic backtraces still show
 `file:line`, which was checked with a temporary probe. `#[track_caller]` error locations don't
@@ -82,6 +82,30 @@ ABAB order:
 | line tables only | 104 s, 105 s | 757 s, 761 s | 9.7 GB |
 
 Warm full-suite runs are unchanged within noise: 586 s and 571 s wall, 1165 and 1164 CPU-s.
+
+### B: parallel CI lanes
+
+Evidence state: implemented. Code reviewed at `46dd080fd`; later commits not re-reviewed yet.
+
+The planner splits the `host_stages` set into lanes (`mise run ci:plan`). `features` is split
+six ways, and `Fork QA` requires every lane. Dispatched run 41566998163 (cold caches: new
+cache keys, and branches don't save) passed in 10m22s wall, against 40m53s for the single job.
+Runner time rose to 72 min from 41, because each lane installs tools and compiles separately.
+Public-repository runners are free, so the trade is worth it. Queue time was 2–13 s per lane.
+
+| Lane | Run (s) | Notes |
+| --- | --- | --- |
+| features#2of6 | 563 | Held `feature-contracts` (about 210 s); now its own lane |
+| tests | 501 | Build 220 s, archived pass 117 s, generated pass 104 s; not sharded, because each shard would repeat the build |
+| features#1,3–6 | 320–463 | |
+| journey | 418 | |
+| docs | 310 | |
+| lint | 259 | |
+| api, self-test, policy, housekeeping | 30–105 | |
+
+sccache, measured on the station, saved 42% of cold-build wall time but no CPU, because test
+harnesses, binaries and proc-macros can't be cached. It stays deferred unless warm lanes stay
+compile-bound.
 
 ## Deferred findings
 

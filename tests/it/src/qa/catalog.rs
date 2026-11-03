@@ -191,7 +191,9 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     if exhaustive {
         out.push(Task::new(
             "feature-contracts",
-            "features",
+            // A single script of about 3.5 CI minutes, so it gets its own lane instead of
+            // making one `features` shard the slowest.
+            "feature-contracts",
             &["check"],
             vec![Command::new("bash", &["tests/it/qa/check-features.sh"])],
         ));
@@ -476,6 +478,7 @@ fn job(metadata: &Value, platform: &str, group: &str, tasks: &[Task]) -> Result<
 }
 
 /// Tasks whose commands are independent cases, so CI shards may split them by command.
+/// Keep this in sync with the per-command dispatch in `execute()`.
 const SPLITTABLE: &[&str] = &[
     "feature-builds",
     "feature-tests",
@@ -512,18 +515,19 @@ pub fn shard(tasks: Vec<Task>, index: usize, count: usize) -> Result<Vec<Task>> 
 
 /// Parse `GROUP=COUNT` CI shard requests.
 pub fn shard_counts(requests: &[String]) -> Result<BTreeMap<String, usize>> {
-    requests
-        .iter()
-        .map(|request| {
-            let (group, count) = request
-                .split_once('=')
-                .ok_or_raise(|| message!("Shard request {request} must look like GROUP=COUNT"))?;
-            match count.parse::<usize>() {
-                Ok(count) if count > 0 => Ok((group.to_owned(), count)),
-                _ => bail!(message!("Shard request {request} needs a positive count")),
-            }
-        })
-        .collect()
+    let mut counts = BTreeMap::new();
+    for request in requests {
+        let (group, count) = request
+            .split_once('=')
+            .ok_or_raise(|| message!("Shard request {request} must look like GROUP=COUNT"))?;
+        let Ok(count @ 1..) = count.parse::<usize>() else {
+            bail!(message!("Shard request {request} needs a positive count"));
+        };
+        if counts.insert(group.to_owned(), count).is_some() {
+            bail!(message!("Shard request {request} repeats group {group}"));
+        }
+    }
+    Ok(counts)
 }
 
 pub fn plan(
@@ -603,7 +607,12 @@ pub fn job_tasks(metadata: &Value, plan: &Value, job_id: &str) -> Result<Vec<Tas
     if selected.len() != ids.len() {
         bail!("Job {job_id} contains stale task IDs; regenerate the plan");
     }
-    match row["shard"].as_array().map(|pair| (pair[0].as_u64(), pair[1].as_u64())) {
+    match row["shard"].as_array().map(|pair| {
+        (
+            pair.first().and_then(Value::as_u64),
+            pair.get(1).and_then(Value::as_u64),
+        )
+    }) {
         None => Ok(selected),
         Some((Some(index), Some(count))) => shard(selected, index as usize, count as usize),
         Some(_) => bail!("Job {job_id} has a malformed shard"),
@@ -618,6 +627,7 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool) -> Re
             task.id,
             if task.blocking { "" } else { " (nonblocking)" }
         );
+        // Every task in `SPLITTABLE` must treat its commands as independent cases here.
         let result = if matches!(task.id, "feature-tests" | "isolated-tests") {
             super::native_tests::variants(root, task.commands, dry_run)
         } else if task.id == "feature-builds" {
@@ -855,6 +865,10 @@ mod tests {
         assert!(
             shard_counts(&["features=0".into()]).is_err(),
             "zero shards are rejected"
+        );
+        assert!(
+            shard_counts(&["features=2".into(), "features=3".into()]).is_err(),
+            "a group cannot be sharded twice"
         );
         Ok(())
     }
