@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-filter"
-version = "0.36.1"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project implementing git filters"
@@ -16,6 +16,7 @@ include = [
     "/examples/arrow.rs",
     "/tests/helpers/arrow.rs",
 ]
+publish.workspace = true
 
 [lib]
 doctest = false
@@ -43,19 +44,19 @@ sha256 = ["gix-hash/sha256"]
 test-helper = ["gix-error/error-print-location"]
 
 [dependencies]
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-trace = { version = "^0.3.1", path = "../gix-trace" }
-gix-object = { version = "^0.66.1", path = "../gix-object" }
-gix-command = { version = "^0.12.1", path = "../gix-command" }
-gix-quote = { version = "^0.10.1", path = "../gix-quote" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils" }
-gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-packetline = { version = "^0.24.1", path = "../gix-packetline", features = ["blocking-io"] }
-gix-attributes = { version = "^0.37.1", path = "../gix-attributes" }
+gix-hash = { path = "../gix-hash" }
+gix-trace = { path = "../gix-trace" }
+gix-object = { path = "../gix-object" }
+gix-command = { path = "../gix-command" }
+gix-quote = { path = "../gix-quote" }
+gix-utils = { path = "../gix-utils" }
+gix-path = { path = "../gix-path" }
+gix-packetline = { path = "../gix-packetline", features = ["blocking-io"] }
+gix-attributes = { path = "../gix-attributes" }
 
 encoding_rs = "0.8.32"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-error = { path = "../gix-error" }
 smallvec = "1.15.1"
 
 

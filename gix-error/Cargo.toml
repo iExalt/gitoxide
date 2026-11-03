@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-error"
-version = "0.5.2"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project to provide common errors and error-handling utilities"
@@ -10,6 +10,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
 rust-version = "1.88"
+publish.workspace = true
 
 [features]
 ## Print captured caller locations in diagnostics. Alternate formatting continues to omit locations.
