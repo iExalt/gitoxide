@@ -3,7 +3,8 @@
 This fork supports acyclic's Git storage and synchronization backend. It lets us
 develop in-process push without depending on upstream review capacity. Fork setup
 does not implement push. The existing investigation and prototype remain separate
-in the sibling `gitoxide-upstream` checkout.
+in the sibling `gitoxide-upstream` checkout. [FORK_STATUS.md](FORK_STATUS.md) tracks
+iteration-speed and release work in progress, with its measurements.
 
 ## Branches and upstream updates
 
@@ -34,12 +35,20 @@ Run `mise trust` and `mise install` after reviewing `mise.toml`.
 
 | Command | Purpose |
 | --- | --- |
+| `mise run test` | Developer loop: nextest for crates changed since `origin/dev` and their dependents, plus affected isolated packages |
 | `mise run check` | Affected-package QA, including workflow lint; global inputs select the workspace |
 | `mise run check:thorough` | Exhaustive host checks, feature tests, docs, API tests and CLI journeys |
 | `mise run check:msrv` | Install Rust 1.88.0 through mise and build both declared gix MSRV configurations |
 | `mise run build` | Default CLI build, without publishing |
-| `mise run lint:workflows` | Actionlint and embedded-shell ShellCheck |
+| `mise run lint:workflows` | Actionlint, embedded-shell ShellCheck and workflow script tests |
 | `mise run release:preview` | Read-only release-please PR preview with `GH_TOKEN` |
+
+`mise run test` is for quick iteration, not a substitute for `check`. It shares build
+artifacts with the exhaustive native tests by unifying features across the whole workspace,
+so it can hide a crate's missing feature declaration. It also skips doctests, feature and
+hash variants, the archived-fixture pass and the guard against tests modifying source files.
+`check` and CI keep all of those. QA commands set `CI=true`; plain `cargo test` without
+it builds separate artifacts, so stick to the mise tasks to reuse their builds.
 
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
 comes from Cargo QA metadata: small, lean, lean-async, max, max-pure and declared
@@ -48,9 +57,27 @@ Rust 1.99.0 is the development and API-check toolchain. The gix MSRV remains 1.8
 and the root CLI's declared MSRV remains 1.91. Explicit task toolchains override
 the inherited mise toolchain. Do not update the machine-wide `stable` alias to run QA.
 
-The fork CI runs exhaustive host QA and MSRV builds on Ubuntu 24.04 for every PR
-and push to `dev`. Check names are `Fork QA` and `Fork MSRV`. Release PRs use the
-same trigger. Workflow actions are pinned to commit IDs; checkout credentials are
+Fork CI runs on Ubuntu 24.04 for every PR and push to `dev`, in one of two modes chosen
+by `.github/scripts/qa-mode.cjs`:
+
+- **Routine** (ordinary PRs): the planner's fast selection, meaning the packages a PR changes
+  and every package that depends on them, with all of their declared feature and hash variants.
+  It targets five minutes with warm caches. Global inputs such as `Cargo.toml` select the whole
+  workspace.
+- **Deep** (release PRs, pushes to `dev` and manual runs): the exhaustive `check:thorough` set.
+
+Routine runs leave these to deep runs: the archived-fixture test pass, which detects stale
+committed archives; variants, journeys and API checks of packages a PR doesn't affect; and the
+exhaustive-only feature contracts. A failing deep run on a release PR blocks the release.
+
+`mise run ci:plan` gives the selection to the QA planner. The planner turns each job group into a
+lane and splits the groups named in `mise.toml`'s `ci_shards` into several lanes, never more than
+the group has independent cases. Each lane runs `mise run ci:job` with its own Rust cache, which
+only `dev` pushes save. The plan job fetches full history: fast selection compares against the PR
+base, and `--require-base` fails the plan instead of silently testing everything. The `Fork MSRV`
+job runs in both modes. `Fork CI required` passes only when the planner, every lane and MSRV
+succeeded; a skipped or cancelled job fails it. It is the only check the `dev` ruleset ("dev requires Fork CI") requires; the ruleset has no bypass actors.
+Workflow actions are pinned to commit IDs; checkout credentials are
 not persisted. All six inherited workflows were removed from development, including upstream
 publishing, schedules, CodeQL uploads, fuzzing, and security-analysis jobs.
 Their GitHub workflow registrations are also disabled, so copies on historical
@@ -151,7 +178,7 @@ dependency deliberately. No acyclic dependency changes are part of fork setup.
 - [x] Replace inherited workflows and add pinned mise tasks.
 - [x] Configure independent, PR-only fork versioning.
 - [x] Preview version 0.1.0, tag `gitoxide-fork-v0.1.0`, and the three fork-only release files.
-- [ ] Install/configure the release App and verify its release PR receives CI.
+- [x] Install/configure the release App and verify its release PR receives CI (PR #2, run 41529329986).
 - [ ] Install/configure the sync App and verify the scheduled mirror workflow.
 
 Initial pre-change QA planner baseline: 39 tests passed in 1.79 seconds, with a
@@ -170,8 +197,8 @@ timeout is a runaway guard, not a performance budget. Review growth against the
 same task, tool versions, platform, and cache state.
 
 Full QA, final runtime receipts, review, and the infrastructure merge are tracked
-in [fork PR #1](https://github.com/iExalt/gitoxide/pull/1). Require both `Fork QA`
-and `Fork MSRV` to pass before merging. At setup, the repository had no branch
+in [fork PR #1](https://github.com/iExalt/gitoxide/pull/1). At that time, the checks were
+`Fork QA` and `Fork MSRV`; `Fork CI required` has since replaced them as the merge gate. At setup, the repository had no branch
 protection or rulesets; no required human approval was bypassed. The App checklist
 above remains separate from passing CI: installation-token workflow execution
 cannot be verified until the repository's App variables and secrets are set.

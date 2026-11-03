@@ -27,6 +27,9 @@ pub fn metadata(root: &Path) -> Result<Value> {
     serde_json::from_slice(&output).or_raise(|| message("Could not parse Cargo workspace metadata"))
 }
 
+/// Starts the selection reason when fast mode falls back because the base is missing.
+pub const MISSING_BASE: &str = "Cannot compare with";
+
 pub fn plan(root: &Path, metadata: &Value, mode: &str, base: &str) -> Result<Value> {
     let packages = packages(metadata)?;
     if mode == "exhaustive" {
@@ -43,7 +46,7 @@ pub fn plan(root: &Path, metadata: &Value, mode: &str, base: &str) -> Result<Val
     if !merge_base.status.success() {
         return Ok(exhaustive(
             &packages,
-            &format!("Cannot compare with {base}; fetch the base ref to enable fast selection"),
+            &format!("{MISSING_BASE} {base}; fetch the base ref to enable fast selection"),
         ));
     }
     let merge_base = std::str::from_utf8(&merge_base.stdout)
