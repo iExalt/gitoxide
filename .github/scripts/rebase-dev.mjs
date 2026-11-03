@@ -454,10 +454,16 @@ async function continueKnownResolutions(repositoryPath, firstResult, maxContinua
     const resolvedByRecords = deletions > 0 || (conflictStop && reusedRerereRecords(result) > 0);
     const emptied = resolvedByRecords && conflicts.length === 0 && staged.length === 0;
     if (emptied) {
-      await gitChecked(repositoryPath, [...STAGING_IDENTITY, 'commit', '--allow-empty', '--no-verify', '-C', 'REBASE_HEAD']);
+      await gitChecked(repositoryPath, [...STAGING_IDENTITY, 'commit', '--allow-empty', '--no-verify', '--cleanup=verbatim', '-C', 'REBASE_HEAD']);
     }
     if (!inRebase || !resolvedByRecords || conflicts.length > 0 || !(staged.length > 0 || emptied)) {
       throw new Error(`Rebase stopped without a safely reusable completed resolution:\n${result.stdout}\n${result.stderr}`);
+    }
+    if (!emptied) {
+      // Commit the resolved pick ourselves: `rebase --continue` would commit it through the
+      // editor path, whose message cleanup drops every line starting with `#`, such as the
+      // Markdown headings our commit bodies use.
+      await gitChecked(repositoryPath, [...STAGING_IDENTITY, 'commit', '--no-verify', '--cleanup=verbatim', '-C', 'REBASE_HEAD']);
     }
     const before = await rebaseProgress(repositoryPath);
     result = await git(repositoryPath, [

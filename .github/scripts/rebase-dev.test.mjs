@@ -213,9 +213,9 @@ async function makeFixture(name, { deletion, deletionOnly, renameRename, upstrea
   }
   if (renameRename) git(seed, 'mv', 'old.patch', 'fork.patch');
   // Like a GitHub rebase merge, committed by GitHub; the message has no final newline, which a
-  // conflicted pick adds back.
+  // conflicted pick adds back, and a Markdown heading, which message cleanup would drop.
   git(seed, 'add', '-A');
-  writeFileSync(join(directory, 'message'), 'dev target edit\n\nconflicting replay body');
+  writeFileSync(join(directory, 'message'), 'dev target edit\n\n## Motivation\n\nconflicting replay body');
   gitWithEnv(seed, devMetadata('Zoë Author', 'zoe@example.invalid', '1700000300 +0930', 'noreply@github.com', '1700000301 -0330'),
     'commit', '--quiet', '--cleanup=verbatim', '-F', join(directory, 'message'));
   if (deletionOnly) commitPatchOnlyEdit(seed);
