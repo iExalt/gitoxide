@@ -176,7 +176,7 @@ function commitPatchOnlyEdit(seed) {
   commit(seed, 'dev patch-only edit', devMetadata('Patch Author', 'patch@example.invalid', '1700000350 +0000'));
 }
 
-async function makeFixture(name, { deletion, deletionOnly, renameRename } = {}) {
+async function makeFixture(name, { deletion, deletionOnly, renameRename, upstreamWorkflow } = {}) {
   const directory = join(root, name);
   const remote = join(directory, 'origin.git');
   const seed = join(directory, 'seed');
@@ -188,6 +188,11 @@ async function makeFixture(name, { deletion, deletionOnly, renameRename } = {}) 
   writeFileSync(join(seed, 'shared.txt'), content());
   writeFileSync(join(seed, 'Cargo.toml'), manifest('0.5.0'));
   if (deletion || renameRename) writeFileSync(join(seed, 'old.patch'), content());
+  const upstreamWorkflowPath = join(seed, '.github', 'workflows', 'upstream-ci.yml');
+  if (upstreamWorkflow) {
+    mkdirSync(join(seed, '.github', 'workflows'), { recursive: true });
+    writeFileSync(upstreamWorkflowPath, 'name: Upstream CI\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n');
+  }
   commit(seed, 'upstream base');
   const upstreamBase = git(seed, 'rev-parse', 'HEAD');
   git(seed, 'remote', 'add', 'origin', remote);
@@ -198,6 +203,8 @@ async function makeFixture(name, { deletion, deletionOnly, renameRename } = {}) 
   mkdirSync(join(seed, '.github', 'workflows'), { recursive: true });
   writeFileSync(join(seed, '.github', 'workflows', 'fork.yml'), 'on: push\n');
   writeFileSync(join(seed, 'release-please-config.json'), releaseConfig(baseSha));
+  // The fork replaces upstream's workflows with its own.
+  if (upstreamWorkflow) git(seed, 'rm', '--quiet', '.github/workflows/upstream-ci.yml');
   commit(seed, 'chore(gix): set up the fork', devMetadata('Setup Author', 'setup@example.invalid', '1700000050 +0000', OTHER_KEPT));
   writeFileSync(join(seed, 'shared.txt'), content({ target: 'dev target' }));
   if (deletion) {
@@ -222,6 +229,7 @@ async function makeFixture(name, { deletion, deletionOnly, renameRename } = {}) 
   writeFileSync(join(seed, 'Cargo.toml'), manifest('0.6.0'));
   if (deletion) git(seed, 'rm', '--quiet', 'old.patch');
   if (renameRename) git(seed, 'mv', 'old.patch', 'upstream.patch');
+  if (upstreamWorkflow) writeFileSync(upstreamWorkflowPath, 'name: Upstream CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n');
   commit(seed, 'upstream target edit');
   git(seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/upstream/main');
   const upstreamSha = git(seed, 'rev-parse', 'HEAD');
@@ -234,6 +242,12 @@ async function makeFixture(name, { deletion, deletionOnly, renameRename } = {}) 
     cwd: recorder, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' },
   });
   assert.notEqual(stopped.status, 0, 'fixture must record a real rebase conflict');
+  if (upstreamWorkflow) {
+    // The fork's setup commit stops first, on upstream's edit to the workflow it deleted.
+    git(recorder, 'rm', '--quiet', '.github/workflows/upstream-ci.yml');
+    const next = spawnSync('git', [...NO_AUTO_MAINTENANCE, ...rerere, '-c', 'core.editor=true', 'rebase', '--continue'], { cwd: recorder, encoding: 'utf8' });
+    assert.notEqual(next.status, 0, 'fixture must then stop on the shared conflict');
+  }
   const deletionRecords = [];
   const stagesOf = (path) => git(recorder, 'ls-files', '-u', '--', path).split('\n').map((line) => {
     const [mode, oid, stage] = line.split(/\s+/);
@@ -905,6 +919,15 @@ fixtureTest('a workflow added upstream stops the run until a fixup deletes it', 
   const clone = cloneFixture(fixture, 'dropped');
   assert.equal((await rebaseClone(clone)).result.fixupCommits, 1);
   assert.equal(git(clone, 'ls-tree', '--name-only', 'HEAD', '--', '.github/workflows/'), '.github/workflows/fork.yml');
+});
+
+fixtureTest('an upstream edit to a workflow the fork deleted resolves by deletion', async () => {
+  const fixture = await makeFixture('inherited-edit', { upstreamWorkflow: true });
+  assert.match(git(fixture.seed, 'show', '--stat', '--format=', `${fixture.devSha}~1`), /upstream-ci\.yml/, 'the fork deleted it');
+  const clone = cloneFixture(fixture, 'checkout');
+  const { result } = await rebaseClone(clone);
+  assert.equal(git(clone, 'ls-tree', '-r', '--name-only', 'HEAD', '--', '.github/workflows/'), '.github/workflows/fork.yml');
+  assert.equal(result.signedCommits, 2, 'the deleting commit still replays');
 });
 
 fixtureTest('a merge commit in dev stops before the replay', async () => {
