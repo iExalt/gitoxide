@@ -1018,3 +1018,5 @@ pub mod testing {
 
     impl TestUrlExtension for Url {}
 }
+
+// Throwaway change to measure routine CI; this branch is never merged.
