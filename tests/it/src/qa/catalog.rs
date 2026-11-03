@@ -445,9 +445,10 @@ pub fn select(tasks: Vec<Task>, stages: &[String]) -> Result<Vec<Task>> {
     Ok(tasks
         .into_iter()
         .filter(|task| {
-            stages
-                .iter()
-                .any(|stage| (stage == "all" && task.stages != LOCAL_ONLY) || task.stages.contains(&stage.as_str()))
+            stages.iter().any(|stage| {
+                (stage == "all" && !task.stages.iter().any(|stage| LOCAL_ONLY.contains(stage)))
+                    || task.stages.contains(&stage.as_str())
+            })
         })
         .collect())
 }
@@ -897,6 +898,69 @@ mod tests {
         assert!(
             shard_counts(&["features=2".into(), "features=3".into()]).is_err(),
             "a group cannot be sharded twice"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_tests_share_the_exhaustive_native_build() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"].as_array_mut().expect("test packages").push(json!({
+            "name":"gix-error", "targets":[{"kind":["lib"],"test":true,"doc":false,"doctest":false}],
+            "metadata":{"qa":{"isolated":true,"tests":[{"args":[]}]}}
+        }));
+        let command = |mode: &str, id: &str| -> gix_error::Result<Command> {
+            let selection = json!({"mode":mode, "packages":["gix-path","gix-error"]});
+            let task = tasks(&metadata, &selection, "linux-x86_64")?
+                .into_iter()
+                .find(|task| task.id == id)
+                .expect("task is planned");
+            Ok(task.commands[0].clone())
+        };
+        let package_flags = |args: &[String]| {
+            args.iter()
+                .enumerate()
+                .filter(|(index, arg)| {
+                    matches!(arg.as_str(), "--workspace" | "--exclude")
+                        || (*index > 0 && args[index - 1] == "--exclude")
+                })
+                .map(|(_, arg)| arg.clone())
+                .collect::<Vec<_>>()
+        };
+        let native = command("exhaustive", "native-tests")?;
+        for mode in ["fast", "exhaustive"] {
+            let local = command(mode, "local-tests")?;
+            assert_eq!(
+                package_flags(&local.args),
+                package_flags(&native.args),
+                "the loop builds exactly the exhaustive native package set, so they share artifacts"
+            );
+            let filter = local.args.iter().position(|arg| arg == "-E");
+            if mode == "fast" {
+                assert_eq!(
+                    filter.map(|index| local.args[index + 1].as_str()),
+                    Some("package(=gix-path)"),
+                    "fast mode filters to the tested packages, never an isolated one"
+                );
+            } else {
+                assert_eq!(filter, None, "exhaustive mode runs every non-isolated test");
+            }
+        }
+        let selection = json!({"mode":"fast", "packages":["gix-path","gix-error"]});
+        let all = tasks(&metadata, &selection, "linux-x86_64")?;
+        assert!(
+            !select(all.clone(), &["all".into()])?
+                .iter()
+                .any(|task| task.id == "local-tests"),
+            "`all` never selects the developer loop"
+        );
+        assert_eq!(
+            select(all, &["isolated".into()])?
+                .iter()
+                .map(|task| task.id)
+                .collect::<Vec<_>>(),
+            vec!["isolated-tests"],
+            "the isolated stage selects only isolated package tests"
         );
         Ok(())
     }
