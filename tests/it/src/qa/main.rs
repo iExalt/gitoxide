@@ -41,6 +41,12 @@ enum Action {
         platform: Option<String>,
         #[arg(long)]
         all_platforms: bool,
+        /// Select a union of stages, as `run --stage` does.
+        #[arg(long, value_delimiter = ',', default_value = "all", value_parser = catalog::STAGES)]
+        stage: Vec<String>,
+        /// Split a job group into this many CI jobs, for example `features=6`.
+        #[arg(long, value_delimiter = ',')]
+        shards: Vec<String>,
         #[arg(long)]
         github_output: Option<PathBuf>,
     },
@@ -108,11 +114,14 @@ fn main() -> Result<()> {
             selection,
             platform,
             all_platforms,
+            stage,
+            shards,
             github_output,
         } => {
             let selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
             let platform = platform.unwrap_or_else(catalog::host);
-            let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms)?;
+            let shards = catalog::shard_counts(&shards)?;
+            let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms, &stage, &shards)?;
             let consumers = if all_platforms {
                 downstream::matrix(&metadata, &selected)?
             } else {

@@ -14,24 +14,82 @@ concurrency:
   group: fork-ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  qa:
-    name: Fork QA
+  plan:
+    name: Plan QA lanes
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      plan: ${{ steps.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           version: 2026.10.17
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          shared-key: ci-plan
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-      - name: Full host QA
-        run: mise run check:thorough
+      - name: Lint workflows
+        run: mise run lint:workflows
+      - name: Distribute the host QA set across lanes
+        id: plan
+        run: mise run ci:plan
+
+  run:
+    name: ${{ matrix.id }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      QA_PLAN: ${{ needs.plan.outputs.plan }}
+      QA_JOB: ${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ matrix.history && '0' || '1' }}
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.10.17
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ${{ matrix.cache }}
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - name: Install archive test dependencies
+        if: matrix.xz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends liblzma-dev
+      - name: Run the lane
+        run: mise run ci:job
+
+  qa:
+    # The aggregate keeps the established check name for the lanes above.
+    name: Fork QA
+    needs: [plan, run]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Require the planner and every lane to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/require-success.cjs
+
   msrv:
     name: Fork MSRV
     runs-on: ubuntu-24.04

@@ -39,7 +39,7 @@ Run `mise trust` and `mise install` after reviewing `mise.toml`.
 | `mise run check:thorough` | Exhaustive host checks, feature tests, docs, API tests and CLI journeys |
 | `mise run check:msrv` | Install Rust 1.88.0 through mise and build both declared gix MSRV configurations |
 | `mise run build` | Default CLI build, without publishing |
-| `mise run lint:workflows` | Actionlint and embedded-shell ShellCheck |
+| `mise run lint:workflows` | Actionlint, embedded-shell ShellCheck and workflow script tests |
 | `mise run release:preview` | Read-only release-please PR preview with `GH_TOKEN` |
 
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
@@ -50,8 +50,12 @@ and the root CLI's declared MSRV remains 1.91. Explicit task toolchains override
 the inherited mise toolchain. Do not update the machine-wide `stable` alias to run QA.
 
 The fork CI runs exhaustive host QA and MSRV builds on Ubuntu 24.04 for every PR
-and push to `dev`. Check names are `Fork QA` and `Fork MSRV`. Release PRs use the
-same trigger. Workflow actions are pinned to commit IDs; checkout credentials are
+and push to `dev`. `mise run ci:plan` gives the `check:thorough` stages to the QA
+planner, which turns each job group into a lane and splits the groups named in
+`mise.toml`'s `ci_shards` into several lanes. Each lane runs `mise run ci:job` with
+its own Rust cache. The `Fork QA` check passes only when the planner and every lane
+succeeded; a skipped or cancelled lane fails it. `Fork MSRV` stays a separate check.
+Release PRs use the same trigger. Workflow actions are pinned to commit IDs; checkout credentials are
 not persisted. All six inherited workflows were removed from development, including upstream
 publishing, schedules, CodeQL uploads, fuzzing, and security-analysis jobs.
 Their GitHub workflow registrations are also disabled, so copies on historical

@@ -475,15 +475,74 @@ fn job(metadata: &Value, platform: &str, group: &str, tasks: &[Task]) -> Result<
     Ok(row)
 }
 
-pub fn plan(metadata: &Value, selection: &Value, platform: &str, all_platforms: bool) -> Result<Value> {
+/// Tasks whose commands are independent cases, so CI shards may split them by command.
+const SPLITTABLE: &[&str] = &[
+    "feature-builds",
+    "feature-tests",
+    "isolated-tests",
+    "default-doctests",
+    "feature-doctests",
+];
+
+/// Keep shard `index` (1-based) of `count`: splittable tasks contribute each command as a unit,
+/// other tasks one unit each, and units are dealt round-robin so every unit runs exactly once.
+pub fn shard(tasks: Vec<Task>, index: usize, count: usize) -> Result<Vec<Task>> {
+    if count == 0 || index == 0 || index > count {
+        bail!(message!("Invalid QA shard {index}/{count}"));
+    }
+    let mut unit = 0;
+    let mut owned = || {
+        let mine = unit % count == index - 1;
+        unit += 1;
+        mine
+    };
+    let mut out = Vec::new();
+    for mut task in tasks {
+        if SPLITTABLE.contains(&task.id) {
+            task.commands.retain(|_| owned());
+            if !task.commands.is_empty() {
+                out.push(task);
+            }
+        } else if owned() {
+            out.push(task);
+        }
+    }
+    Ok(out)
+}
+
+/// Parse `GROUP=COUNT` CI shard requests.
+pub fn shard_counts(requests: &[String]) -> Result<BTreeMap<String, usize>> {
+    requests
+        .iter()
+        .map(|request| {
+            let (group, count) = request
+                .split_once('=')
+                .ok_or_raise(|| message!("Shard request {request} must look like GROUP=COUNT"))?;
+            match count.parse::<usize>() {
+                Ok(count) if count > 0 => Ok((group.to_owned(), count)),
+                _ => bail!(message!("Shard request {request} needs a positive count")),
+            }
+        })
+        .collect()
+}
+
+pub fn plan(
+    metadata: &Value,
+    selection: &Value,
+    platform: &str,
+    all_platforms: bool,
+    stages: &[String],
+    shards: &BTreeMap<String, usize>,
+) -> Result<Value> {
     let mut described = Vec::new();
     let mut jobs = Vec::new();
+    let mut seen = BTreeSet::new();
     for platform in if all_platforms {
         CI_PLATFORMS
     } else {
         std::slice::from_ref(&platform)
     } {
-        let tasks = tasks(metadata, selection, platform)?;
+        let tasks = select(tasks(metadata, selection, platform)?, stages)?;
         let mut grouped: BTreeMap<&str, Vec<Task>> = BTreeMap::new();
         for task in tasks {
             if !all_platforms || assigned(&task, platform, selection["mode"] == "exhaustive") {
@@ -494,7 +553,25 @@ pub fn plan(metadata: &Value, selection: &Value, platform: &str, all_platforms: 
             }
         }
         for (group, tasks) in grouped {
-            jobs.push(job(metadata, platform, group, &tasks)?);
+            seen.insert(group);
+            let row = job(metadata, platform, group, &tasks)?;
+            let count = shards.get(group).copied().unwrap_or(1);
+            if count == 1 {
+                jobs.push(row);
+                continue;
+            }
+            for index in 1..=count {
+                let mut row = row.clone();
+                row["id"] = format!("{group}#{index}of{count}@{platform}").into();
+                row["cache"] = format!("ci-{group}-{platform}-{index}of{count}").into();
+                row["shard"] = json!([index, count]);
+                jobs.push(row);
+            }
+        }
+    }
+    for group in shards.keys() {
+        if !seen.contains(group.as_str()) {
+            bail!(message!("Cannot shard {group}: no selected job has that group"));
         }
     }
     Ok(json!({"selection": selection, "platform": platform, "tasks": described, "jobs": jobs}))
@@ -526,7 +603,11 @@ pub fn job_tasks(metadata: &Value, plan: &Value, job_id: &str) -> Result<Vec<Tas
     if selected.len() != ids.len() {
         bail!("Job {job_id} contains stale task IDs; regenerate the plan");
     }
-    Ok(selected)
+    match row["shard"].as_array().map(|pair| (pair[0].as_u64(), pair[1].as_u64())) {
+        None => Ok(selected),
+        Some((Some(index), Some(count))) => shard(selected, index as usize, count as usize),
+        Some(_) => bail!("Job {job_id} has a malformed shard"),
+    }
 }
 
 pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool) -> Result<()> {
@@ -645,6 +726,8 @@ mod tests {
             &json!({"mode":"exhaustive","packages":[]}),
             "linux-x86_64",
             true,
+            &["all".into()],
+            &BTreeMap::new(),
         )?;
         let job = plan["jobs"]
             .as_array()
@@ -689,11 +772,105 @@ mod tests {
         Ok(())
     }
 
+    fn units(tasks: &[Task]) -> Vec<(&'static str, Vec<String>)> {
+        tasks
+            .iter()
+            .flat_map(|task| task.commands.iter().map(move |command| (task.id, command.args.clone())))
+            .collect()
+    }
+
+    #[test]
+    fn shards_run_every_case_exactly_once() -> gix_error::TestResult {
+        let case = |n: usize| Command::new("cargo", &["check", &n.to_string()]);
+        let tasks = vec![
+            Task::new("feature-builds", "features", &["check"], (0..7).map(case).collect()),
+            Task::new("feature-contracts", "features", &["check"], vec![case(100), case(101)]),
+            Task::new("feature-tests", "features", &["tests"], (200..205).map(case).collect()),
+        ];
+        let all = units(&tasks);
+        for count in 1..=5 {
+            let mut seen = Vec::new();
+            for index in 1..=count {
+                let part = shard(tasks.clone(), index, count)?;
+                assert!(
+                    part.iter()
+                        .filter(|task| task.id == "feature-contracts")
+                        .all(|task| task.commands.len() == 2),
+                    "an unsplittable task keeps all of its commands in one shard"
+                );
+                seen.extend(units(&part));
+            }
+            seen.sort();
+            let mut expected = all.clone();
+            expected.sort();
+            assert_eq!(seen, expected, "{count} shards are disjoint and complete");
+        }
+        assert!(shard(tasks, 3, 2).is_err(), "out-of-range shards are rejected");
+        Ok(())
+    }
+
+    #[test]
+    fn plans_select_stages_and_expand_shards() -> gix_error::TestResult {
+        let selection = json!({"mode":"exhaustive", "packages":["gix-path","gitoxide","internal-tools"]});
+        let shards = shard_counts(&["lint=2".into()])?;
+        let planned = plan(
+            &metadata(),
+            &selection,
+            "linux-x86_64",
+            false,
+            &["lint".into()],
+            &shards,
+        )?;
+        let jobs = planned["jobs"].as_array().expect("plan jobs");
+        assert_eq!(
+            jobs.iter()
+                .map(|job| (job["id"].clone(), job["cache"].clone(), job["shard"].clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    json!("lint#1of2@linux-x86_64"),
+                    json!("ci-lint-linux-x86_64-1of2"),
+                    json!([1, 2])
+                ),
+                (
+                    json!("lint#2of2@linux-x86_64"),
+                    json!("ci-lint-linux-x86_64-2of2"),
+                    json!([2, 2])
+                ),
+            ],
+            "only the selected stage is planned, once per shard with its own cache"
+        );
+        assert!(
+            plan(
+                &metadata(),
+                &selection,
+                "linux-x86_64",
+                false,
+                &["lint".into()],
+                &shard_counts(&["features=2".into()])?
+            )
+            .is_err(),
+            "sharding an unselected group is a configuration error"
+        );
+        assert!(
+            shard_counts(&["features=0".into()]).is_err(),
+            "zero shards are rejected"
+        );
+        Ok(())
+    }
+
     #[test]
     fn ci_jobs_partition_the_same_local_tasks() -> gix_error::TestResult {
         for mode in ["fast", "exhaustive"] {
             let selection = json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools"]});
-            let plan = plan(&metadata(), &selection, "linux-x86_64", true)?;
+            let plan = plan(
+                &metadata(),
+                &selection,
+                "linux-x86_64",
+                true,
+                &["all".into()],
+                &BTreeMap::new(),
+            )?;
             let mut seen = BTreeSet::new();
             for job in plan["jobs"].as_array().expect("plan jobs") {
                 let platform = job["platform"].as_str().expect("job platform");
