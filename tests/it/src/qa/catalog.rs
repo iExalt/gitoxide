@@ -794,7 +794,8 @@ mod tests {
         let case = |n: usize| Command::new("cargo", &["check", &n.to_string()]);
         let tasks = vec![
             Task::new("feature-builds", "features", &["check"], (0..7).map(case).collect()),
-            Task::new("feature-contracts", "features", &["check"], vec![case(100), case(101)]),
+            // Stands in for any unsplittable task in a sharded group.
+            Task::new("whole-script", "features", &["check"], vec![case(100), case(101)]),
             Task::new("feature-tests", "features", &["tests"], (200..205).map(case).collect()),
         ];
         let all = units(&tasks);
@@ -804,7 +805,7 @@ mod tests {
                 let part = shard(tasks.clone(), index, count)?;
                 assert!(
                     part.iter()
-                        .filter(|task| task.id == "feature-contracts")
+                        .filter(|task| task.id == "whole-script")
                         .all(|task| task.commands.len() == 2),
                     "an unsplittable task keeps all of its commands in one shard"
                 );

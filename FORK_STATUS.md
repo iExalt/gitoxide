@@ -11,9 +11,9 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 1: iteration speed. A is done; B is implemented and in review |
-| Overall state | Fork CI runs the full QA set in parallel lanes: 10m22s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
-| Immediate focus | Confirm the rebalanced lanes, then the local fast loop (C) |
+| Current phase | 1: iteration speed. A and B are done; C is next |
+| Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
+| Immediate focus | Local fast loop (C) |
 | Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
 
 ## Goals
@@ -21,7 +21,7 @@ changes it.
 | Goal | Workflow | Evidence | Exit condition |
 | --- | --- | --- | --- |
 | A: baseline and cheaper builds | complete | verified | Comparable baseline recorded; build cost cut without dropping checks |
-| B: parallel CI lanes | active | implemented | The full task set runs in parallel lanes; deep-run wall time is measured against A |
+| B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
 | C: local fast loop | planned | — | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | planned | — | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
@@ -85,23 +85,27 @@ Warm full-suite runs are unchanged within noise: 586 s and 571 s wall, 1165 and 
 
 ### B: parallel CI lanes
 
-Evidence state: implemented. Code reviewed at `46dd080fd`; later commits not re-reviewed yet.
+Evidence state: verified. Reviewed through `4d17ad086`.
 
 The planner splits the `host_stages` set into lanes (`mise run ci:plan`). `features` is split
-six ways, and `Fork QA` requires every lane. Dispatched run 41566998163 (cold caches: new
-cache keys, and branches don't save) passed in 10m22s wall, against 40m53s for the single job.
-Runner time rose to 72 min from 41, because each lane installs tools and compiles separately.
-Public-repository runners are free, so the trade is worth it. Queue time was 2–13 s per lane.
+six ways, `feature-contracts` has its own lane, and `Fork QA` requires every lane. Both measured
+runs used cold Rust caches: the cache keys are new, and branch runs don't save caches.
 
-| Lane | Run (s) | Notes |
-| --- | --- | --- |
-| features#2of6 | 563 | Held `feature-contracts` (about 210 s); now its own lane |
-| tests | 501 | Build 220 s, archived pass 117 s, generated pass 104 s; not sharded, because each shard would repeat the build |
-| features#1,3–6 | 320–463 | |
-| journey | 418 | |
-| docs | 310 | |
-| lint | 259 | |
-| api, self-test, policy, housekeeping | 30–105 | |
+| Run | Wall | Runner time | Slowest lane |
+| --- | --- | --- | --- |
+| Single job, run 41528920875 | 40m53s | 41 min | — |
+| 15 lanes, run 41566998163 | 10m22s | 72 min | features#2of6, 563 s (it held `feature-contracts`) |
+| 16 lanes, run 41568167308 | 8m56s | 75 min | features#3of6, 490 s |
+
+In the rebalanced run, lanes took 376–490 s for features, tests, journey and contracts. Other
+lanes took 99–268 s, and the plan job 29 s. In the tests lane, the build took 220 s and the two
+fixture passes 117 s and 104 s, so sharding it would repeat the build.
+
+Runner time is up 80%, because each lane installs tools and compiles separately. Public-repository
+runners are free, but the account's limit of about 20 concurrent jobs is shared with other
+repositories. With 18 jobs per run, this run's parallelism depends on their CI being quiet. Queue
+time was 2–13 s per lane in both runs. These figures are cold. Re-measure once a `dev` push has
+saved the per-lane caches.
 
 sccache, measured on the station, saved 42% of cold-build wall time but no CPU, because test
 harnesses, binaries and proc-macros can't be cached. It stays deferred unless warm lanes stay
