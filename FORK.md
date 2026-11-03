@@ -21,12 +21,17 @@ Upstream versions every crate separately, while the fork keeps them in lockstep 
 `upstream/main` itself. `mise run upstream:normalize [revision]`, run from a `dev` checkout,
 advances branch `upstream/normalized` with a commit whose parents are the previous normalized
 commit and the chosen revision (default `origin/upstream/main`), and whose tree is that
-revision's with only manifests and `Cargo.lock` normalized. Push that branch, create an update
+revision's with only manifests and `Cargo.lock` normalized. Each normalized commit carries a
+`Normalized-upstream:` trailer; the script finds the last one merged into `dev` and refuses to
+continue from a branch that has lost it. It runs `cargo update` inside the upstream revision, so
+upstream's `.cargo/config.toml` applies, unlike the sync workflow, which never executes the
+mirrored tip. Push that branch, create an update
 branch from fork `dev`, merge `upstream/normalized`, resolve conflicts (regenerate
 `Cargo.lock` rather than hand-merging it), run thorough QA, and review a PR into fork `dev`.
 The merge base is then the previous normalized commit, so only real changes can conflict:
 rehearsing the upstream changes from `gix-v0.89.0` to the fork point, merging raw upstream
-conflicted in 74 manifests, while the normalized merge was clean. Preserve the merge ancestry for
+conflicted in 74 manifests, while the normalized merge was clean. Before the first update past the fork point, check with `mise run release:preview` that the
+merged upstream commits don't enter the fork's release notes or version bump. Preserve the merge ancestry for
 upstream updates (use a merge commit rather than squashing that PR). Do not rebase
 published fork history. There are no automated merges or rebases into `dev`.
 

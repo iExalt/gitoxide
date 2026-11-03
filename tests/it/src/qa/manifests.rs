@@ -34,12 +34,12 @@ pub fn execute(root: &Path, args: &[String]) -> Result<()> {
     for (name, text, mut document) in manifests {
         let kind = if name == "Cargo.toml" {
             Manifest::Root(version)
-        } else if has_own_workspace(&document) {
-            Manifest::Standalone
-        } else {
+        } else if members.manifests.contains(&name) {
             Manifest::Member
+        } else {
+            Manifest::Standalone
         };
-        normalize(&mut document, &members, kind).or_raise(|| message!("Could not normalize {name}"))?;
+        normalize(&mut document, &members.names, kind).or_raise(|| message!("Could not normalize {name}"))?;
         if matches!(kind, Manifest::Root(_)) {
             check_release_version(root, &document)?;
         }
@@ -60,21 +60,65 @@ pub fn execute(root: &Path, args: &[String]) -> Result<()> {
             "These manifests don't use the fork's lockstep version; run `qa exec manifests --fix`:\n{}",
             stale.join("\n")
         ));
+    } else {
+        // Classification is read from the manifests because Cargo rejects mismatched version
+        // requirements, as upstream's are before normalization. Normalized, Cargo can confirm it.
+        let cargo = cargo_members(root)?;
+        if cargo != members.manifests {
+            bail!(message!(
+                "Manifests without their own [workspace] should be exactly the workspace members; differences: {:?}",
+                cargo.symmetric_difference(&members.manifests).collect::<Vec<_>>()
+            ));
+        }
     }
     Ok(())
 }
 
-/// Workspace members are the tracked manifests without a `[workspace]` of their own, plus the root.
-fn members(manifests: &[(String, String, DocumentMut)]) -> BTreeSet<String> {
-    manifests
-        .iter()
-        .filter(|(name, _, document)| name == "Cargo.toml" || !has_own_workspace(document))
-        .filter_map(|(_, _, document)| document.get("package")?.get("name")?.as_str().map(str::to_owned))
-        .collect()
+struct Members {
+    names: BTreeSet<String>,
+    /// Manifest paths relative to the workspace root, as `git ls-files` prints them.
+    manifests: BTreeSet<String>,
 }
 
-fn has_own_workspace(document: &DocumentMut) -> bool {
-    document.contains_key("workspace")
+/// Workspace members are the root and the tracked manifests without a `[workspace]` of their own.
+fn members(manifests: &[(String, String, DocumentMut)]) -> Members {
+    let mut members = Members {
+        names: BTreeSet::new(),
+        manifests: BTreeSet::new(),
+    };
+    for (name, _, document) in manifests {
+        if (name == "Cargo.toml" || !document.contains_key("workspace"))
+            && let Some(package) = document
+                .get("package")
+                .and_then(|package| package.get("name")?.as_str())
+        {
+            members.names.insert(package.to_owned());
+            members.manifests.insert(name.clone());
+        }
+    }
+    members
+}
+
+/// Workspace member manifests according to Cargo, relative to the workspace root.
+fn cargo_members(root: &Path) -> Result<BTreeSet<String>> {
+    let metadata = super::plan::metadata(root)?;
+    let workspace_root = metadata["workspace_root"]
+        .as_str()
+        .ok_or_raise(|| message("Cargo metadata is missing workspace_root"))?;
+    let mut manifests = BTreeSet::new();
+    for package in metadata["packages"]
+        .as_array()
+        .ok_or_raise(|| message("Cargo metadata is missing packages"))?
+    {
+        let manifest = package["manifest_path"]
+            .as_str()
+            .ok_or_raise(|| message("Cargo metadata has a package without manifest_path"))?;
+        let manifest = Path::new(manifest)
+            .strip_prefix(workspace_root)
+            .or_raise(|| message!("{manifest} is outside the workspace"))?;
+        manifests.insert(manifest.to_string_lossy().replace('\\', "/"));
+    }
+    Ok(manifests)
 }
 
 #[derive(Clone, Copy)]

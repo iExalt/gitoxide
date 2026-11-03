@@ -195,6 +195,12 @@ release-please updaters. The `qa exec manifests` housekeeping check keeps manife
   74 manifests; normalizing each upstream revision as a plain child still conflicted in 25,
   wherever a renumbered line neighboured a real change; the chain, whose merge base is the
   previous normalized commit, merged clean with a fork-only root manifest edit.
+- Blocker for the first upstream update past the fork point: release-please walks every
+  ancestor of `dev`, so merged upstream `feat:` and `fix:` commits would likely enter
+  `CHANGELOG.fork.md` and drive the fork's version bump. Before that update, preview a scratch
+  branch containing a normalized upstream merge and find an exclusion that works, such as
+  `BEGIN_COMMIT_OVERRIDE` in the update PR. The bootstrap merge of the fork point itself is
+  unaffected, because its upstream parent is the bootstrap commit.
 - The renumber changes what consumers see: the user agent and `gix --version` report the fork
   version, and `[patch.crates-io]` can no longer substitute fork crates for registry
   requirements like `gix = "0.90"`. Acyclic doesn't depend on gix yet.

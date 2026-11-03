@@ -17,13 +17,29 @@ branch=upstream/normalized
 root=$(git rev-parse --show-toplevel)
 upstream_commit_id=$(git -C "$root" rev-parse --verify "$revision^{commit}")
 version=$(git -C "$root" show origin/dev:.release-please-manifest.json | jq -er '.["."]')
+trailer=Normalized-upstream
+
+# `dev` is the authoritative record of the chain: every merged normalized commit is in its
+# history. The branch may be ahead of it with a normalized commit not yet merged.
+merged_commit_id=$(git -C "$root" log origin/dev --topo-order --format=%H -1 \
+    --grep="^$trailer: [0-9a-f]\{40\}$" || true)
+previous_commit_id=$merged_commit_id
+if branch_commit_id=$(git -C "$root" rev-parse --verify --quiet "origin/$branch^{commit}"); then
+    if [[ -n $merged_commit_id ]] && ! git -C "$root" merge-base --is-ancestor "$merged_commit_id" "$branch_commit_id"; then
+        echo "origin/$branch doesn't contain $merged_commit_id, the last normalized commit merged into dev" >&2
+        exit 1
+    fi
+    previous_commit_id=$branch_commit_id
+fi
 parents=()
-if previous_commit_id=$(git -C "$root" rev-parse --verify --quiet "origin/$branch^{commit}"); then
+if [[ -n $previous_commit_id ]]; then
     if git -C "$root" merge-base --is-ancestor "$upstream_commit_id" "$previous_commit_id"; then
-        echo "$revision is already part of origin/$branch" >&2
+        echo "$revision is already normalized in $previous_commit_id" >&2
         exit 1
     fi
     parents+=(-p "$previous_commit_id")
+else
+    echo "No normalized upstream commit in origin/dev or origin/$branch; starting the chain" >&2
 fi
 parents+=(-p "$upstream_commit_id")
 
@@ -38,10 +54,11 @@ normalized_commit_id=$(
     cd "$worktree"
     "$qa" exec manifests --fix --version "$version" >/dev/null
     cargo update --quiet --workspace
-    git add --all
+    git add --update
     git commit-tree "$(git write-tree)" "${parents[@]}" \
         -m "chore(gix): normalize upstream manifests to the fork version $version" \
-        -m "Upstream \`$upstream_commit_id\` with every crate on the fork's lockstep version and path-only dependencies between workspace crates."
+        -m "Upstream \`$upstream_commit_id\` with every crate on the fork's lockstep version and path-only dependencies between workspace crates." \
+        -m "$trailer: $upstream_commit_id"
 )
 git -C "$root" branch --force "$branch" "$normalized_commit_id"
 echo "$branch is now $normalized_commit_id; push it with: git push origin $branch"
