@@ -81,6 +81,10 @@ const gitVersionError = (() => {
   }
 })();
 const fixtureTest = (name, body) => test(name, { skip: gitVersionError }, body);
+// CI must not go green while testing nothing.
+if (gitVersionError && process.env.CI) {
+  test('git is new enough for the rebase fixtures', () => assert.fail(`${gitVersionError}; CI needs the fixtures to run`));
+}
 
 const recorded = JSON.parse(readFileSync(new URL('./rebase-dev.fixtures.json', import.meta.url), 'utf8'));
 const RECORDED_SHA = '8b21b7aa05e1e5fddb602ac40e479cdfb96883d5';
