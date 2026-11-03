@@ -195,6 +195,11 @@ release-please updaters. The `qa exec manifests` housekeeping check keeps manife
   74 manifests; normalizing each upstream revision as a plain child still conflicted in 25,
   wherever a renumbered line neighboured a real change; the chain, whose merge base is the
   previous normalized commit, merged clean with a fork-only root manifest edit.
+- `upstream:normalize` recovery paths, rehearsed in a scratch clone (2026-11-03): with nothing
+  normalized it starts a chain; with the branch ahead of `dev` it continues from the branch; with
+  the branch lost it continues from `dev`'s merged commit, skipping a squash commit that quotes the
+  trailer; with the branch reset to a commit lacking `dev`'s last normalized commit it refuses; an
+  already-normalized revision is refused.
 - Blocker for the first upstream update past the fork point: release-please walks every
   ancestor of `dev`, so merged upstream `feat:` and `fix:` commits would likely enter
   `CHANGELOG.fork.md` and drive the fork's version bump. Before that update, preview a scratch

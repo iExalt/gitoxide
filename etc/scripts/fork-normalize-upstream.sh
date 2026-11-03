@@ -21,8 +21,17 @@ trailer=Normalized-upstream
 
 # `dev` is the authoritative record of the chain: every merged normalized commit is in its
 # history. The branch may be ahead of it with a normalized commit not yet merged.
-merged_commit_id=$(git -C "$root" log origin/dev --topo-order --format=%H -1 \
-    --grep="^$trailer: [0-9a-f]\{40\}$" || true)
+# Other commits can quote the trailer (a squash merge copies messages), so accept only a commit
+# whose last parent is the upstream revision its trailer names.
+merged_commit_id=
+while read -r candidate_commit_id; do
+    named_upstream_id=$(git -C "$root" log -1 --format="%(trailers:key=$trailer,valueonly)" "$candidate_commit_id")
+    parent_ids=$(git -C "$root" rev-list --parents -n1 "$candidate_commit_id")
+    if [[ ${named_upstream_id//[[:space:]]/} == "${parent_ids##* }" ]]; then
+        merged_commit_id=$candidate_commit_id
+        break
+    fi
+done < <(git -C "$root" log origin/dev --topo-order --format=%H --grep="^$trailer: [0-9a-f]\{40\}$")
 previous_commit_id=$merged_commit_id
 if branch_commit_id=$(git -C "$root" rev-parse --verify --quiet "origin/$branch^{commit}"); then
     if [[ -n $merged_commit_id ]] && ! git -C "$root" merge-base --is-ancestor "$merged_commit_id" "$branch_commit_id"; then
