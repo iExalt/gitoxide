@@ -281,7 +281,9 @@ upstream history. A rebase that moves `dev` onto a newer base before the first r
 `gitoxide-fork-v*` tag it sets `bootstrap-sha` to the new signed base; otherwise it finds the
 newest replayed commit that a release tag or `last-release-sha` names and points
 `last-release-sha` at its copy, and stops if there is none, since release-please would then walk
-into upstream history. Conventional commit
+into upstream history. Until the first release, every rebase therefore adds one signed
+`bootstrap-sha` commit; they accumulate on `dev`, which is harmless, and stop once 0.1.0 is
+tagged. Conventional commit
 titles describe fork changes; breaking changes require explicit review even while
 the fork version is below 1.0.
 
