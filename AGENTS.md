@@ -22,10 +22,12 @@ This repository contains `gitoxide` - a pure Rust implementation of Git. These d
   the measurements in [FORK.md](FORK.md); do not impose another project's budget or weaken checks to meet it.
 - Keep tests at the cheapest reliable layer. Follow the test-placement and fixture rules below: public APIs
   belong in integration tests, private functionality in unit tests, and CLI behavior in journey tests.
-- Target development PRs at `dev`. Squash-merge ordinary development PRs; release-please reads the squashed
-  commit's title and body from the PR title and description. Use a scoped Conventional Commit title that covers
-  the whole PR, with `!` when it breaks compatibility. Use a merge commit for upstream-update PRs to preserve
-  upstream ancestry, as described in [FORK.md](FORK.md).
+- Target development PRs at `dev`. PRs land by rebase merge only, so every commit reaches `dev` and
+  release-please as written: give each one a scoped Conventional Commit title, with `!` when it breaks
+  compatibility, and a body explaining its motivation. Squash or reword commits before merging rather than
+  relying on the PR title or description, which never reach the history. The required check runs only on the
+  PR's tip, so keep every commit building and passing tests yourself. `dev` stays linear: upstream updates
+  rebase it, as described in [FORK.md](FORK.md).
 - Release PRs must receive CI checks and must not auto-merge. Obtain explicit owner approval naming the version
   before merging a release PR, creating a tag or release, or publishing packages or artifacts.
 
