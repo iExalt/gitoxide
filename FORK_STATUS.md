@@ -11,7 +11,7 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 1: iteration speed. A, B and C are done; D is next |
+| Current phase | 1: iteration speed. A and B are done; C meets its target only for upper-layer crates; D is next |
 | Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
 | Immediate focus | Routine/deep split and the required gate (D) |
 | Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
@@ -22,7 +22,7 @@ changes it.
 | --- | --- | --- | --- |
 | A: baseline and cheaper builds | complete | verified | Comparable baseline recorded; build cost cut without dropping checks |
 | B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
-| C: local fast loop | complete | verified (limits below) | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
+| C: local fast loop | active | implemented; 60 s target unmet for core plumbing edits (94–109 s) | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | planned | — | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
 | F: tagged releases | planned | — | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
@@ -113,7 +113,7 @@ compile-bound.
 
 ### C: local fast loop
 
-Evidence state: verified for upper-layer crates; core plumbing crates exceed the 60 s target.
+Evidence state: implemented. The 60 s target is met for upper-layer crates and unmet for core plumbing crates; owner decision pending.
 
 `mise run test` runs nextest for the planner's affected packages and their dependents. It builds
 exactly the exhaustive native-test package set, so it shares artifacts with `check` (shown by
