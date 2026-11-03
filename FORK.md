@@ -27,9 +27,138 @@ commit for the revision (default `origin/upstream/main`); rebase with
 rebase: replaying the fork's renumbering onto raw upstream would conflict in most manifests on
 every update. The normalizer runs `cargo update` inside the upstream revision, so upstream's
 `.cargo/config.toml` applies, unlike the sync workflow, which never executes the mirrored tip.
-Validate the rebased tip on a candidate branch with a deep Fork CI run, push a backup ref, and
-update `dev` with `--force-with-lease`. Rebasing replaces published history, so announce it to
-anyone with branches from `dev`.
+Rebasing replaces published history, so announce it to anyone with branches from `dev`.
+
+The `dev` ruleset lets the admin role and the sync App bypass it, including its required check.
+Never merge a PR using that bypass: it exists only for the `rebase-dev` workflow's push and for
+owner emergencies.
+
+### The rebase workflow
+
+`rebase-dev.yml` ("Rebase dev onto upstream") performs the update. Dispatch it from `dev` as
+`iExalt`; it runs `.github/scripts/rebase-dev.mjs` one subcommand per step, and publishes nothing
+unless every step succeeds:
+
+1. **Capture.** It reads `dev`, `upstream/main` and `rebase-resolutions` once and works only from
+   those SHAs. Later steps run the captured `dev`'s copy of the script.
+2. **Normalize.** The captured `dev`'s normalizer, `fork-normalize-upstream.sh <upstream> <dev>`,
+   builds `qa` from that checkout and prints the current base and a new normalized commit. The
+   script checks that both have the upstream commit their trailer names as their only parent and
+   change only `Cargo.toml` files and `Cargo.lock`.
+3. **Rebase and sign.** It imports the recorded resolutions and runs
+   `git rebase --merge --keep-empty --reapply-cherry-picks --empty=stop --onto <normalized> <base>`.
+   A stop is continued only when every conflict was resolved by a recorded resolution: Git's
+   output says it staged a previous resolution, or a deletion record applied; nothing is
+   unmerged; and the rebase moves on. When a reused resolution settles on upstream's side, the
+   pick replays as an empty commit with its own author and message, keeping the replay one to
+   one. A pick that becomes empty without a conflict, an unknown conflict, a merge commit in
+   `dev` or a workflow file that upstream added stops the run. The normalized commit and every
+   replayed commit are then rebuilt with their original author, timestamps and exact message
+   bytes, signed with the SSH key in `GITOXIDE_REBASE_SSH_SIGNING_KEY`, and verified against the
+   public key pinned in the script. GitHub marks a commit verified only when its committer email
+   is a verified email of the account that registered the key: a committer in
+   `GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS` or the signing email is kept exactly; GitHub's own
+   web-flow committer (rebase merges made on GitHub) becomes the signing identity
+   (`GITOXIDE_REBASE_SIGNING_NAME`, `GITOXIDE_REBASE_SIGNING_EMAIL`) at the original time; any
+   other committer stops the run.
+4. **Adapt.** It may add up to two signed commits of its own: `chore(gix): adapt incorporated
+   upstream to the fork` applies a reviewed fixup patch (below), and a release-boundary commit
+   updates `release-please-config.json` (see [Fork releases](#fork-releases)).
+5. **Check.** `target/debug/qa exec manifests` and `cargo metadata --locked` must pass on the
+   result. `--no-deps` would skip dependency resolution, so it would miss a stale lockfile.
+6. **Validate.** It pushes the result to `rebase/candidate/<run-id>-<attempt>`, dispatches Fork CI
+   there (dispatched runs are deep) and waits up to 110 minutes for its result. It does not run
+   tests itself.
+7. **Publish.** Because the ruleset bypass would accept the push either way, the script queries
+   the candidate's check runs again and requires a completed, successful `Fork CI required` from
+   the GitHub Actions app, in the check suite of the `fork-ci.yml` run dispatched on the candidate
+   branch, for the exact candidate SHA. Missing, pending, failed, skipped or cancelled results
+   stop the run. One atomic push then creates `backup/rebase-dev/<run-id>-<attempt>` at the
+   captured `dev`, moves `dev` from exactly the captured SHA to the candidate SHA, and deletes the
+   candidate branch.
+
+A failed run writes its captured SHAs, Git status and conflict diff to the step summary and the
+`rebase-dev-diagnostics` artifact. A candidate branch left by a failed validation names the
+failed Fork CI run; delete it after diagnosis.
+
+Credentials: the signing key is only in the rebase step's environment, and the script deletes it
+from its own environment before running Git. Normalization, which builds and runs code, happens
+before the key or any App token enters the job. The job's `GITHUB_TOKEN` has `contents: read`,
+`actions: write` (to dispatch Fork CI and read its runs; a dispatch is the one event a
+`GITHUB_TOKEN` can trigger) and `checks: read`. `GITHUB_TOKEN` cannot push commits that change
+workflow files, which every rebase does, so the sync App pushes: one token minted after the
+checks for the candidate push, and another minted after validation for the publish push.
+
+### Resolution branch format
+
+The `rebase-resolutions` branch holds reviewed resolutions; the run never writes to it. It may
+contain only `schema.json`, a valid empty cache with which any conflict stops the run. That file
+must contain exactly these bytes, followed by a newline:
+
+```text
+{"version":1,"format":"git-rerere-cache-v1"}
+```
+
+- `resolutions/<40-hex-id>/preimage` and `postimage`: completed Git `rerere` records, plus
+  complete numbered pairs such as `preimage.1` and `postimage.1`. Only regular, non-executable
+  files are allowed; no `thisimage`, unpaired variants or symlinks. The importer validates modes,
+  paths and pairs before writing anything to `.git/rr-cache`. A record adapted to changed context
+  applies when native `rerere` accepts it.
+- `fixups/<captured-upstream-sha>.patch` (optional): a patch over the replayed tree that
+  `git apply --index` must apply exactly, for upstream changes that break the fork without a
+  textual conflict, or to delete a workflow upstream added. Only the patch named for the captured
+  upstream applies, so a newer upstream needs a new patch. Build it in the reproduction checkout
+  after the rebase finishes and save `git diff --no-ext-diff --binary HEAD`.
+- `deletions.json` (optional): `rerere` cannot record modify/delete or rename/delete resolutions.
+  Each record has `upstream` (captured upstream SHA), `commit` (the original `REBASE_HEAD`),
+  `path` and `stages`, captured from `git ls-files -u -- <path>` before resolving as `mode`
+  (only `100644`), `oid` and numeric `stage`. A modify/delete conflict leaves stage 1 and one of
+  stages 2 or 3; the record deletes the path. A rename/rename conflict leaves each name at a single
+  stage: record the base and the losing name for deletion, and the winner with
+  `"action": "keep"`, which stages its exact blob. Every index entry must match, or the run stops.
+  A commit whose only changes were to deleted paths replays as an empty commit.
+
+### Reproducing a run and recording resolutions
+
+Copy the captured SHAs from the failed run's artifact. Use Git 2.55 or later, as the runners do
+(they ship 2.56); Apple Git 2.54 fails at the first pick that reuses a resolution with
+`Unable to create '.git/MERGE_RR.lock': File exists`, and the script refuses older versions. The
+normalizer needs the Rust toolchain, since it builds `qa`; its commit differs from the run's only
+in its committer and date, so its tree and every conflict are the same.
+
+```sh
+git clone https://github.com/iExalt/gitoxide.git gitoxide-repro
+cd gitoxide-repro
+git fetch origin "$DEV_SHA" "$UPSTREAM_SHA" "$RESOLUTIONS_SHA"
+git checkout --detach "$DEV_SHA"
+eval "$(mise exec -- bash etc/scripts/fork-normalize-upstream.sh "$UPSTREAM_SHA" "$DEV_SHA")"
+mise exec -- node .github/scripts/rebase-dev.mjs import "$RESOLUTIONS_SHA"
+git -c rerere.enabled=true -c rerere.autoupdate=true rebase --merge --keep-empty \
+    --reapply-cherry-picks --empty=stop --onto "$normalized" "$base"
+```
+
+Resolve each conflict by hand, stage only the resolved paths, record the resolution with
+`git rerere`, and continue with `git -c core.editor=true rebase --continue`. Regenerate a
+conflicted `Cargo.lock` rather than merging it by hand. Then export the completed records into a
+separate checkout of the resolution branch, review the diff, and push it:
+
+```sh
+git clone --branch rebase-resolutions https://github.com/iExalt/gitoxide.git ../gitoxide-resolutions
+mise exec -- node .github/scripts/rebase-dev.mjs export ../gitoxide-resolutions
+git -C ../gitoxide-resolutions add schema.json resolutions
+git -C ../gitoxide-resolutions commit -m "chore(gix): record rebase resolutions"
+git -C ../gitoxide-resolutions push origin HEAD:refs/heads/rebase-resolutions
+```
+
+The exporter writes only complete regular-file pairs, refuses to overwrite different content, and
+leaves `deletions.json` and fixups alone; add those by hand. Then dispatch the workflow again
+from the current `dev`.
+
+If the workflow cannot run, rebase by hand from a `dev` checkout: run
+`mise run upstream:normalize [revision]`, `git rebase --onto <normalized> <base> dev`, push the
+result to a candidate branch, dispatch Fork CI on it, check that `Fork CI required` passed for that
+exact SHA, and then push a backup ref and `dev` with `--force-with-lease=dev:<old dev>`. Update
+the release boundary as the workflow would.
 
 `upstream-sync.yml` runs daily at 07:23 UTC (02:23 Toronto standard time;
 03:23 daylight time) and on manual dispatch from `dev`. It updates only
@@ -86,7 +215,7 @@ only `dev` pushes save. The plan job fetches two commits: a PR's merge ref has t
 its first parent, fast selection compares against it, and `--require-base` fails the plan
 instead of silently testing everything. The `Fork MSRV`
 job runs in both modes. `Fork CI required` passes only when the planner, every lane and MSRV
-succeeded; a skipped or cancelled job fails it. It is the only check the `dev` ruleset ("dev requires Fork CI") requires; the ruleset has no bypass actors.
+succeeded; a skipped or cancelled job fails it. It is the only check the `dev` ruleset ("dev requires Fork CI") requires; only the admin role and the sync App may bypass the ruleset (see [Branches and upstream updates](#branches-and-upstream-updates)).
 Workflow actions are pinned to commit IDs; checkout credentials are
 not persisted. All six inherited workflows were removed from development, including upstream
 publishing, schedules, CodeQL uploads, fuzzing, and security-analysis jobs.
@@ -128,7 +257,11 @@ fork point `dev` sits on, so upstream commits are excluded from the first fork r
 Because `dev` is linear with upstream below the fork's commits, release-please never walks into
 upstream history. A rebase that moves `dev` onto a newer base before the first release must move
 `bootstrap-sha` to the new base, and one that rewrites a released commit must set
-`last-release-sha` to its rewritten copy. Conventional commit
+`last-release-sha` to its rewritten copy. `rebase-dev` does both in a signed commit: without a
+`gitoxide-fork-v*` tag it sets `bootstrap-sha` to the new signed base; otherwise it finds the
+newest replayed commit that a release tag or `last-release-sha` names and points
+`last-release-sha` at its copy, and stops if there is none, since release-please would then walk
+into upstream history. Conventional commit
 titles describe fork changes; breaking changes require explicit review even while
 the fork version is below 1.0.
 
@@ -166,6 +299,14 @@ The mirror necessarily contains upstream workflows as data; keep their push
 filters under review during updates. Scheduled workflows run from default `dev`.
 Do not reuse another repository's App credentials without explicitly configuring
 and authorizing this installation.
+
+`rebase-dev.yml` pushes with the same sync App, which the `dev` ruleset may bypass. It also needs
+secret `GITOXIDE_REBASE_SSH_SIGNING_KEY`, an ed25519 private key whose public key is pinned in
+`.github/scripts/rebase-dev.mjs` and registered as a signing key on the owner's GitHub account,
+and variables `GITOXIDE_REBASE_SIGNING_NAME`, `GITOXIDE_REBASE_SIGNING_EMAIL` and
+`GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS` (comma-separated). Every email in them must be a verified
+email of that account, or GitHub won't mark the replayed commits verified. The
+`rebase-resolutions` branch must exist, holding at least `schema.json`.
 
 ### Consuming from acyclic
 
@@ -205,6 +346,7 @@ dependency deliberately. No acyclic dependency changes are part of fork setup.
 - [x] Preview version 0.1.0, tag `gitoxide-fork-v0.1.0`, and the three fork-only release files.
 - [x] Install/configure the release App and verify its release PR receives CI (PR #2, run 41529329986).
 - [ ] Install/configure the sync App and verify the scheduled mirror workflow.
+- [ ] Configure the rebase signing key and variables, push `rebase-resolutions`, and run `rebase-dev.yml`.
 
 Initial pre-change QA planner baseline: 39 tests passed in 1.79 seconds, with a
 15.13-second initial QA build. After the toolchain fix, the focused planner run
