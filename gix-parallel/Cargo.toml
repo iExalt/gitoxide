@@ -4,12 +4,13 @@ lints.workspace = true
 name = "gix-parallel"
 description = "Serial and parallel computation helpers and shared ownership primitives for gitoxide"
 repository = "https://github.com/GitoxideLabs/gitoxide"
-version = "0.50.1"
+version.workspace = true
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
 rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*"]
+publish.workspace = true
 
 [lib]
 doctest = false
@@ -39,7 +40,7 @@ name = "single-threaded"
 path = "tests/parallel_shared.rs"
 
 [dependencies]
-gix-trace = { version = "^0.3.1", path = "../gix-trace" }
+gix-trace = { path = "../gix-trace" }
 crossbeam-channel = { version = "0.5.15", optional = true }
 parking_lot = { version = "0.12.4", default-features = false, optional = true }
 once_cell = { version = "1.21.3", optional = true }

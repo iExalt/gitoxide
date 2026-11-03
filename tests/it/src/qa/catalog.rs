@@ -165,6 +165,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
                 Command::new("@qa", &["workflows"]),
                 Command::new("@qa", &["badge"]),
                 Command::new("@qa", &["mode"]),
+                Command::new("@qa", &["manifests"]),
             ],
         ),
     ];

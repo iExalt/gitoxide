@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 mod catalog;
 mod downstream;
 mod features;
+mod manifests;
 mod native_tests;
 mod ops;
 mod plan;

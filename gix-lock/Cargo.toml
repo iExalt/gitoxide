@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-lock"
-version = "27.0.0"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A git-style lock-file implementation"
@@ -10,6 +10,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
 rust-version = "1.88"
+publish.workspace = true
 
 [lib]
 doctest = true
@@ -28,11 +29,11 @@ profiles = [{ default-features = false, features = [] }]
 allowed-unstable-crates = ["gix_error"]
 
 [dependencies]
-gix-macros = { version = "^0.2.1", path = "../gix-macros" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-fs = { version = "^1.0.0", path = "../gix-fs" }
-gix-utils = { version = "^0.5.2", default-features = false, path = "../gix-utils" }
-gix-tempfile = { version = "~27.0.0", default-features = false, path = "../gix-tempfile" }
+gix-macros = { path = "../gix-macros" }
+gix-error = { path = "../gix-error" }
+gix-fs = { path = "../gix-fs" }
+gix-utils = { default-features = false, path = "../gix-utils" }
+gix-tempfile = { default-features = false, path = "../gix-tempfile" }
 
 [dev-dependencies]
 gix-lock = { path = ".", features = ["unstable"] }

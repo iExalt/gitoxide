@@ -11,7 +11,7 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 1: iteration speed is complete; phase 2 (E, F) is next |
+| Current phase | 2: releases. E is active |
 | Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
 | Immediate focus | Renumbering every crate to 0.1.0 in lockstep (E) |
 | Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
@@ -24,7 +24,7 @@ changes it.
 | B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
 | C: local fast loop | complete | verified; owner accepted 94–109 s for core plumbing edits | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | complete | verified: warm routine PR runs 261 s and 257 s; deep `dev` run 481 s | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
-| E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
+| E: renumber to 0.1.0 in lockstep | active | implemented; upstream-merge rehearsal clean; CI and the `upstream/normalized` bootstrap merge pending | Every crate shares one release-please-managed version |
 | F: tagged releases | planned | — | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
 
 Decisions from the owner (2026-11-02, plan approval):
@@ -180,6 +180,25 @@ Each `Cargo.lock` change creates a new set of lane caches, about 7.5 GB against 
 10 GB per-repository limit. The previous set is then evicted, so expect one cold `dev` run after
 dependency updates.
 
+### E: lockstep versions
+
+Evidence state: implemented, not yet merged. Every crate inherits `[workspace.package] version`,
+now `0.0.0`, so the first release PR's bump to `0.1.0` is also the first live proof of the
+release-please updaters. The `qa exec manifests` housekeeping check keeps manifests in that shape.
+
+- release-please 17.6.0's TOML updater, run locally on `Cargo.lock` with
+  `$.package[?(!@.source)].version`, changed exactly the 71 workspace packages and only their
+  version lines. `$.workspace.package.version` kept surrounding comments. No workflow commit to
+  the release branch is needed.
+- Upstream updates merge a normalized upstream chain, `upstream/normalized`. Rehearsing upstream's
+  `gix-v0.89.0` to fork-point changes (74 manifests changed upstream): a raw merge conflicted in
+  74 manifests; normalizing each upstream revision as a plain child still conflicted in 25,
+  wherever a renumbered line neighboured a real change; the chain, whose merge base is the
+  previous normalized commit, merged clean with a fork-only root manifest edit.
+- The renumber changes what consumers see: the user agent and `gix --version` report the fork
+  version, and `[patch.crates-io]` can no longer substitute fork crates for registry
+  requirements like `gix = "0.90"`. Acyclic doesn't depend on gix yet.
+
 ## Deferred findings
 
 - The `gix-pack` multi-index checksums and the `gix free pack receive` journey depend on how git's
@@ -187,5 +206,10 @@ dependency updates.
   under umask 0002. These are test-isolation defects, not regressions.
 - `gix-command` `spawn::with_shell::command_in_path_with_args` failed once out of six runs under load
   (`ls -l` in the test snapshot exited non-zero). The cause is unconfirmed; a race with a concurrent tempdir deletion is suspected.
+- Nothing semver-checks one fork release against the previous one; the `api` stage only tests
+  the checker on synthetic fixtures.
+- The `upstream/main` mirror trails upstream by 8 commits on 2026-11-03 because the sync App
+  isn't configured (`GITOXIDE_SYNC_APP_CLIENT_ID` is unset, so the only run was skipped). Until
+  it is, fetch upstream directly for updates.
 - The exhaustive archived-fixture pass rewrites tracked `generated-archives/*.tar` files in the
   working tree. Never commit those rewritten archives.
