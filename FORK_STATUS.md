@@ -11,10 +11,10 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 2: releases. E is active |
+| Current phase | 3: rebase-based upstream updates, as in Paseo. R1 is active |
 | Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
-| Immediate focus | Renumbering every crate to 0.1.0 in lockstep (E) |
-| Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
+| Immediate focus | Linear `dev` and rebase-merge policy (R1) |
+| Release readiness | No fork release or tag exists. Release PR #2 proposes 0.1.0 with green deep CI; the owner approved merging it after R3 |
 
 ## Goals
 
@@ -24,8 +24,17 @@ changes it.
 | B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
 | C: local fast loop | complete | verified; owner accepted 94–109 s for core plumbing edits | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
 | D: routine/deep split and required gate | complete | verified: warm routine PR runs 261 s and 257 s; deep `dev` run 481 s | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
-| E: renumber to 0.1.0 in lockstep | active | implemented; upstream-merge rehearsal clean; CI and the `upstream/normalized` bootstrap merge pending | Every crate shares one release-please-managed version |
-| F: tagged releases | planned | — | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
+| E: renumber to 0.1.0 in lockstep | complete | verified: release PR #2 bumps exactly the 71 lockfile entries and the workspace version; its deep run 41646760783 passed | Every crate shares one release-please-managed version |
+| F: tagged releases | implemented | `skip-github-release: false` merged (#10); first live tag awaits 0.1.0 | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
+
+| R1: linear `dev` and rebase merges | active | candidate replayed onto N0 with an identical tree; deep run pending | `dev` is N0 plus linear fork commits; only rebase merges allowed; policy docs updated |
+| R2: rebase-dev workflow | planned | — | Paseo's workflow ported with normalization, rerere cache, fixups, deletions, signing and release boundaries |
+| R3: first rebase | planned | — | `dev` rebased onto current upstream by the workflow; release notes contain no upstream commits |
+
+Decisions from the owner (2026-11-03): "Edit gitoxide to rebase rather than merge, and only allow
+rebase merges in the repo"; "I'd like gitoxide to operate like Paseo with the rebase-resolutions
+helper branch/rerere"; ruleset "Yes, Paseo's shape"; signing "Sign like Paseo"; 0.1.0 "Merge it
+after R3"; "Let's do 0.1.0 after moving gitoxide to Paseo's model".
 
 Decisions from the owner (2026-11-02, plan approval):
 - PR gate: "Routine/deep split".
@@ -190,22 +199,13 @@ release-please updaters. The `qa exec manifests` housekeeping check keeps manife
   `$.package[?(!@.source)].version`, changed exactly the 71 workspace packages and only their
   version lines. `$.workspace.package.version` kept surrounding comments. No workflow commit to
   the release branch is needed.
-- Upstream updates merge a normalized upstream chain, `upstream/normalized`. Rehearsing upstream's
-  `gix-v0.89.0` to fork-point changes (74 manifests changed upstream): a raw merge conflicted in
-  74 manifests; normalizing each upstream revision as a plain child still conflicted in 25,
-  wherever a renumbered line neighboured a real change; the chain, whose merge base is the
-  previous normalized commit, merged clean with a fork-only root manifest edit.
-- `upstream:normalize` recovery paths, rehearsed in a scratch clone (2026-11-03): with nothing
-  normalized it starts a chain; with the branch ahead of `dev` it continues from the branch; with
-  the branch lost it continues from `dev`'s merged commit, skipping a squash commit that quotes the
-  trailer; with the branch reset to a commit lacking `dev`'s last normalized commit it refuses; an
-  already-normalized revision is refused.
-- Blocker for the first upstream update past the fork point: release-please walks every
-  ancestor of `dev`, so merged upstream `feat:` and `fix:` commits would likely enter
-  `CHANGELOG.fork.md` and drive the fork's version bump. Before that update, preview a scratch
-  branch containing a normalized upstream merge and find an exclusion that works, such as
-  `BEGIN_COMMIT_OVERRIDE` in the update PR. The bootstrap merge of the fork point itself is
-  unaffected, because its upstream parent is the bootstrap commit.
+- Upstream updates now rebase `dev` onto a normalized upstream commit (R1–R3); the merge-based
+  `upstream/normalized` chain was retired before any upstream update used it. Rehearsing
+  upstream's `gix-v0.89.0` to fork-point changes (74 manifests changed upstream) showed why
+  normalization is needed: a raw merge conflicted in all 74 manifests.
+- Linear history removes the release-notes concern the merge design had: upstream commits sit
+  below the fork's, so release-please never walks them, provided each rebase moves
+  `bootstrap-sha` or `last-release-sha` as `FORK.md` describes.
 - The renumber changes what consumers see: the user agent and `gix --version` report the fork
   version, and `[patch.crates-io]` can no longer substitute fork crates for registry
   requirements like `gix = "0.90"`. Acyclic doesn't depend on gix yet.
