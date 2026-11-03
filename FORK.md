@@ -69,8 +69,9 @@ repository:
    `rebase-dev-prepared` artifact.
 
 The **publish** job starts on a fresh runner from the workflow's own commit, which is the captured
-`dev`, and runs only Git and Node against the replayed tree. After it checks out that tree, it
-calls the Node binary directly rather than through mise, whose configuration upstream could change.
+`dev`, and runs only Git and Node against the replayed tree. It installs Node with a pinned
+`actions/setup-node` and a literal version, never mise, because no check protects `mise.toml` and
+mise tool options can run commands; it then calls that Node binary by absolute path.
 It alone holds the signing key, `actions: write`, `checks: read` and the App tokens:
 
 6. **Sign.** It takes nothing from the prepare job on trust. The captured upstream and resolution
