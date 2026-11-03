@@ -39,8 +39,6 @@ jobs:
         with:
           shared-key: ci-plan
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-      - name: Lint workflows
-        run: mise run lint:workflows
       - name: Choose routine or deep QA
         id: mode
         env:
@@ -84,6 +82,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends liblzma-dev
       - name: Run the lane
         run: mise run ci:job
+      # Planning doesn't depend on workflow lint, so it runs here, off the plan job's critical
+      # path, in the lane holding housekeeping (which every plan includes); `Fork CI required`
+      # fails if this lane fails.
+      - name: Lint workflows
+        if: contains(matrix.tasks, 'housekeeping')
+        run: mise run lint:workflows
 
   required:
     # The only check the dev ruleset requires.
