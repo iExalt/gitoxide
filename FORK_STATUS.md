@@ -152,6 +152,25 @@ cold, because `dev` had saved no lane caches yet. The `dev` ruleset requiring th
 created on 2026-11-03 with no bypass actors. Next: warm routine runs on a leaf-crate PR after
 `dev` saves its lane caches.
 
+The first warm routine runs used throwaway PR #5, which edits a `gix-url` comment and selects 10
+packages. Every lane restored its `dev` cache, matching the full key.
+
+| Run | Critical path (plan start to gate end) | Longest queue | Slowest lanes |
+| --- | --- | --- | --- |
+| 41633404379 | 281 s | 3 s | features 152–200 s, tests 181 s, plan 69 s |
+| 41634156856 | 321 s (about 250 s without queueing) | 72 s | features 137–208 s, tests 180 s, plan 54 s |
+
+The second run missed five minutes only because jobs queued for up to 72 s under the
+account-wide limit on concurrent jobs. Nothing else in this repository was running, and that
+limit is outside the repository's control. Two follow-up changes reduce the exposure:
+- The plan job fetches two commits instead of full history. Its checkout took 27 s.
+- Self-test, policy, housekeeping and lint share one `basics` lane, so a run needs 14 jobs
+  instead of 17.
+
+Each `Cargo.lock` change creates a new set of lane caches, about 7.5 GB against GitHub's
+10 GB per-repository limit. The previous set is then evicted, so expect one cold `dev` run after
+dependency updates.
+
 ## Deferred findings
 
 - The `gix-pack` multi-index checksums and the `gix free pack receive` journey depend on how git's
