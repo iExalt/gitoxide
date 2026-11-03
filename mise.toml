@@ -15,17 +15,35 @@ rust = { version = "1.99.0", components = "rustfmt,clippy" }
 # Exercise fixture generation; required on macOS and Windows as well.
 GIX_TEST_IGNORE_ARCHIVES = "1"
 
+[vars]
+# The host QA stages, shared by `check`, `check:thorough` and the CI planner.
+host_stages = "self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"
+# CI job groups split into parallel lanes; see FORK_STATUS.md for the timings behind them.
+ci_shards = "features=6"
+
+[tasks.test]
+description = "Developer loop: nextest for changed crates and their dependents, plus affected isolated packages"
+run = "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage local-tests,isolated"
+
 [tasks.check]
 description = "Affected-package QA; global inputs conservatively select the workspace"
-run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"]
+run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage {{vars.host_stages}}"]
 
 [tasks."check:thorough"]
 description = "Full host feature matrix, tests, docs, API compatibility and journeys"
-run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --thorough --stage self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"]
+run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --thorough --stage {{vars.host_stages}}"]
 
 [tasks."check:msrv"]
 description = "Build gix at its declared MSRV in both supported configurations"
 run = ["mise install rust@1.88.0", "just check-rust-version 1.88.0"]
+
+[tasks."ci:plan"]
+description = "Write the CI lane matrix to GITHUB_OUTPUT; QA_MODE (fast|exhaustive) and QA_BASE choose the selection"
+run = 'cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- plan --platform linux-x86_64 --mode "${QA_MODE:-exhaustive}" --base "${QA_BASE:-origin/dev}" --require-base --stage {{vars.host_stages}} --shards {{vars.ci_shards}} --github-output "$GITHUB_OUTPUT"'
+
+[tasks."ci:job"]
+description = "Run the CI lane named by QA_JOB from the plan in QA_PLAN"
+run = "cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env"
 
 [tasks.build]
 description = "Build the default CLI without publishing"
@@ -33,7 +51,7 @@ run = "cargo build --locked"
 
 [tasks."lint:workflows"]
 description = "Validate GitHub workflow expressions and embedded shell scripts"
-run = ["actionlint", "node --test .github/scripts/sync-upstream.test.cjs"]
+run = ["actionlint", "node --test '.github/scripts/*.test.cjs'"]
 
 [tasks."release:preview"]
 description = "Read-only release PR preview; requires GH_TOKEN (never creates tags or releases)"
