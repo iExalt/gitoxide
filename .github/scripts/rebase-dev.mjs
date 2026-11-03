@@ -1,13 +1,18 @@
 // Rebase fork `dev` onto a normalized copy of the upstream mirror; see FORK.md for the workflow.
 //
-// Subcommands, each one workflow step:
+// Subcommands, each one workflow step. The prepare job runs upstream-controlled code (Cargo reads
+// upstream's `.cargo/config.toml`), so it has no secrets:
 //   snapshot   capture dev, upstream/main and rebase-resolutions, and check out the captured dev
 //   normalize  normalize the captured upstream with the captured dev's normalizer
-//   rebase     replay dev onto it with known resolutions, then sign every new commit
-//   check      check the rebased manifests and lockfile
-//   candidate  push the rebased tip to rebase/candidate/<run>-<attempt>
+//   replay     replay dev onto it, unsigned, with known resolutions and the fixup
+//   check      check the replayed manifests and lockfile
+//   bundle     write the replayed commits and the captured SHAs for the publish job
+// The publish job, on a fresh runner, runs only Git and Node against the replayed tree:
+//   sign       verify the bundle against the captured refs, then sign it and add the release boundary
+//   candidate  push the signed tip to rebase/candidate/<run>-<attempt>
 //   validate   dispatch Fork CI on the candidate and wait for `Fork CI required`
 //   publish    re-check that result, then push the backup ref and dev atomically
+// And by hand:
 //   import SHA / export DIR   copy rerere records between a checkout and the resolution branch
 import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -28,6 +33,10 @@ const DELETIONS_PATH = 'deletions.json';
 const FIXUPS_PREFIX = 'fixups/';
 const WORKFLOWS_DIR = '.github/workflows/';
 const RELEASE_PLEASE_CONFIG_PATH = 'release-please-config.json';
+// Upstream owns nothing here, and these decide what runs with the repository's credentials.
+const FORK_OWNED_PATHS = ['.github/workflows', '.github/scripts'];
+const PREPARED_REF = 'refs/rebase-dev/prepared';
+const FIXUP_MESSAGE = 'chore(gix): adapt incorporated upstream to the fork';
 const NORMALIZER = 'etc/scripts/fork-normalize-upstream.sh';
 const TRAILER = 'Normalized-upstream';
 const FORK_CI = 'fork-ci.yml';
@@ -179,7 +188,7 @@ function parseLsRemote(text) {
 
 // Captures the three refs once, so every later step works from the same SHAs, and checks out
 // the captured dev.
-export async function snapshotRefs({ repositoryPath, remote = 'origin' }) {
+export async function snapshotRefs({ repositoryPath, remote = 'origin', expectedDev }) {
   assertGitVersion(await gitChecked(repositoryPath, ['--version']));
   if (await gitChecked(repositoryPath, ['status', '--porcelain'])) {
     throw new Error('Refusing to rebase a worktree with local changes');
@@ -194,6 +203,10 @@ export async function snapshotRefs({ repositoryPath, remote = 'origin' }) {
   };
   for (const [name, sha] of Object.entries(snapshots)) {
     if (!sha) throw new Error(`Required ${name} ref is missing on ${remote}`);
+  }
+  // The publish job runs the workflow's own commit, so it must be the dev that is rebased.
+  if (expectedDev !== undefined && snapshots.dev !== expectedDev) {
+    throw new Error(`dev moved to ${snapshots.dev} after this run started at ${expectedDev}; dispatch it again`);
   }
   await gitChecked(repositoryPath, [
     'fetch', '--no-tags', remote,
@@ -403,7 +416,7 @@ function isConflictStop(result) {
 
 // Continues only conflict stops that known records resolved completely: Git reported staging a
 // previous resolution (or a deletion record applied), nothing is unmerged, and the rebase moves.
-async function continueKnownResolutions(repositoryPath, firstResult, maxContinuations, deletionRecords, upstream) {
+async function continueKnownResolutions(repositoryPath, firstResult, maxContinuations, { deletionRecords, upstream, dev }) {
   let result = firstResult;
   for (let attempt = 0; attempt < maxContinuations; attempt += 1) {
     const inRebase = (await git(repositoryPath, ['rev-parse', '-q', '--verify', 'REBASE_HEAD'])).code === 0;
@@ -589,41 +602,48 @@ async function signChain(repositoryPath, signer, parent, pairs) {
   return signedShas;
 }
 
-// Adds one signed commit on HEAD from the index, authored by the signing identity.
-async function commitSignedIndex(repositoryPath, signer, message) {
+// Commits the index on HEAD as the signing identity, unsigned, and moves HEAD to it.
+async function commitIndex(repositoryPath, identity, message) {
   const parent = await gitLine(repositoryPath, ['rev-parse', 'HEAD']);
   const tree = await gitLine(repositoryPath, ['write-tree']);
-  const unsigned = await gitLine(repositoryPath, ['commit-tree', tree, '-p', parent, '-m', message], {
-    env: identityEnvironment(signer.identity),
+  const commit = await gitLine(repositoryPath, ['commit-tree', tree, '-p', parent, '-m', message], {
+    env: identityEnvironment(identity),
   });
-  const [signed] = await signChain(repositoryPath, signer, parent, [{ original: unsigned, rewritten: unsigned }]);
+  await gitChecked(repositoryPath, ['reset', '--quiet', '--hard', commit]);
+  return { parent, commit };
+}
+
+// Adds one signed commit on HEAD from the index, authored by the signing identity.
+async function commitSignedIndex(repositoryPath, signer, message) {
+  const { parent, commit } = await commitIndex(repositoryPath, signer.identity, message);
+  const [signed] = await signChain(repositoryPath, signer, parent, [{ original: commit, rewritten: commit }]);
   await gitChecked(repositoryPath, ['reset', '--quiet', '--hard', signed]);
   return 1;
 }
 
-async function workflowPaths(repositoryPath, revision) {
-  return new Set(await listZ(repositoryPath, ['ls-tree', '-z', '--name-only', revision, '--', WORKFLOWS_DIR]));
-}
-
-// The fork keeps only the workflows it owns. Upstream edits to workflows dev deleted
-// surface as conflicts, but a workflow upstream adds would replay silently and start
-// running in the fork, so any workflow file captured dev lacks stops the run.
-async function assertNoInheritedWorkflows(repositoryPath, devSha) {
-  const owned = await workflowPaths(repositoryPath, devSha);
-  const inherited = [...(await workflowPaths(repositoryPath, 'HEAD'))].filter((path) => !owned.has(path));
-  if (inherited.length > 0) {
+// Upstream owns nothing under the fork-owned paths, so a rebase must leave them exactly as the
+// captured dev has them. Upstream edits to workflows dev deleted surface as conflicts, but a
+// workflow upstream adds would replay silently and start running in the fork.
+async function assertForkOwnedPathsUnchanged(repositoryPath, dev, head) {
+  const changed = await listZ(repositoryPath, ['diff-tree', '-r', '-z', '--name-only', '--no-commit-id', dev, head, '--', ...FORK_OWNED_PATHS]);
+  if (changed.length > 0) {
     throw new Error(
-      `Rebase would add upstream workflows to dev: ${inherited.join(', ')}. ` +
-        `Delete them in ${FIXUPS_PREFIX}<upstream sha>.patch on the resolution branch.`,
+      `Rebase would change fork-owned paths: ${changed.join(', ')}. Delete upstream additions in ` +
+        `${FIXUPS_PREFIX}<upstream sha>.patch on the resolution branch; change fork files in a PR.`,
     );
   }
 }
 
+async function hasUpstreamFixup(repositoryPath, { resolutions, upstream }) {
+  return Boolean(await gitChecked(repositoryPath, ['ls-tree', resolutions, '--', `${FIXUPS_PREFIX}${upstream}.patch`]));
+}
+
 // Upstream code can break the fork without any textual conflict. A reviewed patch keyed to the
-// exact captured upstream adapts it in one signed commit; a patch that does not apply stops the run.
-async function applyUpstreamFixup(repositoryPath, signer, { resolutions, upstream }) {
+// exact captured upstream adapts it in one commit; a patch that does not apply stops the run.
+// Both jobs apply it, so the publish job never takes the prepared fixup commit on trust.
+async function stageUpstreamFixup(repositoryPath, { resolutions, upstream }) {
+  if (!(await hasUpstreamFixup(repositoryPath, { resolutions, upstream }))) return false;
   const path = `${FIXUPS_PREFIX}${upstream}.patch`;
-  if (!(await gitChecked(repositoryPath, ['ls-tree', resolutions, '--', path]))) return 0;
   const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), 'gitoxide-fixup-'));
   try {
     const patchPath = join(directory, 'fixup.patch');
@@ -633,7 +653,7 @@ async function applyUpstreamFixup(repositoryPath, signer, { resolutions, upstrea
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-  return commitSignedIndex(repositoryPath, signer, 'chore(gix): adapt incorporated upstream to the fork');
+  return true;
 }
 
 // The newest replayed commit that release-please may treat as the last release
@@ -690,50 +710,125 @@ async function releaseTagCommits(repositoryPath, remote) {
   return parseReleaseTags(await gitChecked(repositoryPath, ['ls-remote', '--tags', remote, 'refs/tags/gitoxide-fork-v*']));
 }
 
-export async function rebaseDev({
-  repositoryPath,
-  remote = 'origin',
-  snapshots,
-  base,
-  normalized,
-  signingKey,
-  publicKey = SIGNING_PUBLIC_KEY,
-  identity,
-}) {
+// The replay maps commit for commit, keeping each author and exact message.
+export async function verifyMapping(repositoryPath, originalCommits, rewrittenCommits) {
+  if (rewrittenCommits.length !== originalCommits.length) {
+    throw new Error(`Replayed commit count changed (${originalCommits.length} original, ${rewrittenCommits.length} rewritten)`);
+  }
+  for (const [index, originalSha] of originalCommits.entries()) {
+    const original = parseCommitObject(await gitBlob(repositoryPath, originalSha, 'commit'), originalSha);
+    const rewritten = parseCommitObject(await gitBlob(repositoryPath, rewrittenCommits[index], 'commit'), rewrittenCommits[index]);
+    if (original.author.line !== rewritten.author.line || !sameMessage(original.message, rewritten.message)) {
+      throw new Error(`Rebase changed the author or message while mapping ${originalSha}`);
+    }
+  }
+}
+
+// Fails unless the two commits' trees differ at most in `allowedPaths`.
+export async function assertSameTree(repositoryPath, expected, actual, allowedPaths = []) {
+  const changed = await listZ(repositoryPath, ['diff-tree', '-r', '-z', '--name-only', '--no-commit-id', expected, actual]);
+  const unexpected = changed.filter((path) => !allowedPaths.includes(path));
+  if (unexpected.length > 0) throw new Error(`The signed tree differs from the prepared tree in ${unexpected.join(', ')}`);
+}
+
+async function assertAncestor(repositoryPath, ancestor, descendant, name) {
+  if ((await git(repositoryPath, ['merge-base', '--is-ancestor', ancestor, descendant])).code !== 0) {
+    throw new Error(`The ${name} ${ancestor} is not part of ${descendant}`);
+  }
+}
+
+// Prepare job: replays dev onto the normalized upstream without signing.
+export async function replayDev({ repositoryPath, snapshots, base, normalized, identity }) {
   const { dev, upstream, resolutions } = snapshots;
   for (const [name, sha] of Object.entries({ dev, upstream, resolutions, base, normalized })) requireSha(name, sha);
+  if ((await gitLine(repositoryPath, ['rev-parse', 'HEAD'])) !== dev) throw new Error('Rebase from a checkout of the captured dev');
+  if (await gitChecked(repositoryPath, ['status', '--porcelain'])) throw new Error('Refusing to rebase a worktree with local changes');
+  const originalCommits = await replayCommitIds(repositoryPath, base, dev);
+  await importResolutions(repositoryPath, resolutions);
+  const deletionRecords = await loadDeletionResolutions(repositoryPath, resolutions);
+  const rebaseResult = await git(repositoryPath, [
+    '-c', 'rerere.enabled=true', '-c', 'rerere.autoupdate=true', ...STAGING_IDENTITY,
+    'rebase', '--merge', '--keep-empty', '--reapply-cherry-picks', '--empty=stop', '--onto', normalized, base,
+  ]);
+  if (rebaseResult.code !== 0) {
+    await continueKnownResolutions(repositoryPath, rebaseResult, originalCommits.length, { deletionRecords, upstream, dev });
+  }
+  await verifyMapping(repositoryPath, originalCommits, await replayCommitIds(repositoryPath, normalized, 'HEAD'));
+  let fixupCommits = 0;
+  if (await stageUpstreamFixup(repositoryPath, { resolutions, upstream })) {
+    await commitIndex(repositoryPath, identity, FIXUP_MESSAGE);
+    fixupCommits = 1;
+  }
+  await assertForkOwnedPathsUnchanged(repositoryPath, dev, 'HEAD');
+  return { head: await gitLine(repositoryPath, ['rev-parse', 'HEAD']), fixupCommits };
+}
+
+const PREPARED_KEYS = ['base', 'dev', 'head', 'normalized', 'resolutions', 'upstream'];
+
+// Hands the replayed commits and the captured SHAs to the publish job.
+export async function writePrepared({ repositoryPath, directory, prepared }) {
+  for (const key of PREPARED_KEYS) requireSha(key, prepared[key]);
+  await gitChecked(repositoryPath, ['update-ref', PREPARED_REF, prepared.head]);
+  await mkdir(directory, { recursive: true });
+  await gitChecked(repositoryPath, ['bundle', 'create', '--quiet', join(directory, 'prepared.bundle'), PREPARED_REF, `^${prepared.upstream}`]);
+  await writeFile(join(directory, 'prepared.json'), `${JSON.stringify(prepared, null, 2)}\n`);
+}
+
+// Publish job: reads what the prepare job handed over. `dev` is the commit this job checked out.
+export async function loadPrepared({ repositoryPath, directory, dev }) {
+  const prepared = JSON.parse(await readFile(join(directory, 'prepared.json'), 'utf8'));
+  if (Object.keys(prepared).sort().join() !== PREPARED_KEYS.join()) throw new Error('Unexpected prepared.json fields');
+  for (const key of PREPARED_KEYS) requireSha(key, prepared[key]);
+  if (prepared.dev !== dev) throw new Error(`The prepared replay is of ${prepared.dev}, but this job runs ${dev}`);
+  const bundle = join(directory, 'prepared.bundle');
+  await gitChecked(repositoryPath, ['bundle', 'verify', '--quiet', bundle]);
+  await gitChecked(repositoryPath, ['fetch', '--quiet', '--no-tags', bundle, `+${PREPARED_REF}:${PREPARED_REF}`]);
+  if ((await gitLine(repositoryPath, ['rev-parse', PREPARED_REF])) !== prepared.head) {
+    throw new Error('The bundle does not hold the prepared head');
+  }
+  return prepared;
+}
+
+// Publish job: nothing the prepare job reports is taken on trust, since it ran upstream code.
+// The captured refs must be on the remote, the bases must be normalized commits, and the replay
+// must map 1:1 to dev's commits. Signing rebuilds every commit; the fixup is applied again, and
+// the result must have the prepared tree, which the prepare job checked.
+export async function signPrepared({ repositoryPath, remote = 'origin', prepared, signingKey, publicKey = SIGNING_PUBLIC_KEY, identity }) {
+  const { dev, upstream, resolutions, base, normalized, head } = prepared;
+  for (const key of PREPARED_KEYS) requireSha(key, prepared[key]);
   return withSigner({ signingKey, publicKey, identity }, async (signer) => {
-    if ((await gitLine(repositoryPath, ['rev-parse', 'HEAD'])) !== dev) throw new Error('Rebase from a checkout of the captured dev');
-    if (await gitChecked(repositoryPath, ['status', '--porcelain'])) throw new Error('Refusing to rebase a worktree with local changes');
+    if ((await gitLine(repositoryPath, ['rev-parse', 'HEAD'])) !== dev) throw new Error('Sign from a checkout of the captured dev');
+    if (await gitChecked(repositoryPath, ['status', '--porcelain'])) throw new Error('Refusing to sign in a worktree with local changes');
+    await assertAncestor(repositoryPath, upstream, `refs/remotes/${remote}/upstream/main`, 'captured upstream');
+    await assertAncestor(repositoryPath, resolutions, `refs/remotes/${remote}/rebase-resolutions`, 'captured resolution commit');
+    await assertAncestor(repositoryPath, base, dev, 'normalized base');
+    await assertNormalizedCommit(repositoryPath, base);
+    await assertNormalizedCommit(repositoryPath, normalized, upstream);
     const originalCommits = await replayCommitIds(repositoryPath, base, dev);
-    await importResolutions(repositoryPath, resolutions);
-    const deletionRecords = await loadDeletionResolutions(repositoryPath, resolutions);
-    const rebaseResult = await git(repositoryPath, [
-      '-c', 'rerere.enabled=true', '-c', 'rerere.autoupdate=true', ...STAGING_IDENTITY,
-      'rebase', '--merge', '--keep-empty', '--reapply-cherry-picks', '--empty=stop', '--onto', normalized, base,
-    ]);
-    if (rebaseResult.code !== 0) {
-      await continueKnownResolutions(repositoryPath, rebaseResult, originalCommits.length, deletionRecords, upstream);
+    const preparedCommits = await replayCommitIds(repositoryPath, normalized, head);
+    const fixup = await hasUpstreamFixup(repositoryPath, { resolutions, upstream });
+    if (preparedCommits.length !== originalCommits.length + (fixup ? 1 : 0)) {
+      throw new Error(`The prepared replay has ${preparedCommits.length} commits for ${originalCommits.length} in dev`);
     }
-    const rebasedHead = await gitLine(repositoryPath, ['rev-parse', 'HEAD']);
-    const rebasedCommits = await replayCommitIds(repositoryPath, normalized, rebasedHead);
-    if (rebasedCommits.length !== originalCommits.length) {
-      throw new Error(`Replayed commit count changed (${originalCommits.length} original, ${rebasedCommits.length} rewritten)`);
-    }
+    const replayedCommits = preparedCommits.slice(0, originalCommits.length);
+    await verifyMapping(repositoryPath, originalCommits, replayedCommits);
+
     // The normalized base is signed too; its committer is the signing identity.
     const [signedBase] = await signChain(repositoryPath, signer, upstream, [{ original: normalized, rewritten: normalized }]);
     const signedCommits = await signChain(
       repositoryPath,
       signer,
       signedBase,
-      originalCommits.map((original, index) => ({ original, rewritten: rebasedCommits[index] })),
+      originalCommits.map((original, index) => ({ original, rewritten: replayedCommits[index] })),
     );
     await gitChecked(repositoryPath, ['reset', '--quiet', '--hard', signedCommits.at(-1) ?? signedBase]);
-    if ((await gitLine(repositoryPath, ['rev-parse', 'HEAD^{tree}'])) !== (await gitLine(repositoryPath, ['rev-parse', `${rebasedHead}^{tree}`]))) {
-      throw new Error('Signed commit chain changed the rebased tree');
+    let fixupCommits = 0;
+    if (fixup) {
+      await stageUpstreamFixup(repositoryPath, { resolutions, upstream });
+      fixupCommits = await commitSignedIndex(repositoryPath, signer, FIXUP_MESSAGE);
     }
-    const fixupCommits = await applyUpstreamFixup(repositoryPath, signer, { resolutions, upstream });
-    await assertNoInheritedWorkflows(repositoryPath, dev);
+    await assertSameTree(repositoryPath, head, 'HEAD');
+    await assertForkOwnedPathsUnchanged(repositoryPath, dev, 'HEAD');
 
     const configText = await readFile(join(repositoryPath, RELEASE_PLEASE_CONFIG_PATH), 'utf8');
     const update = releaseConfigUpdate({
@@ -749,6 +844,7 @@ export async function rebaseDev({
       await gitChecked(repositoryPath, ['add', '--', RELEASE_PLEASE_CONFIG_PATH]);
       boundaryCommits = await commitSignedIndex(repositoryPath, signer, update.message);
     }
+    await assertSameTree(repositoryPath, head, 'HEAD', boundaryCommits ? [RELEASE_PLEASE_CONFIG_PATH] : []);
     return {
       head: await gitLine(repositoryPath, ['rev-parse', 'HEAD']),
       base: signedBase,
@@ -975,7 +1071,7 @@ export async function exportResolutions({ repositoryPath, destinationPath }) {
 
 async function writeDiagnostics(path, message, repositoryPath) {
   if (!path) return;
-  const shas = ['DEV_SHA', 'UPSTREAM_SHA', 'RESOLUTIONS_SHA', 'BASE_SHA', 'NORMALIZED_SHA', 'REBASED_SHA']
+  const shas = ['DEV_SHA', 'UPSTREAM_SHA', 'RESOLUTIONS_SHA', 'BASE_SHA', 'NORMALIZED_SHA', 'PREPARED_SHA', 'REBASED_SHA']
     .map((name) => `${name}=${process.env[name] ?? ''}`);
   const status = await git(repositoryPath, ['status', '--short', '--branch']);
   const conflicts = await git(repositoryPath, ['ls-files', '-u']);
@@ -1007,6 +1103,7 @@ async function main() {
   const repositoryPath = process.cwd();
   const env = process.env;
   const [command, argument] = process.argv.slice(2);
+  const preparedDirectory = join(env.RUNNER_TEMP ?? tmpdir(), 'rebase-dev-prepared');
   const api = () => githubApi({ token: env.GITHUB_TOKEN, repository: env.GITHUB_REPOSITORY, apiUrl: env.GITHUB_API_URL });
   switch (command) {
     case 'import':
@@ -1016,7 +1113,7 @@ async function main() {
       console.log(`Exported ${await exportResolutions({ repositoryPath, destinationPath: argument })} completed rerere pair(s)`);
       return;
     case 'snapshot': {
-      const { dev, upstream, resolutions } = await snapshotRefs({ repositoryPath });
+      const { dev, upstream, resolutions } = await snapshotRefs({ repositoryPath, expectedDev: env.GITHUB_SHA });
       await setEnvironment({ DEV_SHA: dev, UPSTREAM_SHA: upstream, RESOLUTIONS_SHA: resolutions });
       return;
     }
@@ -1025,24 +1122,51 @@ async function main() {
       await setEnvironment({ BASE_SHA: base, NORMALIZED_SHA: normalized });
       return;
     }
-    case 'rebase': {
-      const signingKey = env.GITOXIDE_REBASE_SSH_SIGNING_KEY;
-      delete env.GITOXIDE_REBASE_SSH_SIGNING_KEY;
-      const result = await rebaseDev({
+    case 'replay': {
+      const result = await replayDev({
         repositoryPath,
         snapshots: { dev: env.DEV_SHA, upstream: env.UPSTREAM_SHA, resolutions: env.RESOLUTIONS_SHA },
         base: env.BASE_SHA,
         normalized: env.NORMALIZED_SHA,
-        signingKey,
         identity: signingIdentity(),
       });
+      await setEnvironment({ PREPARED_SHA: result.head });
+      return;
+    }
+    case 'check':
+      await checkRebase({ repositoryPath, rebasedSha: env.PREPARED_SHA });
+      return;
+    case 'bundle':
+      await writePrepared({
+        repositoryPath,
+        directory: preparedDirectory,
+        prepared: {
+          base: env.BASE_SHA,
+          dev: env.DEV_SHA,
+          head: env.PREPARED_SHA,
+          normalized: env.NORMALIZED_SHA,
+          resolutions: env.RESOLUTIONS_SHA,
+          upstream: env.UPSTREAM_SHA,
+        },
+      });
+      return;
+    case 'sign': {
+      const signingKey = env.GITOXIDE_REBASE_SSH_SIGNING_KEY;
+      delete env.GITOXIDE_REBASE_SSH_SIGNING_KEY;
+      const prepared = await loadPrepared({ repositoryPath, directory: preparedDirectory, dev: env.GITHUB_SHA });
+      await setEnvironment({
+        DEV_SHA: prepared.dev,
+        UPSTREAM_SHA: prepared.upstream,
+        RESOLUTIONS_SHA: prepared.resolutions,
+        BASE_SHA: prepared.base,
+        NORMALIZED_SHA: prepared.normalized,
+        PREPARED_SHA: prepared.head,
+      });
+      const result = await signPrepared({ repositoryPath, prepared, signingKey, identity: signingIdentity() });
       console.log(`Signed ${result.signedCommits} replayed commit(s) on ${result.base}; ${result.fixupCommits} fixup and ${result.boundaryCommits} release-boundary commit(s)`);
       await setEnvironment({ REBASED_SHA: result.head });
       return;
     }
-    case 'check':
-      await checkRebase({ repositoryPath, rebasedSha: env.REBASED_SHA });
-      return;
     case 'candidate': {
       const branch = await pushCandidate({ repositoryPath, rebasedSha: env.REBASED_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT });
       await setEnvironment({ CANDIDATE_BRANCH: branch });
