@@ -210,7 +210,7 @@ exhaustive-only feature contracts. A failing deep run on a release PR blocks the
 
 `mise run ci:plan` gives the selection to the QA planner. The planner turns each job group into a
 lane and splits the groups named in `mise.toml`'s `ci_shards` into several lanes, never more than
-the group has independent cases; `ci_combine` runs small groups as one lane. Each lane runs `mise run ci:job` with its own Rust cache, which
+the group has independent cases; `ci_combine` runs small groups as one lane. Workflow lint (`mise run lint:workflows`) runs in the lane that holds housekeeping rather than in the plan job, because planning doesn't depend on it. Each lane runs `mise run ci:job` with its own Rust cache, which
 only `dev` pushes save. The plan job fetches two commits: a PR's merge ref has the base tip as
 its first parent, fast selection compares against it, and `--require-base` fails the plan
 instead of silently testing everything. The `Fork MSRV`
