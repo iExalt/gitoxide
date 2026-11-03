@@ -393,6 +393,27 @@ async function applyDeletionResolutions(repositoryPath, records, upstream) {
   return matching.length;
 }
 
+// The fork deleted upstream's workflows, and upstream keeps editing them. Such a modify/delete
+// conflict leaves the base (stage 1) and upstream's edit (stage 2, the side being rebased onto),
+// while the replayed fork commit deleted it (no stage 3). Resolve it by deletion when the path is
+// a workflow the captured dev doesn't have, as `assertForkOwnedPathsUnchanged` requires anyway.
+async function deleteInheritedWorkflows(repositoryPath, dev) {
+  const stages = new Map();
+  for (const entry of await listZ(repositoryPath, ['ls-files', '-u', '-z'])) {
+    const separator = entry.indexOf('\t');
+    const path = entry.slice(separator + 1);
+    stages.set(path, [...(stages.get(path) ?? []), entry.slice(0, separator).split(' ')[2]]);
+  }
+  let deleted = 0;
+  for (const [path, pathStages] of stages) {
+    if (!path.startsWith(WORKFLOWS_DIR) || pathStages.sort().join() !== '1,2') continue;
+    if (await gitChecked(repositoryPath, ['ls-tree', dev, '--', path])) continue;
+    await gitChecked(repositoryPath, ['rm', '--quiet', '--', path]);
+    deleted += 1;
+  }
+  return deleted;
+}
+
 async function listZ(repositoryPath, args) {
   return (await gitChecked(repositoryPath, args)).split('\0').filter(Boolean);
 }
@@ -422,7 +443,8 @@ async function continueKnownResolutions(repositoryPath, firstResult, maxContinua
     const inRebase = (await git(repositoryPath, ['rev-parse', '-q', '--verify', 'REBASE_HEAD'])).code === 0;
     const conflictStop = isConflictStop(result);
     const deletions = inRebase && conflictStop
-      ? await applyDeletionResolutions(repositoryPath, deletionRecords, upstream)
+      ? (await applyDeletionResolutions(repositoryPath, deletionRecords, upstream)) +
+        (await deleteInheritedWorkflows(repositoryPath, dev))
       : 0;
     const conflicts = await listZ(repositoryPath, ['ls-files', '-u', '-z']);
     const staged = await listZ(repositoryPath, ['diff', '--cached', '--name-only', '-z']);
