@@ -555,6 +555,22 @@ pub fn shard(tasks: Vec<Task>, index: usize, count: usize) -> Result<Vec<Task>> 
     Ok(out)
 }
 
+/// Parse `LANE=GROUP+GROUP…` requests that run several small job groups as one CI lane.
+pub fn combined_groups(requests: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut lanes = BTreeMap::new();
+    for request in requests {
+        let (lane, groups) = request
+            .split_once('=')
+            .ok_or_raise(|| message!("Lane request {request} must look like LANE=GROUP+GROUP"))?;
+        for group in groups.split('+') {
+            if lanes.insert(group.to_owned(), lane.to_owned()).is_some() {
+                bail!(message!("Lane request {request} repeats group {group}"));
+            }
+        }
+    }
+    Ok(lanes)
+}
+
 /// Parse `GROUP=COUNT` CI shard requests.
 pub fn shard_counts(requests: &[String]) -> Result<BTreeMap<String, usize>> {
     let mut counts = BTreeMap::new();
@@ -579,6 +595,7 @@ pub fn plan(
     all_platforms: bool,
     stages: &[String],
     shards: &BTreeMap<String, usize>,
+    combined: &BTreeMap<String, String>,
 ) -> Result<Value> {
     let mut described = Vec::new();
     let mut jobs = Vec::new();
@@ -590,10 +607,11 @@ pub fn plan(
     } {
         let tasks = select(tasks(metadata, selection, platform)?, stages)?;
         let mut grouped: BTreeMap<&str, Vec<Task>> = BTreeMap::new();
+        let lane = |group: &'static str| combined.get(group).map_or(group, String::as_str);
         for task in tasks {
             if !all_platforms || assigned(&task, platform, selection["mode"] == "exhaustive") {
                 described.push(json!({"platform": platform, "task": task.json(metadata)?}));
-                grouped.entry(task.group).or_default().push(task);
+                grouped.entry(lane(task.group)).or_default().push(task);
             } else if task.id == "self-test" && *platform == "linux-x86_64" {
                 described.push(json!({"platform": platform, "task": task.json(metadata)?}));
             }
@@ -786,6 +804,7 @@ mod tests {
             true,
             &["all".into()],
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )?;
         let job = plan["jobs"]
             .as_array()
@@ -880,6 +899,7 @@ mod tests {
             false,
             &["docs".into(), "doctests".into()],
             &shards,
+            &BTreeMap::new(),
         )?;
         let jobs = planned["jobs"].as_array().expect("plan jobs");
         assert_eq!(
@@ -907,7 +927,8 @@ mod tests {
                 "linux-x86_64",
                 false,
                 &["lint".into()],
-                &shard_counts(&["features=2".into()])?
+                &shard_counts(&["features=2".into()])?,
+                &BTreeMap::new(),
             )
             .is_err(),
             "sharding an unselected group is a configuration error"
@@ -920,7 +941,8 @@ mod tests {
                 "linux-x86_64",
                 false,
                 &["lint".into()],
-                &shard_counts(&["features=2".into(), "lint=50".into()])?
+                &shard_counts(&["features=2".into(), "lint=50".into()])?,
+                &BTreeMap::new(),
             )?["jobs"]
                 .as_array()
                 .expect("plan jobs")
@@ -935,6 +957,34 @@ mod tests {
         assert!(
             shard_counts(&["features=2".into(), "features=3".into()]).is_err(),
             "a group cannot be sharded twice"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn combined_groups_run_as_one_lane() -> gix_error::TestResult {
+        let selection = json!({"mode":"exhaustive", "packages":["gix-path","gitoxide","internal-tools"]});
+        let combined = combined_groups(&["basics=self-test+policy+housekeeping".into()])?;
+        let planned = plan(
+            &metadata(),
+            &selection,
+            "linux-x86_64",
+            false,
+            &["self-test".into(), "policy".into(), "housekeeping".into()],
+            &BTreeMap::new(),
+            &combined,
+        )?;
+        let jobs = planned["jobs"].as_array().expect("plan jobs");
+        assert_eq!(jobs.len(), 1, "the combined groups form one lane");
+        assert_eq!(jobs[0]["id"], "basics@linux-x86_64");
+        assert_eq!(
+            jobs[0]["tasks"],
+            json!(["self-test", "policy", "housekeeping"]),
+            "the lane keeps every task of the combined groups"
+        );
+        assert!(
+            combined_groups(&["a=lint".into(), "b=lint".into()]).is_err(),
+            "a group belongs to one lane"
         );
         Ok(())
     }
@@ -1012,6 +1062,7 @@ mod tests {
                 "linux-x86_64",
                 true,
                 &["all".into()],
+                &BTreeMap::new(),
                 &BTreeMap::new(),
             )?;
             let mut seen = BTreeSet::new();
