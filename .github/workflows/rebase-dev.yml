@@ -9,23 +9,21 @@ concurrency:
   group: rebase-dev
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  GITOXIDE_REBASE_SIGNING_NAME: ${{ vars.GITOXIDE_REBASE_SIGNING_NAME }}
+  GITOXIDE_REBASE_SIGNING_EMAIL: ${{ vars.GITOXIDE_REBASE_SIGNING_EMAIL }}
+  GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS: ${{ vars.GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS }}
+
 jobs:
-  rebase:
+  # Normalizing and checking run Cargo on upstream's tree, which can run upstream-controlled
+  # code (`.cargo/config.toml`), so this job has no secrets and only reads the repository.
+  prepare:
     if: github.repository == 'iExalt/gitoxide' && github.ref == 'refs/heads/dev' && github.actor == 'iExalt'
     runs-on: ubuntu-24.04
-    # Mostly waiting for the candidate's deep Fork CI run; the script gives up after 110 minutes.
-    timeout-minutes: 150
+    timeout-minutes: 30
     permissions:
       contents: read
-      # Dispatch Fork CI on the candidate branch and read its runs.
-      actions: write
-      # Read the candidate's `Fork CI required` check run.
-      checks: read
-    env:
-      CARGO_TERM_COLOR: always
-      GITOXIDE_REBASE_SIGNING_NAME: ${{ vars.GITOXIDE_REBASE_SIGNING_NAME }}
-      GITOXIDE_REBASE_SIGNING_EMAIL: ${{ vars.GITOXIDE_REBASE_SIGNING_EMAIL }}
-      GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS: ${{ vars.GITOXIDE_REBASE_KEEP_COMMITTER_EMAILS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,18 +35,72 @@ jobs:
       - name: Capture dev, the upstream mirror and the resolution branch
         run: |
           node .github/scripts/rebase-dev.mjs snapshot
-          # Later steps run the captured dev's script, whatever the rebase does to the checkout.
           cp .github/scripts/rebase-dev.mjs "$RUNNER_TEMP/rebase-dev.mjs"
-      # Builds `qa` from the captured dev and runs `cargo update` in the upstream tree, so it
-      # runs before the signing key or any App token enters the job.
       - name: Normalize the captured upstream
         run: mise exec -- node "$RUNNER_TEMP/rebase-dev.mjs" normalize
-      - name: Rebase onto the normalized upstream and sign every new commit
-        run: node "$RUNNER_TEMP/rebase-dev.mjs" rebase
+      - name: Replay dev onto the normalized upstream
+        run: node "$RUNNER_TEMP/rebase-dev.mjs" replay
+      - name: Check the replayed manifests and lockfile
+        run: mise exec -- node "$RUNNER_TEMP/rebase-dev.mjs" check
+      - name: Bundle the replayed commits
+        run: node "$RUNNER_TEMP/rebase-dev.mjs" bundle
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rebase-dev-prepared
+          path: ${{ runner.temp }}/rebase-dev-prepared/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Summarize bounded rebase diagnostics
+        if: failure()
+        run: |
+          diagnostics="$RUNNER_TEMP/rebase-dev-diagnostics.txt"
+          if [[ -f "$diagnostics" ]]; then
+            { echo '```'; head -c 16000 "$diagnostics"; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: rebase-dev-prepare-diagnostics
+          path: ${{ runner.temp }}/rebase-dev-diagnostics.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # A fresh runner that runs only Git and Node against the replayed tree, from the workflow's
+  # own commit, which the prepare job required to be the captured dev.
+  publish:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    # Mostly waiting for the candidate's deep Fork CI run; the script gives up after 110 minutes.
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      # Dispatch Fork CI on the candidate branch and read its runs.
+      actions: write
+      # Read the candidate's `Fork CI required` check run.
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.10.17
+          install_args: node
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rebase-dev-prepared
+          path: ${{ runner.temp }}/rebase-dev-prepared
+      # Later steps check out the replayed tree, whose tool configuration upstream could change,
+      # so they call this node binary directly instead of going through mise.
+      - name: Pin node and the script from the captured dev
+        run: |
+          echo "REBASE_NODE=$(mise which node)" >> "$GITHUB_ENV"
+          cp .github/scripts/rebase-dev.mjs "$RUNNER_TEMP/rebase-dev.mjs"
+      - name: Verify the replay and sign every new commit
+        run: '"$REBASE_NODE" "$RUNNER_TEMP/rebase-dev.mjs" sign'
         env:
           GITOXIDE_REBASE_SSH_SIGNING_KEY: ${{ secrets.GITOXIDE_REBASE_SSH_SIGNING_KEY }}
-      - name: Check the rebased manifests and lockfile
-        run: mise exec -- node "$RUNNER_TEMP/rebase-dev.mjs" check
       # GITHUB_TOKEN cannot push commits that change workflow files, and the candidate's do.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: candidate-token
@@ -67,11 +119,11 @@ jobs:
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $rebase_auth" \
-          node "$RUNNER_TEMP/rebase-dev.mjs" candidate
+          "$REBASE_NODE" "$RUNNER_TEMP/rebase-dev.mjs" candidate
       - name: Validate the candidate with a deep Fork CI run
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node "$RUNNER_TEMP/rebase-dev.mjs" validate
+        run: '"$REBASE_NODE" "$RUNNER_TEMP/rebase-dev.mjs" validate'
       # Minted only after validation; the candidate token may have expired while waiting.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: token
@@ -91,7 +143,7 @@ jobs:
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $rebase_auth" \
-          node "$RUNNER_TEMP/rebase-dev.mjs" publish
+          "$REBASE_NODE" "$RUNNER_TEMP/rebase-dev.mjs" publish
       - name: Summarize bounded rebase diagnostics
         if: failure()
         run: |
@@ -102,7 +154,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: rebase-dev-diagnostics
+          name: rebase-dev-publish-diagnostics
           path: ${{ runner.temp }}/rebase-dev-diagnostics.txt
           if-no-files-found: ignore
           retention-days: 30
