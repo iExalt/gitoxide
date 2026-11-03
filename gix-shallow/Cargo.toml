@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-shallow"
-version = "0.15.1"
+version.workspace = true
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
@@ -10,6 +10,7 @@ description = "Handle files specifying the shallow boundary"
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
 rust-version = "1.88"
+publish.workspace = true
 
 [lib]
 doctest = true
@@ -24,9 +25,9 @@ sha256 = ["gix-hash/sha256"]
 serde = ["dep:serde", "gix-hash/serde", "nonempty/serialize"]
 
 [dependencies]
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-lock = { version = "^27.0.0", path = "../gix-lock" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-hash = { path = "../gix-hash" }
+gix-lock = { path = "../gix-lock" }
+gix-error = { path = "../gix-error" }
 
 bstr = { version = "1.12.0", default-features = false }
 nonempty = "0.12.0"
