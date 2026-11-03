@@ -70,6 +70,10 @@ jobs:
   publish:
     needs: prepare
     runs-on: ubuntu-24.04
+    env:
+      # The replayed tree's `.gitattributes` could route checkouts through git-lfs, which would read
+      # its repository-chosen `.lfsconfig` while the signing key is on disk.
+      GIT_LFS_SKIP_SMUDGE: "1"
     # Mostly waiting for the candidate's deep Fork CI run; the script gives up after 110 minutes.
     timeout-minutes: 150
     permissions:
