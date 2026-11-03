@@ -269,6 +269,11 @@ serde_derive = ">=1.0.185"
 
 document-features = { version = "0.2.0", optional = true }
 
+# Line tables keep file:line in backtraces, and building test binaries uses about a fifth less
+# CPU with half the target size. Override with `CARGO_PROFILE_DEV_DEBUG=full` for debuggers.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package]
 insta.opt-level = 3
 gix-object = { opt-level = 3 }

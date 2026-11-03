@@ -191,7 +191,9 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     if exhaustive {
         out.push(Task::new(
             "feature-contracts",
-            "features",
+            // A single script of about 3.5 CI minutes, so it gets its own lane instead of
+            // making one `features` shard the slowest.
+            "feature-contracts",
             &["check"],
             vec![Command::new("bash", &["tests/it/qa/check-features.sh"])],
         ));
@@ -238,6 +240,26 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
         .map(|p| p["name"].as_str().expect("validated name"))
         .collect();
     if !tested.is_empty() {
+        // The developer loop (`mise run test`): the exhaustive native build's exact package set,
+        // so both share artifacts, with tests filtered to the selection and no source snapshot.
+        let mut command = Command::new(
+            "cargo",
+            &["nextest", "run", "--locked", "--workspace", "--no-fail-fast"],
+        )
+        .requiring(&["cargo-nextest"]);
+        for name in &isolated {
+            command.args.extend(["--exclude".into(), (*name).into()]);
+        }
+        if !exhaustive {
+            let filter = tested
+                .iter()
+                .map(|name| format!("package(={name})"))
+                .collect::<Vec<_>>();
+            command.args.extend(["-E".into(), filter.join(" | ")]);
+        }
+        out.push(Task::new("local-tests", "local-tests", LOCAL_ONLY, vec![command]));
+    }
+    if !tested.is_empty() {
         let mut command = Command::new("@qa", &["native-tests", if exhaustive { "exhaustive" } else { "fast" }])
             .requiring(&["cargo-nextest"]);
         if exhaustive {
@@ -262,7 +284,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
         out.push(Task::new(
             "isolated-tests",
             "tests",
-            &["tests", "default-tests"],
+            &["tests", "default-tests", "isolated"],
             isolated_tests,
         ));
     }
@@ -387,7 +409,10 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     Ok(out)
 }
 
-pub const STAGES: [&str; 19] = [
+/// Stages of tasks that `all` and CI plans never select.
+const LOCAL_ONLY: &[&str] = &["local-tests"];
+
+pub const STAGES: [&str; 21] = [
     "all",
     "self-test",
     "policy",
@@ -407,6 +432,8 @@ pub const STAGES: [&str; 19] = [
     "size",
     "pure-rust",
     "wasm",
+    "local-tests",
+    "isolated",
 ];
 
 pub fn select(tasks: Vec<Task>, stages: &[String]) -> Result<Vec<Task>> {
@@ -418,9 +445,10 @@ pub fn select(tasks: Vec<Task>, stages: &[String]) -> Result<Vec<Task>> {
     Ok(tasks
         .into_iter()
         .filter(|task| {
-            stages
-                .iter()
-                .any(|stage| stage == "all" || task.stages.contains(&stage.as_str()))
+            stages.iter().any(|stage| {
+                (stage == "all" && !task.stages.iter().any(|stage| LOCAL_ONLY.contains(stage)))
+                    || task.stages.contains(&stage.as_str())
+            })
         })
         .collect())
 }
@@ -429,6 +457,8 @@ fn assigned(task: &Task, platform: &str, exhaustive: bool) -> bool {
     match task.id {
         // The gate runs this task before it publishes a matrix.
         "self-test" => false,
+        // Only `mise run test` selects it.
+        "local-tests" => false,
         "native-tests" | "native-bins" | "isolated-tests" | "without-git" | "size32" => {
             exhaustive || matches!(platform, "linux-x86_64" | "macos-aarch64" | "windows-x86_64")
         }
@@ -475,15 +505,90 @@ fn job(metadata: &Value, platform: &str, group: &str, tasks: &[Task]) -> Result<
     Ok(row)
 }
 
-pub fn plan(metadata: &Value, selection: &Value, platform: &str, all_platforms: bool) -> Result<Value> {
+/// Tasks whose commands are independent cases, so CI shards may split them by command.
+/// Keep this in sync with the per-command dispatch in `execute()`.
+const SPLITTABLE: &[&str] = &[
+    "feature-builds",
+    "feature-tests",
+    "isolated-tests",
+    "default-doctests",
+    "feature-doctests",
+];
+
+/// The number of independently assignable units `shard()` deals out.
+fn units(tasks: &[Task]) -> usize {
+    tasks
+        .iter()
+        .map(|task| {
+            if SPLITTABLE.contains(&task.id) {
+                task.commands.len()
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+/// Keep shard `index` (1-based) of `count`: splittable tasks contribute each command as a unit,
+/// other tasks one unit each, and units are dealt round-robin so every unit runs exactly once.
+pub fn shard(tasks: Vec<Task>, index: usize, count: usize) -> Result<Vec<Task>> {
+    if count == 0 || index == 0 || index > count {
+        bail!(message!("Invalid QA shard {index}/{count}"));
+    }
+    let mut unit = 0;
+    let mut owned = || {
+        let mine = unit % count == index - 1;
+        unit += 1;
+        mine
+    };
+    let mut out = Vec::new();
+    for mut task in tasks {
+        if SPLITTABLE.contains(&task.id) {
+            task.commands.retain(|_| owned());
+            if !task.commands.is_empty() {
+                out.push(task);
+            }
+        } else if owned() {
+            out.push(task);
+        }
+    }
+    Ok(out)
+}
+
+/// Parse `GROUP=COUNT` CI shard requests.
+pub fn shard_counts(requests: &[String]) -> Result<BTreeMap<String, usize>> {
+    let mut counts = BTreeMap::new();
+    for request in requests {
+        let (group, count) = request
+            .split_once('=')
+            .ok_or_raise(|| message!("Shard request {request} must look like GROUP=COUNT"))?;
+        let Ok(count @ 1..) = count.parse::<usize>() else {
+            bail!(message!("Shard request {request} needs a positive count"));
+        };
+        if counts.insert(group.to_owned(), count).is_some() {
+            bail!(message!("Shard request {request} repeats group {group}"));
+        }
+    }
+    Ok(counts)
+}
+
+pub fn plan(
+    metadata: &Value,
+    selection: &Value,
+    platform: &str,
+    all_platforms: bool,
+    stages: &[String],
+    shards: &BTreeMap<String, usize>,
+) -> Result<Value> {
     let mut described = Vec::new();
     let mut jobs = Vec::new();
+    let mut seen = BTreeSet::new();
     for platform in if all_platforms {
         CI_PLATFORMS
     } else {
         std::slice::from_ref(&platform)
     } {
-        let tasks = tasks(metadata, selection, platform)?;
+        let tasks = select(tasks(metadata, selection, platform)?, stages)?;
         let mut grouped: BTreeMap<&str, Vec<Task>> = BTreeMap::new();
         for task in tasks {
             if !all_platforms || assigned(&task, platform, selection["mode"] == "exhaustive") {
@@ -494,7 +599,31 @@ pub fn plan(metadata: &Value, selection: &Value, platform: &str, all_platforms: 
             }
         }
         for (group, tasks) in grouped {
-            jobs.push(job(metadata, platform, group, &tasks)?);
+            seen.insert(group);
+            let row = job(metadata, platform, group, &tasks)?;
+            // Never plan more shards than the group has units, so small selections get no empty lanes.
+            let count = shards.get(group).copied().unwrap_or(1).min(units(&tasks));
+            if count <= 1 {
+                jobs.push(row);
+                continue;
+            }
+            for index in 1..=count {
+                let mut row = row.clone();
+                row["id"] = format!("{group}#{index}of{count}@{platform}").into();
+                // Omit the count: routine plans clamp it, and must still restore the cache that
+                // dev's deep run saved for the shard with the same index.
+                row["cache"] = format!("ci-{group}-{platform}-s{index}").into();
+                row["shard"] = json!([index, count]);
+                jobs.push(row);
+            }
+        }
+    }
+    // Fast selections may legitimately omit a sharded group; exhaustive ones catch typos.
+    if selection["mode"] == "exhaustive" {
+        for group in shards.keys() {
+            if !seen.contains(group.as_str()) {
+                bail!(message!("Cannot shard {group}: no selected job has that group"));
+            }
         }
     }
     Ok(json!({"selection": selection, "platform": platform, "tasks": described, "jobs": jobs}))
@@ -526,7 +655,16 @@ pub fn job_tasks(metadata: &Value, plan: &Value, job_id: &str) -> Result<Vec<Tas
     if selected.len() != ids.len() {
         bail!("Job {job_id} contains stale task IDs; regenerate the plan");
     }
-    Ok(selected)
+    match row["shard"].as_array().map(|pair| {
+        (
+            pair.first().and_then(Value::as_u64),
+            pair.get(1).and_then(Value::as_u64),
+        )
+    }) {
+        None => Ok(selected),
+        Some((Some(index), Some(count))) => shard(selected, index as usize, count as usize),
+        Some(_) => bail!("Job {job_id} has a malformed shard"),
+    }
 }
 
 pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool) -> Result<()> {
@@ -537,6 +675,7 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool) -> Re
             task.id,
             if task.blocking { "" } else { " (nonblocking)" }
         );
+        // Every task in `SPLITTABLE` must treat its commands as independent cases here.
         let result = if matches!(task.id, "feature-tests" | "isolated-tests") {
             super::native_tests::variants(root, task.commands, dry_run)
         } else if task.id == "feature-builds" {
@@ -645,6 +784,8 @@ mod tests {
             &json!({"mode":"exhaustive","packages":[]}),
             "linux-x86_64",
             true,
+            &["all".into()],
+            &BTreeMap::new(),
         )?;
         let job = plan["jobs"]
             .as_array()
@@ -689,11 +830,190 @@ mod tests {
         Ok(())
     }
 
+    fn unit_list(tasks: &[Task]) -> Vec<(&'static str, Vec<String>)> {
+        tasks
+            .iter()
+            .flat_map(|task| task.commands.iter().map(move |command| (task.id, command.args.clone())))
+            .collect()
+    }
+
+    #[test]
+    fn shards_run_every_case_exactly_once() -> gix_error::TestResult {
+        let case = |n: usize| Command::new("cargo", &["check", &n.to_string()]);
+        let tasks = vec![
+            Task::new("feature-builds", "features", &["check"], (0..7).map(case).collect()),
+            // Stands in for any unsplittable task in a sharded group.
+            Task::new("whole-script", "features", &["check"], vec![case(100), case(101)]),
+            Task::new("feature-tests", "features", &["tests"], (200..205).map(case).collect()),
+        ];
+        let all = unit_list(&tasks);
+        for count in 1..=5 {
+            let mut seen = Vec::new();
+            for index in 1..=count {
+                let part = shard(tasks.clone(), index, count)?;
+                assert!(
+                    part.iter()
+                        .filter(|task| task.id == "whole-script")
+                        .all(|task| task.commands.len() == 2),
+                    "an unsplittable task keeps all of its commands in one shard"
+                );
+                seen.extend(unit_list(&part));
+            }
+            seen.sort();
+            let mut expected = all.clone();
+            expected.sort();
+            assert_eq!(seen, expected, "{count} shards are disjoint and complete");
+        }
+        assert!(shard(tasks, 3, 2).is_err(), "out-of-range shards are rejected");
+        Ok(())
+    }
+
+    #[test]
+    fn plans_select_stages_and_expand_shards() -> gix_error::TestResult {
+        let selection = json!({"mode":"exhaustive", "packages":["gix-path","gitoxide","internal-tools"]});
+        // `docs` holds two units here: the default doctests and the docs build.
+        let shards = shard_counts(&["docs=5".into()])?;
+        let planned = plan(
+            &metadata(),
+            &selection,
+            "linux-x86_64",
+            false,
+            &["docs".into(), "doctests".into()],
+            &shards,
+        )?;
+        let jobs = planned["jobs"].as_array().expect("plan jobs");
+        assert_eq!(
+            jobs.iter()
+                .map(|job| (job["id"].clone(), job["cache"].clone(), job["shard"].clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    json!("docs#1of2@linux-x86_64"),
+                    json!("ci-docs-linux-x86_64-s1"),
+                    json!([1, 2])
+                ),
+                (
+                    json!("docs#2of2@linux-x86_64"),
+                    json!("ci-docs-linux-x86_64-s2"),
+                    json!([2, 2])
+                ),
+            ],
+            "only selected stages are planned, once per shard with a cache keyed by index alone, never more shards than units"
+        );
+        assert!(
+            plan(
+                &metadata(),
+                &selection,
+                "linux-x86_64",
+                false,
+                &["lint".into()],
+                &shard_counts(&["features=2".into()])?
+            )
+            .is_err(),
+            "sharding an unselected group is a configuration error"
+        );
+        let fast = json!({"mode":"fast", "packages":["gix-path"]});
+        assert!(
+            plan(
+                &metadata(),
+                &fast,
+                "linux-x86_64",
+                false,
+                &["lint".into()],
+                &shard_counts(&["features=2".into(), "lint=50".into()])?
+            )?["jobs"]
+                .as_array()
+                .expect("plan jobs")
+                .iter()
+                .all(|job| job["shard"].is_null()),
+            "fast plans skip absent groups and never exceed a group's units"
+        );
+        assert!(
+            shard_counts(&["features=0".into()]).is_err(),
+            "zero shards are rejected"
+        );
+        assert!(
+            shard_counts(&["features=2".into(), "features=3".into()]).is_err(),
+            "a group cannot be sharded twice"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_tests_share_the_exhaustive_native_build() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"].as_array_mut().expect("test packages").push(json!({
+            "name":"gix-error", "targets":[{"kind":["lib"],"test":true,"doc":false,"doctest":false}],
+            "metadata":{"qa":{"isolated":true,"tests":[{"args":[]}]}}
+        }));
+        let command = |mode: &str, id: &str| -> gix_error::Result<Command> {
+            let selection = json!({"mode":mode, "packages":["gix-path","gix-error"]});
+            let task = tasks(&metadata, &selection, "linux-x86_64")?
+                .into_iter()
+                .find(|task| task.id == id)
+                .expect("task is planned");
+            Ok(task.commands[0].clone())
+        };
+        let package_flags = |args: &[String]| {
+            args.iter()
+                .enumerate()
+                .filter(|(index, arg)| {
+                    matches!(arg.as_str(), "--workspace" | "--exclude")
+                        || (*index > 0 && args[index - 1] == "--exclude")
+                })
+                .map(|(_, arg)| arg.clone())
+                .collect::<Vec<_>>()
+        };
+        let native = command("exhaustive", "native-tests")?;
+        for mode in ["fast", "exhaustive"] {
+            let local = command(mode, "local-tests")?;
+            assert_eq!(
+                package_flags(&local.args),
+                package_flags(&native.args),
+                "the loop builds exactly the exhaustive native package set, so they share artifacts"
+            );
+            let filter = local.args.iter().position(|arg| arg == "-E");
+            if mode == "fast" {
+                assert_eq!(
+                    filter.map(|index| local.args[index + 1].as_str()),
+                    Some("package(=gix-path)"),
+                    "fast mode filters to the tested packages, never an isolated one"
+                );
+            } else {
+                assert_eq!(filter, None, "exhaustive mode runs every non-isolated test");
+            }
+        }
+        let selection = json!({"mode":"fast", "packages":["gix-path","gix-error"]});
+        let all = tasks(&metadata, &selection, "linux-x86_64")?;
+        assert!(
+            !select(all.clone(), &["all".into()])?
+                .iter()
+                .any(|task| task.id == "local-tests"),
+            "`all` never selects the developer loop"
+        );
+        assert_eq!(
+            select(all, &["isolated".into()])?
+                .iter()
+                .map(|task| task.id)
+                .collect::<Vec<_>>(),
+            vec!["isolated-tests"],
+            "the isolated stage selects only isolated package tests"
+        );
+        Ok(())
+    }
+
     #[test]
     fn ci_jobs_partition_the_same_local_tasks() -> gix_error::TestResult {
         for mode in ["fast", "exhaustive"] {
             let selection = json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools"]});
-            let plan = plan(&metadata(), &selection, "linux-x86_64", true)?;
+            let plan = plan(
+                &metadata(),
+                &selection,
+                "linux-x86_64",
+                true,
+                &["all".into()],
+                &BTreeMap::new(),
+            )?;
             let mut seen = BTreeSet::new();
             for job in plan["jobs"].as_array().expect("plan jobs") {
                 let platform = job["platform"].as_str().expect("job platform");
