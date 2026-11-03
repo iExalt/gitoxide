@@ -16,9 +16,22 @@ and review. Preserve upstream history, copyright notices, and licenses.
 Acyclic uses `main`; this fork follows Paseo's `dev` and `upstream/main` convention.
 The latter is an upstream mirror, not a development target. The original `main`
 branch remains at the fork's starting revision for reference; it is not maintained.
-For an update, fetch origin, create an update branch from fork `dev`, merge the
-chosen `origin/upstream/main` revision, resolve conflicts, run thorough QA, and
-review a PR into fork `dev`. Preserve the merge ancestry for
+Upstream versions every crate separately, while the fork keeps them in lockstep (see
+[Fork releases](#fork-releases)), so updates merge a normalized copy of upstream rather than
+`upstream/main` itself. `mise run upstream:normalize [revision]`, run from a `dev` checkout,
+advances branch `upstream/normalized` with a commit whose parents are the previous normalized
+commit and the chosen revision (default `origin/upstream/main`), and whose tree is that
+revision's with only manifests and `Cargo.lock` normalized. Each normalized commit carries a
+`Normalized-upstream:` trailer; the script finds the last one merged into `dev` and refuses to
+continue from a branch that has lost it. It runs `cargo update` inside the upstream revision, so
+upstream's `.cargo/config.toml` applies, unlike the sync workflow, which never executes the
+mirrored tip. Push that branch, create an update
+branch from fork `dev`, merge `upstream/normalized`, resolve conflicts (regenerate
+`Cargo.lock` rather than hand-merging it), run thorough QA, and review a PR into fork `dev`.
+The merge base is then the previous normalized commit, so only real changes can conflict:
+rehearsing the upstream changes from `gix-v0.89.0` to the fork point, merging raw upstream
+conflicted in 74 manifests, while the normalized merge was clean. Before the first update past the fork point, check with `mise run release:preview` that the
+merged upstream commits don't enter the fork's release notes or version bump. Preserve the merge ancestry for
 upstream updates (use a merge commit rather than squashing that PR). Do not rebase
 published fork history. There are no automated merges or rebases into `dev`.
 
@@ -97,12 +110,22 @@ was unavailable from its GitHub release endpoint.
 
 ## Fork releases
 
+Every crate shares one fork version, restarted from upstream's numbering because the fork
+is permanent. `[workspace.package] version` in the root `Cargo.toml` holds it; every member
+inherits it with `version.workspace = true`, and dependencies between workspace crates are
+path-only. `qa exec manifests` (run by the housekeeping stage) fails when a manifest breaks
+that rule or when the workspace version differs from `.release-please-manifest.json`; add
+`--fix` to repair the manifests. All crates are `publish = false`: their names belong to
+upstream on crates.io.
+
 Release-please uses its `simple` strategy with `fork-version.txt` and
-`.release-please-manifest.json`. The initial unreleased version is `0.0.0`;
-the first feature release is `0.1.0`. Tags use `gitoxide-fork-v0.1.0`, independently
-of every Rust crate's version. Generated notes go to `CHANGELOG.fork.md`.
-Upstream `CHANGELOG.md` files and all Cargo versions remain untouched. There are
-no workspace version replacements, crates.io publication, or binary packages.
+`.release-please-manifest.json`, and its TOML updaters bump the workspace version in
+`Cargo.toml` and every workspace package in `Cargo.lock`. The initial unreleased version is
+`0.0.0`; the first feature release is `0.1.0`, whose release PR is also the first proof that
+those updaters work. Tags use `gitoxide-fork-v0.1.0`. Generated notes go to
+`CHANGELOG.fork.md`; upstream `CHANGELOG.md` files remain untouched. There is no crates.io
+publication and there are no binary packages. The user agent (`git/oxide-<version>`) and
+`gix --version` report the fork version.
 
 The bootstrap boundary is upstream commit
 `9dd78c800d554c18fc99816bf922c93d71402881`, the fork's starting point. Earlier
@@ -155,9 +178,10 @@ gix = { git = "https://github.com/iExalt/gitoxide", rev = "<full-commit-sha>" }
 
 Keep the features required by acyclic; this example does not select its backend
 features. Cargo resolves the workspace's path dependencies from the same Git
-checkout, retaining their upstream versions. If another dependency pulls `gix`
-or plumbing crates from crates.io, add root-level patches for the affected crates
-to avoid mixing registry and Git types:
+checkout, all at the fork version. If another dependency pulls `gix`
+or plumbing crates from crates.io, root-level patches can make it share fork types only
+where its version requirement matches the fork version, which upstream's numbering
+(`gix 0.90`, for example) does not:
 
 ```toml
 [patch.crates-io]
@@ -167,7 +191,7 @@ gix-hash = { git = "https://github.com/iExalt/gitoxide", rev = "<same-full-commi
 
 `gix-hash` is illustrative, not a complete patch list. Inspect `cargo tree -d` and
 `cargo metadata` in the consumer, patch every registry crate that must share fork
-types, and ensure the preserved versions satisfy dependent semver requirements.
+types, and check that the fork version satisfies dependent semver requirements.
 Use one revision consistently, update and commit the consumer lockfile, and run
 its tests. A patch cannot satisfy an incompatible version requirement; adapt that
 dependency deliberately. No acyclic dependency changes are part of fork setup.
