@@ -29,6 +29,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Fast selection diffs against the PR base, which must be in history.
+          fetch-depth: 0
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           version: 2026.10.17
@@ -38,8 +40,17 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       - name: Lint workflows
         run: mise run lint:workflows
-      - name: Distribute the host QA set across lanes
+      - name: Choose routine or deep QA
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: node .github/scripts/qa-mode.cjs >> "$GITHUB_OUTPUT"
+      - name: Distribute the selected QA work across lanes
         id: plan
+        env:
+          QA_MODE: ${{ steps.mode.outputs.mode }}
+          QA_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
         run: mise run ci:plan
 
   run:
@@ -73,10 +84,10 @@ jobs:
       - name: Run the lane
         run: mise run ci:job
 
-  qa:
-    # The aggregate keeps the established check name for the lanes above.
-    name: Fork QA
-    needs: [plan, run]
+  required:
+    # The only check the dev ruleset requires.
+    name: Fork CI required
+    needs: [plan, run, msrv]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -85,7 +96,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts
-      - name: Require the planner and every lane to succeed
+      - name: Require the planner, every lane and MSRV to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: node .github/scripts/require-success.cjs

@@ -515,6 +515,20 @@ const SPLITTABLE: &[&str] = &[
     "feature-doctests",
 ];
 
+/// The number of independently assignable units `shard()` deals out.
+fn units(tasks: &[Task]) -> usize {
+    tasks
+        .iter()
+        .map(|task| {
+            if SPLITTABLE.contains(&task.id) {
+                task.commands.len()
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
 /// Keep shard `index` (1-based) of `count`: splittable tasks contribute each command as a unit,
 /// other tasks one unit each, and units are dealt round-robin so every unit runs exactly once.
 pub fn shard(tasks: Vec<Task>, index: usize, count: usize) -> Result<Vec<Task>> {
@@ -587,8 +601,9 @@ pub fn plan(
         for (group, tasks) in grouped {
             seen.insert(group);
             let row = job(metadata, platform, group, &tasks)?;
-            let count = shards.get(group).copied().unwrap_or(1);
-            if count == 1 {
+            // Never plan more shards than the group has units, so small selections get no empty lanes.
+            let count = shards.get(group).copied().unwrap_or(1).min(units(&tasks));
+            if count <= 1 {
                 jobs.push(row);
                 continue;
             }
@@ -601,9 +616,12 @@ pub fn plan(
             }
         }
     }
-    for group in shards.keys() {
-        if !seen.contains(group.as_str()) {
-            bail!(message!("Cannot shard {group}: no selected job has that group"));
+    // Fast selections may legitimately omit a sharded group; exhaustive ones catch typos.
+    if selection["mode"] == "exhaustive" {
+        for group in shards.keys() {
+            if !seen.contains(group.as_str()) {
+                bail!(message!("Cannot shard {group}: no selected job has that group"));
+            }
         }
     }
     Ok(json!({"selection": selection, "platform": platform, "tasks": described, "jobs": jobs}))
@@ -810,7 +828,7 @@ mod tests {
         Ok(())
     }
 
-    fn units(tasks: &[Task]) -> Vec<(&'static str, Vec<String>)> {
+    fn unit_list(tasks: &[Task]) -> Vec<(&'static str, Vec<String>)> {
         tasks
             .iter()
             .flat_map(|task| task.commands.iter().map(move |command| (task.id, command.args.clone())))
@@ -826,7 +844,7 @@ mod tests {
             Task::new("whole-script", "features", &["check"], vec![case(100), case(101)]),
             Task::new("feature-tests", "features", &["tests"], (200..205).map(case).collect()),
         ];
-        let all = units(&tasks);
+        let all = unit_list(&tasks);
         for count in 1..=5 {
             let mut seen = Vec::new();
             for index in 1..=count {
@@ -837,7 +855,7 @@ mod tests {
                         .all(|task| task.commands.len() == 2),
                     "an unsplittable task keeps all of its commands in one shard"
                 );
-                seen.extend(units(&part));
+                seen.extend(unit_list(&part));
             }
             seen.sort();
             let mut expected = all.clone();
@@ -851,13 +869,14 @@ mod tests {
     #[test]
     fn plans_select_stages_and_expand_shards() -> gix_error::TestResult {
         let selection = json!({"mode":"exhaustive", "packages":["gix-path","gitoxide","internal-tools"]});
-        let shards = shard_counts(&["lint=2".into()])?;
+        // `docs` holds two units here: the default doctests and the docs build.
+        let shards = shard_counts(&["docs=5".into()])?;
         let planned = plan(
             &metadata(),
             &selection,
             "linux-x86_64",
             false,
-            &["lint".into()],
+            &["docs".into(), "doctests".into()],
             &shards,
         )?;
         let jobs = planned["jobs"].as_array().expect("plan jobs");
@@ -867,17 +886,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (
-                    json!("lint#1of2@linux-x86_64"),
-                    json!("ci-lint-linux-x86_64-1of2"),
+                    json!("docs#1of2@linux-x86_64"),
+                    json!("ci-docs-linux-x86_64-1of2"),
                     json!([1, 2])
                 ),
                 (
-                    json!("lint#2of2@linux-x86_64"),
-                    json!("ci-lint-linux-x86_64-2of2"),
+                    json!("docs#2of2@linux-x86_64"),
+                    json!("ci-docs-linux-x86_64-2of2"),
                     json!([2, 2])
                 ),
             ],
-            "only the selected stage is planned, once per shard with its own cache"
+            "only selected stages are planned, once per shard with its own cache, never more shards than units"
         );
         assert!(
             plan(
@@ -890,6 +909,22 @@ mod tests {
             )
             .is_err(),
             "sharding an unselected group is a configuration error"
+        );
+        let fast = json!({"mode":"fast", "packages":["gix-path"]});
+        assert!(
+            plan(
+                &metadata(),
+                &fast,
+                "linux-x86_64",
+                false,
+                &["lint".into()],
+                &shard_counts(&["features=2".into(), "lint=50".into()])?
+            )?["jobs"]
+                .as_array()
+                .expect("plan jobs")
+                .iter()
+                .all(|job| job["shard"].is_null()),
+            "fast plans skip absent groups and never exceed a group's units"
         );
         assert!(
             shard_counts(&["features=0".into()]).is_err(),

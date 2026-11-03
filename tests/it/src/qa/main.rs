@@ -47,6 +47,9 @@ enum Action {
         /// Split a job group into this many CI jobs, for example `features=6`.
         #[arg(long, value_delimiter = ',')]
         shards: Vec<String>,
+        /// Fail instead of falling back to every package when the base cannot be compared.
+        #[arg(long)]
+        require_base: bool,
         #[arg(long)]
         github_output: Option<PathBuf>,
     },
@@ -116,9 +119,21 @@ fn main() -> Result<()> {
             all_platforms,
             stage,
             shards,
+            require_base,
             github_output,
         } => {
             let selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
+            let missing_base = selected["reasons"].as_array().is_some_and(|reasons| {
+                reasons
+                    .iter()
+                    .any(|r| r.as_str().is_some_and(|r| r.starts_with(plan::MISSING_BASE)))
+            });
+            if require_base && missing_base {
+                bail!(message!(
+                    "Cannot compare with {}; CI must fetch the base so fast mode does not test everything",
+                    selection.base
+                ));
+            }
             let platform = platform.unwrap_or_else(catalog::host);
             let shards = catalog::shard_counts(&shards)?;
             let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms, &stage, &shards)?;

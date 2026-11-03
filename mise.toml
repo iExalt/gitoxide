@@ -38,8 +38,8 @@ description = "Build gix at its declared MSRV in both supported configurations"
 run = ["mise install rust@1.88.0", "just check-rust-version 1.88.0"]
 
 [tasks."ci:plan"]
-description = "Write the CI lane matrix for the full host QA set to GITHUB_OUTPUT"
-run = 'cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- plan --platform linux-x86_64 --mode exhaustive --stage {{vars.host_stages}} --shards {{vars.ci_shards}} --github-output "$GITHUB_OUTPUT"'
+description = "Write the CI lane matrix to GITHUB_OUTPUT; QA_MODE (fast|exhaustive) and QA_BASE choose the selection"
+run = 'cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- plan --platform linux-x86_64 --mode "${QA_MODE:-exhaustive}" --base "${QA_BASE:-origin/dev}" --require-base --stage {{vars.host_stages}} --shards {{vars.ci_shards}} --github-output "$GITHUB_OUTPUT"'
 
 [tasks."ci:job"]
 description = "Run the CI lane named by QA_JOB from the plan in QA_PLAN"
