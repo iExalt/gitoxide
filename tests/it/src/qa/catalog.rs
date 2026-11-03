@@ -610,7 +610,9 @@ pub fn plan(
             for index in 1..=count {
                 let mut row = row.clone();
                 row["id"] = format!("{group}#{index}of{count}@{platform}").into();
-                row["cache"] = format!("ci-{group}-{platform}-{index}of{count}").into();
+                // Omit the count: routine plans clamp it, and must still restore the cache that
+                // dev's deep run saved for the shard with the same index.
+                row["cache"] = format!("ci-{group}-{platform}-s{index}").into();
                 row["shard"] = json!([index, count]);
                 jobs.push(row);
             }
@@ -887,16 +889,16 @@ mod tests {
             vec![
                 (
                     json!("docs#1of2@linux-x86_64"),
-                    json!("ci-docs-linux-x86_64-1of2"),
+                    json!("ci-docs-linux-x86_64-s1"),
                     json!([1, 2])
                 ),
                 (
                     json!("docs#2of2@linux-x86_64"),
-                    json!("ci-docs-linux-x86_64-2of2"),
+                    json!("ci-docs-linux-x86_64-s2"),
                     json!([2, 2])
                 ),
             ],
-            "only selected stages are planned, once per shard with its own cache, never more shards than units"
+            "only selected stages are planned, once per shard with a cache keyed by index alone, never more shards than units"
         );
         assert!(
             plan(
