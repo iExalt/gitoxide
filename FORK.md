@@ -72,9 +72,10 @@ exhaustive-only feature contracts. A failing deep run on a release PR blocks the
 
 `mise run ci:plan` gives the selection to the QA planner. The planner turns each job group into a
 lane and splits the groups named in `mise.toml`'s `ci_shards` into several lanes, never more than
-the group has independent cases. Each lane runs `mise run ci:job` with its own Rust cache, which
-only `dev` pushes save. The plan job fetches full history: fast selection compares against the PR
-base, and `--require-base` fails the plan instead of silently testing everything. The `Fork MSRV`
+the group has independent cases; `ci_combine` runs small groups as one lane. Each lane runs `mise run ci:job` with its own Rust cache, which
+only `dev` pushes save. The plan job fetches two commits: a PR's merge ref has the base tip as
+its first parent, fast selection compares against it, and `--require-base` fails the plan
+instead of silently testing everything. The `Fork MSRV`
 job runs in both modes. `Fork CI required` passes only when the planner, every lane and MSRV
 succeeded; a skipped or cancelled job fails it. It is the only check the `dev` ruleset ("dev requires Fork CI") requires; the ruleset has no bypass actors.
 Workflow actions are pinned to commit IDs; checkout credentials are

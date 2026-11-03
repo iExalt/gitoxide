@@ -47,6 +47,9 @@ enum Action {
         /// Split a job group into this many CI jobs, for example `features=6`.
         #[arg(long, value_delimiter = ',')]
         shards: Vec<String>,
+        /// Run several small job groups as one CI lane, for example `basics=policy+lint`.
+        #[arg(long)]
+        combine: Vec<String>,
         /// Fail instead of falling back to every package when the base cannot be compared.
         #[arg(long)]
         require_base: bool,
@@ -119,6 +122,7 @@ fn main() -> Result<()> {
             all_platforms,
             stage,
             shards,
+            combine,
             require_base,
             github_output,
         } => {
@@ -136,7 +140,16 @@ fn main() -> Result<()> {
             }
             let platform = platform.unwrap_or_else(catalog::host);
             let shards = catalog::shard_counts(&shards)?;
-            let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms, &stage, &shards)?;
+            let combined = catalog::combined_groups(&combine)?;
+            let mut plan = catalog::plan(
+                &metadata,
+                &selected,
+                &platform,
+                all_platforms,
+                &stage,
+                &shards,
+                &combined,
+            )?;
             let consumers = if all_platforms {
                 downstream::matrix(&metadata, &selected)?
             } else {
