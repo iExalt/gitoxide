@@ -21,6 +21,10 @@ host_stages = "self-test,policy,housekeeping,check,tests,doctests,docs,api,journ
 # CI job groups split into parallel lanes; see FORK_STATUS.md for the timings behind them.
 ci_shards = "features=6"
 
+[tasks.test]
+description = "Developer loop: nextest for changed crates and their dependents, plus affected isolated packages"
+run = "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage local-tests,isolated"
+
 [tasks.check]
 description = "Affected-package QA; global inputs conservatively select the workspace"
 run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage {{vars.host_stages}}"]

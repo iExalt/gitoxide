@@ -35,12 +35,19 @@ Run `mise trust` and `mise install` after reviewing `mise.toml`.
 
 | Command | Purpose |
 | --- | --- |
+| `mise run test` | Developer loop: nextest for crates changed since `origin/dev` and their dependents, plus affected isolated packages |
 | `mise run check` | Affected-package QA, including workflow lint; global inputs select the workspace |
 | `mise run check:thorough` | Exhaustive host checks, feature tests, docs, API tests and CLI journeys |
 | `mise run check:msrv` | Install Rust 1.88.0 through mise and build both declared gix MSRV configurations |
 | `mise run build` | Default CLI build, without publishing |
 | `mise run lint:workflows` | Actionlint, embedded-shell ShellCheck and workflow script tests |
 | `mise run release:preview` | Read-only release-please PR preview with `GH_TOKEN` |
+
+`mise run test` is for quick iteration, not a substitute for `check`. It shares build
+artifacts with the exhaustive native tests by unifying features across the whole workspace,
+so it can hide a crate's missing feature declaration. It also skips doctests, feature and
+hash variants, the archived-fixture pass and the guard against tests modifying source files.
+`check` and CI keep all of those.
 
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
 comes from Cargo QA metadata: small, lean, lean-async, max, max-pure and declared

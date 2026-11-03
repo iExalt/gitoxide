@@ -240,6 +240,26 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
         .map(|p| p["name"].as_str().expect("validated name"))
         .collect();
     if !tested.is_empty() {
+        // The developer loop (`mise run test`): the exhaustive native build's exact package set,
+        // so both share artifacts, with tests filtered to the selection and no source snapshot.
+        let mut command = Command::new(
+            "cargo",
+            &["nextest", "run", "--locked", "--workspace", "--no-fail-fast"],
+        )
+        .requiring(&["cargo-nextest"]);
+        for name in &isolated {
+            command.args.extend(["--exclude".into(), (*name).into()]);
+        }
+        if !exhaustive {
+            let filter = tested
+                .iter()
+                .map(|name| format!("package(={name})"))
+                .collect::<Vec<_>>();
+            command.args.extend(["-E".into(), filter.join(" | ")]);
+        }
+        out.push(Task::new("local-tests", "local-tests", LOCAL_ONLY, vec![command]));
+    }
+    if !tested.is_empty() {
         let mut command = Command::new("@qa", &["native-tests", if exhaustive { "exhaustive" } else { "fast" }])
             .requiring(&["cargo-nextest"]);
         if exhaustive {
@@ -264,7 +284,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
         out.push(Task::new(
             "isolated-tests",
             "tests",
-            &["tests", "default-tests"],
+            &["tests", "default-tests", "isolated"],
             isolated_tests,
         ));
     }
@@ -389,7 +409,10 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     Ok(out)
 }
 
-pub const STAGES: [&str; 19] = [
+/// Stages of tasks that `all` and CI plans never select.
+const LOCAL_ONLY: &[&str] = &["local-tests"];
+
+pub const STAGES: [&str; 21] = [
     "all",
     "self-test",
     "policy",
@@ -409,6 +432,8 @@ pub const STAGES: [&str; 19] = [
     "size",
     "pure-rust",
     "wasm",
+    "local-tests",
+    "isolated",
 ];
 
 pub fn select(tasks: Vec<Task>, stages: &[String]) -> Result<Vec<Task>> {
@@ -422,7 +447,7 @@ pub fn select(tasks: Vec<Task>, stages: &[String]) -> Result<Vec<Task>> {
         .filter(|task| {
             stages
                 .iter()
-                .any(|stage| stage == "all" || task.stages.contains(&stage.as_str()))
+                .any(|stage| (stage == "all" && task.stages != LOCAL_ONLY) || task.stages.contains(&stage.as_str()))
         })
         .collect())
 }
@@ -431,6 +456,8 @@ fn assigned(task: &Task, platform: &str, exhaustive: bool) -> bool {
     match task.id {
         // The gate runs this task before it publishes a matrix.
         "self-test" => false,
+        // Only `mise run test` selects it.
+        "local-tests" => false,
         "native-tests" | "native-bins" | "isolated-tests" | "without-git" | "size32" => {
             exhaustive || matches!(platform, "linux-x86_64" | "macos-aarch64" | "windows-x86_64")
         }
