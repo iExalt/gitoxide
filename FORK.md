@@ -10,30 +10,26 @@ iteration-speed and release work in progress, with its measurements.
 
 `origin` is <https://github.com/iExalt/gitoxide>; `upstream` is
 <https://github.com/GitoxideLabs/gitoxide>. `dev` is the fork's default and integration branch.
-Open development PRs against `iExalt/gitoxide:dev`, and squash-merge after checks
-and review. Preserve upstream history, copyright notices, and licenses.
+Open development PRs against `iExalt/gitoxide:dev`, and rebase-merge them after checks
+and review; the repository allows no other merge method, so `dev` stays linear. Preserve upstream history, copyright notices, and licenses.
 
 Acyclic uses `main`; this fork follows Paseo's `dev` and `upstream/main` convention.
 The latter is an upstream mirror, not a development target. The original `main`
 branch remains at the fork's starting revision for reference; it is not maintained.
-Upstream versions every crate separately, while the fork keeps them in lockstep (see
-[Fork releases](#fork-releases)), so updates merge a normalized copy of upstream rather than
-`upstream/main` itself. `mise run upstream:normalize [revision]`, run from a `dev` checkout,
-advances branch `upstream/normalized` with a commit whose parents are the previous normalized
-commit and the chosen revision (default `origin/upstream/main`), and whose tree is that
-revision's with only manifests and `Cargo.lock` normalized. Each normalized commit carries a
-`Normalized-upstream:` trailer; the script finds the last one merged into `dev` and refuses to
-continue from a branch that has lost it. It runs `cargo update` inside the upstream revision, so
-upstream's `.cargo/config.toml` applies, unlike the sync workflow, which never executes the
-mirrored tip. Push that branch, create an update
-branch from fork `dev`, merge `upstream/normalized`, resolve conflicts (regenerate
-`Cargo.lock` rather than hand-merging it), run thorough QA, and review a PR into fork `dev`.
-The merge base is then the previous normalized commit, so only real changes can conflict:
-rehearsing the upstream changes from `gix-v0.89.0` to the fork point, merging raw upstream
-conflicted in 74 manifests, while the normalized merge was clean. Before the first update past the fork point, check with `mise run release:preview` that the
-merged upstream commits don't enter the fork's release notes or version bump. Preserve the merge ancestry for
-upstream updates (use a merge commit rather than squashing that PR). Do not rebase
-published fork history. There are no automated merges or rebases into `dev`.
+Upstream updates rebase `dev`, as Paseo's fork does, rather than merging. `dev` is a
+normalized upstream commit with the fork's commits on top. Upstream versions every crate
+separately, while the fork keeps them in lockstep (see [Fork releases](#fork-releases)), so the
+base is not raw upstream but a commit whose only parent is the upstream revision and whose tree
+changes only manifests and `Cargo.lock`, with a `Normalized-upstream:` trailer.
+`mise run upstream:normalize [revision]` prints both `dev`'s current base and a newly normalized
+commit for the revision (default `origin/upstream/main`); rebase with
+`git rebase --onto <normalized> <base> dev`. Normalizing first keeps version bumps out of the
+rebase: replaying the fork's renumbering onto raw upstream would conflict in most manifests on
+every update. The normalizer runs `cargo update` inside the upstream revision, so upstream's
+`.cargo/config.toml` applies, unlike the sync workflow, which never executes the mirrored tip.
+Validate the rebased tip on a candidate branch with a deep Fork CI run, push a backup ref, and
+update `dev` with `--force-with-lease`. Rebasing replaces published history, so announce it to
+anyone with branches from `dev`.
 
 `upstream-sync.yml` runs daily at 07:23 UTC (02:23 Toronto standard time;
 03:23 daylight time) and on manual dispatch from `dev`. It updates only
@@ -127,9 +123,12 @@ those updaters work. Tags use `gitoxide-fork-v0.1.0`. Generated notes go to
 publication and there are no binary packages. The user agent (`git/oxide-<version>`) and
 `gix --version` report the fork version.
 
-The bootstrap boundary is upstream commit
-`9dd78c800d554c18fc99816bf922c93d71402881`, the fork's starting point. Earlier
-upstream commits are excluded from the first fork release. Conventional commit
+The bootstrap boundary is `5c38bd661867c542298d8cbe9b9ffae67da6ecac`, the normalized
+fork point `dev` sits on, so upstream commits are excluded from the first fork release.
+Because `dev` is linear with upstream below the fork's commits, release-please never walks into
+upstream history. A rebase that moves `dev` onto a newer base before the first release must move
+`bootstrap-sha` to the new base, and one that rewrites a released commit must set
+`last-release-sha` to its rewritten copy. Conventional commit
 titles describe fork changes; breaking changes require explicit review even while
 the fork version is below 1.0.
 

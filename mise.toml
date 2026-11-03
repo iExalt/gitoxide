@@ -60,6 +60,6 @@ description = "Read-only release PR preview; requires GH_TOKEN (never creates ta
 run = 'bash etc/scripts/fork-release-preview.sh'
 
 [tasks."upstream:normalize"]
-description = "Commit an upstream revision normalized to the fork's lockstep version, ready to merge into dev"
+description = "Print dev's normalized upstream base and a normalized commit for an upstream revision, to rebase dev onto"
 usage = 'arg "[revision]" default="origin/upstream/main"'
 run = 'bash etc/scripts/fork-normalize-upstream.sh {{arg(name="revision")}}'
