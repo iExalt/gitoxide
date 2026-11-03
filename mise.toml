@@ -20,6 +20,8 @@ GIX_TEST_IGNORE_ARCHIVES = "1"
 host_stages = "self-test,policy,housekeeping,check,tests,doctests,docs,api,journey"
 # CI job groups split into parallel lanes; see FORK_STATUS.md for the timings behind them.
 ci_shards = "features=6"
+# Small job groups that share one CI lane, so each run needs fewer concurrent jobs.
+ci_combine = "basics=self-test+policy+housekeeping+lint"
 
 [tasks.test]
 description = "Developer loop: nextest for changed crates and their dependents, plus affected isolated packages"
@@ -39,7 +41,7 @@ run = ["mise install rust@1.88.0", "just check-rust-version 1.88.0"]
 
 [tasks."ci:plan"]
 description = "Write the CI lane matrix to GITHUB_OUTPUT; QA_MODE (fast|exhaustive) and QA_BASE choose the selection"
-run = 'cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- plan --platform linux-x86_64 --mode "${QA_MODE:-exhaustive}" --base "${QA_BASE:-origin/dev}" --require-base --stage {{vars.host_stages}} --shards {{vars.ci_shards}} --github-output "$GITHUB_OUTPUT"'
+run = 'cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- plan --platform linux-x86_64 --mode "${QA_MODE:-exhaustive}" --base "${QA_BASE:-origin/dev}" --require-base --stage {{vars.host_stages}} --shards {{vars.ci_shards}} --combine {{vars.ci_combine}} --github-output "$GITHUB_OUTPUT"'
 
 [tasks."ci:job"]
 description = "Run the CI lane named by QA_JOB from the plan in QA_PLAN"
