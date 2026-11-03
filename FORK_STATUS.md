@@ -11,9 +11,9 @@ changes it.
 | Field | Status |
 | --- | --- |
 | Baseline | `f37e5297f` on `dev` |
-| Current phase | 1: iteration speed. A, B and C are done; D is next |
+| Current phase | 1: iteration speed is complete; phase 2 (E, F) is next |
 | Overall state | Fork CI runs the full QA set in parallel lanes: 8m56s with cold caches, against 40m53s as one job. A warm local run takes 9–10 min on an 8-vCPU Linux host |
-| Immediate focus | Routine/deep split and the required gate (D) |
+| Immediate focus | Renumbering every crate to 0.1.0 in lockstep (E) |
 | Release readiness | No fork release or tag exists. Release PR #2 predates the renumbering decision |
 
 ## Goals
@@ -23,7 +23,7 @@ changes it.
 | A: baseline and cheaper builds | complete | verified | Comparable baseline recorded; build cost cut without dropping checks |
 | B: parallel CI lanes | complete | verified | The full task set runs in parallel lanes; deep-run wall time is measured against A |
 | C: local fast loop | complete | verified; owner accepted 94–109 s for core plumbing edits | `mise run test` takes 60 s or less warm for typical edits; the worst case is reported |
-| D: routine/deep split and required gate | active | implemented; warm routine timings pending | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
+| D: routine/deep split and required gate | complete | verified: warm routine PR runs 261 s and 257 s; deep `dev` run 481 s | Two warm PR runs finish within 5 min on the critical path; a deep run passes; a `dev` ruleset requires the gate |
 | E: renumber to 0.1.0 in lockstep | planned | — | Every crate shares one release-please-managed version |
 | F: tagged releases | planned | — | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
 
@@ -102,7 +102,7 @@ lanes took 99–268 s, and the plan job 29 s. In the tests lane, the build took 
 fixture passes 117 s and 104 s, so sharding it would repeat the build.
 
 Runner time is up 80%, because each lane installs tools and compiles separately. Public-repository
-runners are free, but the account's limit of about 20 concurrent jobs is shared with other
+runners are free, but the account's limit of 40 concurrent jobs (GitHub Pro) is shared with other
 repositories. With 18 jobs per run, this run's parallelism depends on their CI being quiet. Queue
 time was 2–13 s per lane in both runs. These figures are cold. Re-measure once a `dev` push has
 saved the per-lane caches.
@@ -143,7 +143,7 @@ the host showed `CI` is the only variable among QA's settings that has this effe
 
 ### D: routine/deep split and required gate
 
-Evidence state: implemented. Code reviewed through `2bed0531c`; warm routine timings pending.
+Evidence state: verified. Code reviewed through `2bed0531c`; the lane tuning merged as #6.
 
 Ordinary PRs run the routine selection, while release PRs, `dev` pushes and manual runs run the
 deep set. `Fork CI required` passed on PR #4 (run 41628980348: 11m14s, all 17 jobs green). That
@@ -160,12 +160,21 @@ packages. Every lane restored its `dev` cache, matching the full key.
 | 41633404379 | 281 s | 3 s | features 152–200 s, tests 181 s, plan 69 s |
 | 41634156856 | 321 s (about 250 s without queueing) | 72 s | features 137–208 s, tests 180 s, plan 54 s |
 
-The second run missed five minutes only because jobs queued for up to 72 s under the
-account-wide limit on concurrent jobs. Nothing else in this repository was running, and that
-limit is outside the repository's control. Two follow-up changes reduce the exposure:
+The second run missed five minutes only because jobs queued for up to 72 s. Nothing else in this
+repository was running. The account allows 40 concurrent jobs across all its repositories, so either
+other repositories' CI held most of them or GitHub was slow to assign runners; the run's timestamps
+cannot tell which. Two follow-up changes reduce the exposure:
 - The plan job fetches two commits instead of full history. Its checkout took 27 s.
 - Self-test, policy, housekeeping and lint share one `basics` lane, so a run needs 14 jobs
   instead of 17.
+
+After those changes (#6), the same PR rebased onto `dev` passed twice within five minutes.
+The deep run on `dev` after merging #6 (run 41636320814) took 481 s, led by tests at 434 s.
+
+| Run | Critical path | Longest queue | Slowest lanes |
+| --- | --- | --- | --- |
+| 41637594925 | 261 s | 4 s | features 161–218 s, tests 180 s, docs 156 s, plan 32 s |
+| 41638254896 | 257 s | 4 s | features 138–204 s, docs 156 s, tests 151 s, plan 33 s |
 
 Each `Cargo.lock` change creates a new set of lane caches, about 7.5 GB against GitHub's
 10 GB per-repository limit. The previous set is then evicted, so expect one cold `dev` run after
