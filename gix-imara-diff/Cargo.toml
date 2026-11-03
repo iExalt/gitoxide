@@ -3,7 +3,7 @@
 
 [package]
 name = "gix-imara-diff"
-version = "0.3.3"
+version.workspace = true
 edition = "2024"
 authors = ["pascalkuthe <pascalkuthe@pm.me>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
 rust-version = "1.88"
@@ -14,6 +14,7 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 keywords = ["diff", "difference", "myers", "compare", "changes"]
 readme = "README.md"
 include = ["/src/**/*", "/LICENSE", "/README.md", "!/src/tests.rs"]
+publish.workspace = true
 
 [dependencies]
 bstr = { version = "1.12.0", default-features = false }
@@ -26,8 +27,8 @@ unified_diff = []
 [dev-dependencies]
 arbitrary = { version = "1.4.2", features = ["derive"] }
 gix-imara-diff = { path = ".", features = ["unified_diff" ] }
-gix-hash = { version = "^0.28.1", path = "../gix-hash", features = ["sha1"] }
-gix-object = { version = "^0.66.1", path = "../gix-object", features = ["sha1"] }
+gix-hash = { path = "../gix-hash", features = ["sha1"] }
+gix-object = { path = "../gix-object", features = ["sha1"] }
 gix-testtools = { path = "../tests/tools", default-features = false }
 cov-mark = "2.1.0"
 expect-test = "1.4.0"
