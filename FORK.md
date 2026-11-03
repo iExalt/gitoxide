@@ -133,13 +133,14 @@ upstream commits are excluded from the first fork release. Conventional commit
 titles describe fork changes; breaking changes require explicit review even while
 the fork version is below 1.0.
 
-The workflow uses `skip-github-release: true`: it only maintains a release PR.
-It neither tags nor creates a GitHub release, even after a release PR is merged.
-Do not enable release-PR auto-merge. Before merging a release PR or creating its
-tag/release, obtain explicit owner approval naming the version. After approval,
-review the preview, merge the checked release PR, then separately create the exact
-fork tag and release at that merge revision. No release-creation dispatch is
-configured. The manifest alone does not mean a release has been published.
+The workflow maintains a release PR and, once one is merged, tags the merge commit
+`gitoxide-fork-v<version>` and publishes its GitHub release on the next `dev` run. Merging a
+release PR is therefore the publishing act. Do not enable release-PR auto-merge. Before merging
+a release PR, obtain explicit owner approval naming the version, and review the PR's deep CI run
+and changelog. The manifest alone does not mean a release has been published; the tag and
+GitHub release do. If the release run fails, the merged PR keeps its `autorelease: pending` label
+and release-please opens no new release PRs until it is tagged: fix the cause and re-run the
+workflow by dispatch. Remove that label by hand only if the tag already exists.
 
 ### GitHub App setup
 

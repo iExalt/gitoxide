@@ -31,4 +31,4 @@ jobs:
         with:
           token: ${{ steps.token.outputs.token }}
           target-branch: dev
-          skip-github-release: true
+          skip-github-release: false
