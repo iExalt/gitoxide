@@ -29,8 +29,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Fast selection diffs against the PR base, which must be in history.
-          fetch-depth: 0
+          # A PR's merge ref has the base tip as its first parent, so depth 2 is enough for
+          # fast selection against HEAD^1; --require-base fails loudly if it is missing.
+          fetch-depth: 2
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           version: 2026.10.17
@@ -50,7 +51,7 @@ jobs:
         id: plan
         env:
           QA_MODE: ${{ steps.mode.outputs.mode }}
-          QA_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+          QA_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.sha }}
         run: mise run ci:plan
 
   run:
