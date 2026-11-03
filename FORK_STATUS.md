@@ -28,7 +28,7 @@ changes it.
 | F: tagged releases | implemented | `skip-github-release: false` merged (#10); first live tag awaits 0.1.0 | Merging a release PR tags `gitoxide-fork-vX` and creates its GitHub release |
 
 | R1: linear `dev` and rebase merges | active | `dev` replaced by the linear candidate `8b21b7aa0` (identical tree, deep run 41648484118 green, backup `backup/linearize/2026-11-03`); policy PR #11 pending | `dev` is N0 plus linear fork commits; only rebase merges allowed; policy docs updated |
-| R2: rebase-dev workflow | planned | — | Paseo's workflow ported with normalization, rerere cache, fixups, deletions, signing and release boundaries |
+| R2: rebase-dev workflow | implemented | `rebase-dev.yml` and its script; 23 script tests pass, 14 of them on Git fixtures. Not yet run on GitHub: needs the signing key, the identity variables, the sync App and the `rebase-resolutions` branch | Paseo's workflow ported with normalization, rerere cache, fixups, deletions, signing and release boundaries |
 | R3: first rebase | planned | — | `dev` rebased onto current upstream by the workflow; release notes contain no upstream commits |
 
 Decisions from the owner (2026-11-03): "Edit gitoxide to rebase rather than merge, and only allow

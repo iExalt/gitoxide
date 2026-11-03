@@ -28,6 +28,8 @@ This repository contains `gitoxide` - a pure Rust implementation of Git. These d
   relying on the PR title or description, which never reach the history. The required check runs only on the
   PR's tip, so keep every commit building and passing tests yourself. `dev` stays linear: upstream updates
   rebase it, as described in [FORK.md](FORK.md).
+- Never merge a PR using the `dev` ruleset's bypass. It exists only for the `rebase-dev` workflow's push
+  and for owner emergencies.
 - Release PRs must receive CI checks and must not auto-merge. Obtain explicit owner approval naming the version
   before merging a release PR, creating a tag or release, or publishing packages or artifacts.
 
