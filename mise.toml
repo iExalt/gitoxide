@@ -53,7 +53,7 @@ run = "cargo build --locked"
 
 [tasks."lint:workflows"]
 description = "Validate GitHub workflow expressions and embedded shell scripts"
-run = ["actionlint", "node --test '.github/scripts/*.test.cjs'"]
+run = ["actionlint", "node --test '.github/scripts/*.test.cjs' '.github/scripts/*.test.mjs'"]
 
 [tasks."release:preview"]
 description = "Read-only release PR preview; requires GH_TOKEN (never creates tags or releases)"
