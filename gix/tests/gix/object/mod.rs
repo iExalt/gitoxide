@@ -1,5 +1,6 @@
 mod blob;
 mod commit;
+mod git_bytes;
 mod tree;
 
 use gix_testtools::size_ok;
