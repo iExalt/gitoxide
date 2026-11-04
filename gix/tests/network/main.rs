@@ -32,6 +32,7 @@ mod http_push;
 mod http_tls;
 mod interrupt;
 mod local_programs;
+mod no_git_dispatch;
 mod pre_push;
 mod push_scenarios;
 mod ssh;
