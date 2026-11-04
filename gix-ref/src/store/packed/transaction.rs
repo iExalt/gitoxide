@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Formatter, io::Write, path::Path};
 
-use gix_error::{Message, Result, ResultExt, bail, message, not_found};
+use gix_error::{ErrorExt, Message, Result, ResultExt, bail, message, not_found};
 
 use crate::{
     FullNameRef, Namespace, Target, file,
@@ -14,7 +14,7 @@ pub(crate) const HEADER_LINE: &[u8] = b"# pack-refs with: peeled fully-peeled so
 impl packed::Transaction {
     pub(crate) fn new_from_pack_and_lock(
         buffer: Option<file::packed::SharedBufferSnapshot>,
-        lock: gix_lock::File,
+        lock: gix_lock::Marker,
         precompose_unicode: bool,
         namespace: Option<Namespace>,
         fsync: gix_fs::fsync::Options,
@@ -25,7 +25,7 @@ impl packed::Transaction {
             buffer,
             edits: None,
             lock: Some(lock),
-            closed_lock: None,
+            new_file: None,
             precompose_unicode,
             namespace,
         }
@@ -78,7 +78,7 @@ impl packed::Transaction {
                 edit.name = namespace.clone().into_namespaced_name(edit.name.as_ref());
             }
             if matches!(edit.change, Change::Delete { .. })
-                && buffer.as_ref().is_some_and(|b| b.find(edit.name.as_ref()).is_err())
+                && buffer.as_ref().is_none_or(|b| b.find(edit.name.as_ref()).is_err())
             {
                 continue;
             }
@@ -127,14 +127,7 @@ impl packed::Transaction {
             }
         }
 
-        if edits.is_empty() {
-            self.closed_lock = self
-                .lock
-                .take()
-                .map(gix_lock::File::close)
-                .transpose()
-                .or_raise(|| message("Could not close unused packed reference lock"))?;
-        } else {
+        if !edits.is_empty() {
             // NOTE that we don't do any additional checks here but apply all edits unconditionally.
             // This is because this transaction system is internal and will be used correctly from the
             // loose ref store transactions, which do the necessary checking.
@@ -144,22 +137,33 @@ impl packed::Transaction {
         Ok(self)
     }
 
-    /// Commit the prepared transaction by moving the file written while preparing into place.
+    /// Commit the prepared transaction by moving the file written while preparing into place, and return the lock on
+    /// `packed-refs`, which stays held until it is dropped.
     ///
     /// Please note that actual edits invalidated existing packed buffers.
-    pub fn commit(self) -> Result {
+    ///
+    /// Git does the same: the new file is written to `packed-refs.new` and renamed over `packed-refs` while `packed-refs.lock`
+    /// is held, so that nobody packs the loose references that the caller is about to delete or has just written
+    /// before the caller is done with them.
+    pub fn commit_keeping_lock(self) -> Result<gix_lock::Marker> {
         let edits = self.edits.expect("BUG: cannot call commit() before prepare(…)");
+        let lock = self.lock.expect("a write lock for applying changes");
         if edits.is_empty() {
-            return Ok(());
+            return Ok(lock);
         }
 
-        let file = self.lock.expect("a write lock for applying changes");
+        let packed_refs_path = lock.resource_path();
         if self.num_written_lines == 0 {
-            std::fs::remove_file(file.resource_path()).or_raise(|| message("Could not delete empty packed refs"))?;
+            // `new_file` is removed when it's dropped.
+            std::fs::remove_file(&packed_refs_path).or_raise(|| message("Could not delete empty packed refs"))?;
         } else {
-            file.commit().or_raise(|| message("Could not commit packed refs"))?;
+            self.new_file
+                .expect("the new file is written if there are edits")
+                .persist(&packed_refs_path)
+                .map_err(|err| err.error)
+                .or_raise(|| message("Could not commit packed refs"))?;
         }
-        Ok(())
+        Ok(lock)
     }
 }
 
@@ -169,7 +173,22 @@ impl packed::Transaction {
     /// Git does the same while preparing, so a failure to write or flush is one that has changed nothing.
     fn write_new_file(&mut self, edits: &mut [Edit]) -> Result {
         let fsync = self.fsync;
-        let mut file = self.lock.as_mut().expect("a write lock for applying changes");
+        let lock = self.lock.as_ref().expect("a write lock for applying changes");
+        // Git's name, and with the lock held nobody else uses it, so a leftover of an interrupted run can go.
+        let new_path = {
+            let mut path = lock.resource_path().into_os_string();
+            path.push(".new");
+            std::path::PathBuf::from(path)
+        };
+        match std::fs::remove_file(&new_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.and_raise(message("Could not remove a leftover new packed refs file"))),
+        }
+        let file = self
+            .new_file
+            .insert(new_packed_refs_file(&new_path).or_raise(|| message("Could not create the new packed refs file"))?);
+        let mut file = WritableFile(file);
         let file = &mut file;
         edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
         let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>>>> = match self.buffer.as_ref() {
@@ -289,15 +308,42 @@ pub(crate) fn buffer_into_transaction(
     namespace: Option<Namespace>,
     fsync: gix_fs::fsync::Options,
 ) -> Result<packed::Transaction> {
-    let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None, 0)?;
+    let lock = gix_lock::Marker::acquire_to_hold_resource(&buffer.path, lock_mode, None, 0)?;
     Ok(packed::Transaction {
         fsync,
         num_written_lines: 0,
         buffer: Some(buffer),
         lock: Some(lock),
-        closed_lock: None,
+        new_file: None,
         edits: None,
         precompose_unicode,
         namespace,
     })
+}
+
+type NewFile = gix_tempfile::Handle<gix_tempfile::handle::Writable>;
+
+fn new_packed_refs_file(path: &Path) -> std::io::Result<NewFile> {
+    let (directory, cleanup) = (
+        gix_tempfile::ContainingDirectory::Exists,
+        gix_tempfile::AutoRemove::Tempfile,
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        gix_tempfile::writable_at_with_permissions(path, directory, cleanup, std::fs::Permissions::from_mode(0o666))
+    }
+    #[cfg(not(unix))]
+    {
+        gix_tempfile::writable_at(path, directory, cleanup)
+    }
+}
+
+/// Give a temporary file the interface of a lock file, so it's written like one.
+struct WritableFile<'a>(&'a mut NewFile);
+
+impl WritableFile<'_> {
+    fn with_mut<T>(&mut self, f: impl FnOnce(&mut std::fs::File) -> std::io::Result<T>) -> std::io::Result<T> {
+        self.0.with_mut(|file| f(file.as_file_mut()))?
+    }
 }
