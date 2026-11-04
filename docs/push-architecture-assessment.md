@@ -495,3 +495,102 @@ fork receiver must match it.
 Process kill and power loss remain separate models, as the plan states. No row of this
 table has been exercised; the cheapest discriminating probes are proposed in section 7.
 
+## 4. Fork state at `b592770fc`
+
+Source audit of what the fork already has against sections 2 and 3. Nothing here was
+built or run; the counts below come from `rg`/`wc` searches over the tree at that commit
+and are labelled where they are searches.
+
+### 4.1 Reference storage
+
+| Area | Observation | Gap against Git at the pin |
+| --- | --- | --- |
+| Store type | `gix::RefStore` is a type alias for `gix_ref::file::Store` (`gix/src/lib.rs:194`) and `Repository.refs` is a **public field** of that concrete type (`gix/src/types.rs:161`, `:202`). The concrete file store has 53 `pub fn` items (search: `rg -c 'pub fn' gix-ref/src/store/file`) | Any second backend changes a public type or adds a parallel one |
+| Coupling | About 80 references to `file::Store` or `.refs` across 19 files in `gix/src` (search: `rg -c 'file::Store\|\.refs\b' gix/src`), plus `gix-protocol/src/fetch/{negotiate,types}.rs`, `gix-discover/src/is.rs`, `gitoxide-core/src/remote.rs` and test tooling | Mechanical but wide |
+| Backend-neutral surface | `RefEdit`, `Change`, `PreviousValue`, `LogChange` live in `gix_ref::transaction` and `Repository::edit_references` already takes them (`gix/src/repository/reference.rs:127-150`) | Callers of the porcelain edit API are insulated from the store type |
+| Generic store scaffolding | `gix-ref/src/lib.rs:100-131` declares a `Handle`/`State`/`Store` whose only variant wraps the file store, marked `dead_code` "for planned ref-table support" | Starting point exists; no second variant |
+| Reftable on open | A reftable clone opens, and reading `HEAD` fails with "This reference uses an unsupported storage backend, such as reftable" (`gix/tests/gix/repository/open.rs:137-149`, `gix-ref/src/store/file/loose/reference/decode.rs:26`) | No reftable read or write |
+| Unsafe-write hazard today | `gix` opens a repository without reading `extensions.refStorage` (search: `rg -i refstorage gix/src` finds only a documentation comment at `gix/src/repository/mod.rs:46`; version-0 rules ignore unknown extension keys, `:32`), so it instantiates the **files** store on a reftable repository. The only guard is decoding the stub `HEAD`, which names `refs/heads/.invalid` and fails as "unsupported storage backend" (`gix-ref/src/store/file/loose/reference/decode.rs:22-27`). Any other lookup under a stub file is treated as absent (`gix-ref/src/store/file/find.rs:246`, `NotADirectory` returns `Ok(None)`), so a reference that exists in the reftable reads as missing without an error. Inferred, not run: `refs/heads` is a stub regular file in such a repository, so branch writes probably fail, but a write such as `refs/tags/x` would create a loose file that Git never sees. Upstream `main` (`689fe4578042fafe9ded904351eb08fb5fffcf04`, 2026-11-03) has the same code: `git grep` for `refstorage` finds only the documentation comment and a test list, and the same decode guard (ran) | Git refuses unknown extensions in a version-1 repository and treats `refStorage` as known; the fork must refuse writes (or the open) whenever the storage format is not `files`, before any receiver or consumer work builds on the store. Probe P12 |
+| New-repository format inputs | `gix init` reads none of Git's format inputs (search: `rg -i 'defaultRefFormat\|DEFAULT_REF_FORMAT\|feature.experimental' gix/src gix-discover/src` finds nothing), so it creates a files repository where Git would create reftable (6.1) | Silent fallback to `files` must become an explicit refusal when configuration asks for reftable |
+| Clone ordering | The clone path notes that a reftable store must not be initialized before the remote hash is known (`gix/src/clone/fetch/util.rs:30-41`) | Init order constraint for SHA-256 reftable clones |
+| Upstream port | See 4.2 | Codecs only; stack layer would need rewriting |
+
+### 4.2 The unmerged upstream `gix-reftable` port
+
+A single library commit `94793bb6fb932212ce763dc5e531051911f86386` on the upstream branch
+`codex/reftable-port-sequence` (branch tip `7335b332e9ba4a840d37338d5eaf4f0cbe535748`, which
+only adds a planning file; neither commit is merged into upstream `main` at the time of
+reading, `git merge-base --is-ancestor` ran and reported not merged) adds a standalone
+`gix-reftable` crate. Measured with `git show` and `wc -l` (ran): about 3.4k lines of
+library code (3,359) and 0.6k lines of tests (642). The branch touches nothing in `gix-ref`
+or `gix` (the file list of the commit shows only `gix-reftable/`, the workspace manifest
+and the lockfile), so no backend integration exists. The crate depends on `crc32fast`,
+`flate2`, `gix-hash` (both hashes) and `thiserror`, so it does not use the `gix-error`
+convention that `AGENTS.md` prefers for plumbing crates being migrated. It contains
+record, block, table, merged-iterator, writer and stack modules, and tests ported from
+Git's `u-reftable-*` and `t061x` suites.
+
+What the stack layer at that commit does not do (read in `gix-reftable/src/stack.rs`,
+`rg` for `sync_all|sync_data|create_new|OpenOptions` finds no match):
+
+- No exclusive lock: `write_tables_list` writes `tables.list.lock` with `fs::write`, which
+  truncates and creates without exclusive-create semantics, and renames it
+  (`stack.rs:172-183`). It would overwrite a lock a Git writer holds, and two writers can
+  both succeed with the later one silently dropping the earlier one's table.
+- No stale-view check, no reload-on-missing-table retry, no per-table locks.
+- No flush of tables or of `tables.list`, so `core.fsync` cannot be honored.
+- Compaction rewrites everything into one table once the table count reaches the
+  factor, then deletes the old tables immediately; it is not Git's geometric
+  segment compaction and does not release `tables.list.lock` while merging.
+
+It is therefore a candidate source for the format codecs (the hardest part to get
+byte-compatible) and not for the coordination protocol, which is where the plan's
+Git-equivalence requirement lives. Upstream's September 2026 report says no reftable
+work had started yet and that contributors are expected to join (`etc/reports/26-09.md`,
+section "Git3 support: reftable"); the fork does not control that timeline. The fork's `crate-status.md` lists reftable under Git 3.0 compatibility for
+`gix-hash`, `gix-ref`, `gix-reftable`, `gix-protocol` and `gix-odb` (`crate-status.md:56`,
+`:1050-1057`), and Git's own breaking-changes list makes support in Gitoxide a
+prerequisite for reftable becoming Git's default (`Documentation/BreakingChanges.adoc:164-166`).
+
+### 4.3 Files-store transaction against Git
+
+| Property | Fork | Git | Cite |
+| --- | --- | --- | --- |
+| Lock all, verify old values under lock, then change | Yes, per ref: lock, re-read loose then packed under the lock, check expected value | Same shape | `gix-ref/src/store/file/transaction/prepare.rs:40-190`; `refs/files-backend.c:2687-2905` |
+| Lock timeouts | `core.filesRefLockTimeout` 100 ms, `core.packedRefsTimeout` 1000 ms | Same defaults | `gix/src/config/cache/access.rs:227-241`; `refs.c:992-1006`, `refs/packed-backend.c:1236-1250` |
+| Commit order | Reflog then rename per update; reflog deletion; packed-refs commit; loose deletion | Same order | `gix-ref/src/store/file/transaction/commit.rs:60-176`; `refs/files-backend.c:3321-3475` |
+| Rollback on failure | None; documented | None | `commit.rs:17`; `refs/files-backend.c:3455-3456` |
+| Failed reflog deletion | Aborts the commit with an error | Ignored (`unlink_or_warn`) | `commit.rs:121-137`; `refs/files-backend.c:3403-3412` |
+| Missing committer when a reflog is needed | Aborts late, after some refs committed | Falls back to the environment identity | `commit.rs:11-15`; `refs/files-backend.c:1988-1994`, `refs/reftable-backend.c:1473` (Git) |
+| No-op update | Skips the reflog | Skips write and reflog | `commit.rs:81-96`; `refs/files-backend.c:2857-2866` |
+| `fsync` of refs, reflogs, `packed-refs`, objects, packs | None anywhere in non-test source (search: `rg 'sync_all\|sync_data\|fsync'` outside tests finds only a worktree-checkout comment, an example, and a "Planned" entry for `core.fsync` in `src/plumbing/progress.rs:203-208`) | Component-gated | see 3.4 |
+| Stale lock cleanup | Signal-handler cleanup exists in `gix-tempfile` but is opt-in (`setup(mode)`, default `Mode::None`) | Always installed | `gix-tempfile/src/signal.rs:12-14`; `tempfile.c:66-118` |
+| `core.lockfilePid` sibling files | Not supported (search finds no hit) | Supported | `lockfile.c:105-135` |
+| `reference-transaction` hook | None; client and receive hooks unimplemented | Four states, backend-dependent calls | `crate-status.md:170-175`; section 2.5 |
+| Linked-worktree stores | `RefStore::for_linked_worktree_opts` | Per-worktree stack or directory | `gix/src/repository/location.rs:58` |
+
+The first three rows mean the fork's files transaction already has the right shape;
+the differences that a differential test would expose are the reflog-deletion and
+missing-committer behaviors, the absent flushes, the optional cleanup handlers, the
+absent hook states and the absent `~pid.lock` handling.
+
+### 4.4 Receiving building blocks
+
+| Need | Fork state | Cite |
+| --- | --- | --- |
+| Advertisement, command parsing, report writing | No server-side protocol code. `gix-protocol` holds `command`, `fetch`, `handshake`, `ls_refs`, `remote_progress` (client side); `gix-packetline` provides line encoding and decoding | `ls gix-protocol/src`, `gix-packetline/src/encode.rs` |
+| Local transport | Spawns `git upload-pack` or `git receive-pack` as a subprocess | `gix-transport/src/client/blocking_io/file.rs:41`, `:132`, `:291`, `:349` |
+| Pack ingestion | `Bundle::write_to_directory` writes a pack and index, completing thin packs through a caller-supplied lookup; no flush | `gix-pack/src/bundle/write/mod.rs:55-107` |
+| Quarantine | None. `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_QUARANTINE_PATH` are not honored by the fork's object store; they are only stripped from child Git environments, and a TODO records quarantine support as missing | `gix-path/src/env/git/mod.rs:406-407`, `gix/src/open/repository.rs:142` |
+| Connectivity and fsck | `gix-fsck` is a 107-line connectivity walker (`Connectivity::check_commit`); no strict object checks, no `receive.fsck.*` | `gix-fsck/src/lib.rs:1-107` |
+| Unpack limit | Not implemented (`fetch.unpackLimit` is listed as planned) | `src/plumbing/progress.rs:253` |
+| Hooks | None | `crate-status.md:170-175` |
+| Credential helpers | Named helpers run as `git credential-<name>` through the Git executable | `gix-credentials/src/program/mod.rs:13-19`, `:95-103` |
+| Maintenance | No object or ref maintenance engine found; promisor-aware maintenance is listed as unchecked (search of `crate-status.md`; not audited in source) | `crate-status.md:314`, `:351` |
+
+Reading: a native receiver reuses pack writing, object lookup, connectivity walking and
+the ref transaction machinery, and needs new server-side protocol, quarantine and
+object-migration code, policy checks, strict fsck, the unpack-or-keep decision,
+`updateInstead`, `proc-receive` and the hook-runner integration. The matrix in section 2
+is the specification for that new code.
+
