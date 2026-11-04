@@ -246,7 +246,10 @@ laptop. Each worker uses `cargo -j4`, and only one thorough check runs at a time
 `mise run test` budget is 120 seconds against a warm baseline of 94–109 seconds for core
 plumbing edits. `mise run check`, the affected-package gate before a PR, has no recorded
 baseline yet; workers report its runtime and selection. The
-thorough-check budget is 12 minutes against a warm baseline of 530 seconds. No spending beyond
+thorough-check budget is 12 minutes against a warm baseline of 530 seconds, remeasured as 615 seconds
+on 2026-11-04 after this work added about 450 native tests (`FORK_STATUS.md`, "Baseline"); a run
+after a change that reaches `gix-ref` rebuilds most of the workspace and takes about 1,370 seconds,
+which is not comparable with either figure. No spending beyond
 existing subscriptions is approved.
 
 | Thread | Scope | Depends on | Human | State |
