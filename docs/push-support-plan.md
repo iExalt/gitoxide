@@ -237,3 +237,27 @@ selection, default format, conversion policy, and the expanded implementation es
 remain decisions after that evidence. Client protocol and bounded pack work can start now,
 within a separately approved scope. No source implementation,
 benchmark, fault experiment, conversion, or runtime acceptance is claimed by this plan.
+
+## Execution threads
+
+An overseer session runs these threads as separate worker sessions, each using
+`keep-me-in-the-loop`. Builds and tests run on a shared Linux host, never on the owner's
+laptop. Each worker uses `cargo -j4`, and only one thorough check runs at a time. The
+routine-check budget is 120 seconds against a warm baseline of 94–109 seconds. The
+thorough-check budget is 12 minutes against a warm baseline of 530 seconds. No spending
+beyond existing subscriptions is approved.
+
+| Thread | Scope | Depends on | Human | State |
+| --- | --- | --- | --- | --- |
+| 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | ready |
+| 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | ready |
+| 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks | None | None known | ready |
+
+Later threads (reftable, durability, local backend, network, receiver, maintenance,
+cutover) wait for the owner to accept thread 1 and agree their scope.
+
+### Revision log
+
+- 2026-11-04: the owner agreed to run threads 1–3 in parallel ("Add the hook runner too")
+  and granted the overseer high autonomy for this run ("Grant for this session").
+  Releases and tags still need the owner's approval naming them.
