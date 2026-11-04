@@ -225,6 +225,9 @@ by `.github/scripts/qa-mode.cjs`:
   workspace.
 - **Deep** (release PRs, pushes to `dev` and manual runs): the exhaustive `check:thorough` set.
 
+The Linux lanes install `strace` and set `GIX_TEST_REQUIRE_STRACE`, so that the tests which compare the flushes of the
+fork with those of Git (`gix_testtools::strace`) fail on a runner that can't trace instead of skipping. Elsewhere they skip.
+
 Routine runs leave these to deep runs: the archived-fixture test pass, which detects stale
 committed archives; variants, journeys and API checks of packages a PR doesn't affect; and the
 exhaustive-only feature contracts. A failing deep run on a release PR blocks the release.
