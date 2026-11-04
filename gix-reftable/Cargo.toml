@@ -32,6 +32,7 @@ crc32fast = "1.5.0"
 
 [dev-dependencies]
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 
 [package.metadata.docs.rs]
 features = ["sha1"]
