@@ -28,6 +28,7 @@ pub mod blocksource;
 pub mod merged;
 ///
 pub mod record;
+pub mod stack;
 ///
 pub mod table;
 ///
@@ -35,5 +36,6 @@ pub mod writer;
 
 pub use blocksource::BlockSource;
 pub use merged::MergedTable;
+pub use stack::Stack;
 pub use table::Table;
 pub use writer::Writer;

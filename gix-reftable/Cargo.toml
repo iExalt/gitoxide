@@ -24,6 +24,7 @@ sha256 = ["gix-hash/sha256"]
 
 [dependencies]
 gix-hash = { path = "../gix-hash" }
+gix-validate = { path = "../gix-validate" }
 gix-error = { path = "../gix-error", features = ["bstr"] }
 gix-zlib = { path = "../gix-zlib" }
 
