@@ -379,6 +379,7 @@ pub(super) fn process(root: &Path, command: &Command) -> Result<process::Command
     for name in [
         "GIX_TEST_IGNORE_ARCHIVES",
         "GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI",
+        "GIX_TEST_USE_ARCHIVES",
         "GIX_TEST_FIXTURE_HASH",
         "GIX_MERGE_UPDATE_CARTESIAN_BASELINE",
         "GIX_MERGE_UPDATE_BASELINE",

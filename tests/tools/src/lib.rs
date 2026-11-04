@@ -812,6 +812,8 @@ pub fn fixture_bytes(path: impl AsRef<Path>) -> Vec<u8> {
 /// is automatically placed into a compressed _tar_ archive.
 /// If a script result doesn't exist, these will be checked first and extracted if present, which they are by default.
 /// This behaviour can be prohibited by setting the `GIX_TEST_IGNORE_ARCHIVES` to any value.
+/// Setting `GIX_TEST_USE_ARCHIVES` to any value overrides that, for callers whose environment is re-populated by
+/// a wrapper that sets `GIX_TEST_IGNORE_ARCHIVES` and can therefore not unset it.
 ///
 /// To speed CI up, one can add these archives to the repository. Since LFS is not currently being used, it is
 /// important to check their size first, though in most cases generated archives will not be very large.
@@ -2643,7 +2645,10 @@ fn extract_archive(
         let mut buf = Vec::new();
         #[cfg_attr(feature = "xz", allow(unused_mut))]
         let mut input_archive = std::fs::File::open(archive)?;
-        if !ignore_archive_override && env::var_os("GIX_TEST_IGNORE_ARCHIVES").is_some() {
+        if !ignore_archive_override
+            && env::var_os("GIX_TEST_USE_ARCHIVES").is_none()
+            && env::var_os("GIX_TEST_IGNORE_ARCHIVES").is_some()
+        {
             return Err(std::io::Error::other(format!(
                 "Ignoring archive at \"{}\" as GIX_TEST_IGNORE_ARCHIVES is set.",
                 archive.display()
