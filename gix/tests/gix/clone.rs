@@ -1620,6 +1620,38 @@ fn clone_ignores_default_object_format() -> TestResult {
 }
 
 #[test]
+fn clone_refuses_unsupported_ref_format_before_creating_anything() -> TestResult {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let destination = tmp.path().join("clone");
+    for (overrides, supported) in [
+        ("init.defaultRefFormat=reftable", false),
+        ("feature.experimental=true", false),
+        ("init.defaultRefFormat=files", true),
+    ] {
+        let res = gix::clone::PrepareFetch::new(
+            remote::repo("base").path(),
+            &destination,
+            gix::create::Kind::Bare,
+            Default::default(),
+            restricted().config_overrides([overrides]),
+        );
+        match res {
+            Ok(prepare) if supported => {
+                drop(prepare);
+                std::fs::remove_dir_all(&destination).ok();
+            }
+            Ok(_) => panic!("{overrides}: silently creating a repository that stores references in files"),
+            Err(err) => {
+                assert!(!supported, "{overrides}: {err:?}");
+                assert!(err.is_unsupported(), "{overrides}: {err:?}");
+                assert!(!destination.exists(), "{overrides}: nothing was created");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn clone_and_destination_must_be_empty() -> TestResult {
     let mut error_snapshots = Vec::new();
     let tmp = gix_testtools::tempfile::TempDir::new()?;

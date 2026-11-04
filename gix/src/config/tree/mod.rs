@@ -37,6 +37,8 @@ pub(crate) mod root {
         pub const DIFF: sections::Diff = sections::Diff;
         /// The `extensions` section.
         pub const EXTENSIONS: sections::Extensions = sections::Extensions;
+        /// The `feature` section.
+        pub const FEATURE: sections::Feature = sections::Feature;
         /// The `fetch` section.
         pub const FETCH: sections::Fetch = sections::Fetch;
         /// The `gitoxide` section.
@@ -91,6 +93,7 @@ pub(crate) mod root {
                 #[cfg(feature = "blob-diff")]
                 &Self::DIFF,
                 &Self::EXTENSIONS,
+                &Self::FEATURE,
                 &Self::FETCH,
                 &Self::GITOXIDE,
                 &Self::GPG,
@@ -118,9 +121,10 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Gpg, Http,
-    Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch, checkout,
-    commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push, remote, ssh,
+    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Feature, Fetch, Gitoxide, Gpg,
+    Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch,
+    checkout, commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push, remote,
+    ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

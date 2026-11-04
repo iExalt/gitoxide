@@ -59,6 +59,7 @@ pub struct Options {
 mod options;
 pub mod permissions;
 mod repository;
+pub(crate) use repository::ref_backend_from_environment;
 
 #[cfg(test)]
 mod tests {

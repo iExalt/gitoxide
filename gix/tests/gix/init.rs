@@ -346,3 +346,126 @@ fn assert_init_into_empty_directory(repo_kind: gix::create::Kind) -> gix_testtoo
     }
     Ok(())
 }
+
+/// Git creates repositories with `reftable` references on request, which isn't supported, so it has to be refused
+/// explicitly instead of silently creating a repository that stores its references in files.
+mod ref_format {
+    use gix_testtools::{Result, tempfile};
+    use serial_test::serial;
+
+    /// Initialize a repository in a not yet existing directory with `overrides` and, if `environment` is set, with
+    /// these variables, which are allowed to be read.
+    fn init(
+        overrides: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Result<(
+        tempfile::TempDir,
+        std::path::PathBuf,
+        gix::Result<gix::ThreadSafeRepository>,
+    )> {
+        let tmp = tempfile::tempdir()?;
+        let destination = tmp.path().join("new");
+        let mut env = gix_testtools::isolate_git_environment()?;
+        for &(name, value) in environment {
+            env = env.set(name, value);
+        }
+        let mut permissions = gix::open::Permissions::isolated();
+        if !environment.is_empty() {
+            permissions.env = gix::open::permissions::Environment::all();
+        }
+        let open_options = gix::open::Options::isolated()
+            .permissions(permissions)
+            .config_overrides(
+                ["user.name=a", "user.email=b"]
+                    .into_iter()
+                    .chain(overrides.iter().copied()),
+            );
+        let res = gix::ThreadSafeRepository::init_opts(
+            &destination,
+            gix::create::Kind::WithWorktree,
+            gix::create::Options::default(),
+            open_options,
+        );
+        drop(env);
+        Ok((tmp, destination, res))
+    }
+
+    #[test]
+    #[serial]
+    fn files_is_created_unless_something_else_is_requested() -> Result {
+        for (overrides, environment) in [
+            (&[][..], &[][..]),
+            (&["init.defaultRefFormat=files"][..], &[][..]),
+            (&["feature.experimental=false"][..], &[][..]),
+            (
+                &["feature.experimental=true", "init.defaultRefFormat=files"][..],
+                &[][..],
+            ),
+            (
+                &["init.defaultRefFormat=reftable"][..],
+                &[("GIT_REFERENCE_BACKEND", "files")][..],
+            ),
+            (
+                &["init.defaultRefFormat=files"][..],
+                &[("GIT_DEFAULT_REF_FORMAT", "reftable")][..],
+            ),
+        ] {
+            let (_tmp, destination, repo) = init(overrides, environment)?;
+            let repo = repo.unwrap_or_else(|err| panic!("{overrides:?} {environment:?}: {err:?}"));
+            assert_eq!(repo.refs.unsupported_backend(), None);
+            assert!(destination.join(".git").is_dir());
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn unsupported_formats_are_refused_before_anything_is_created() -> Result {
+        for (overrides, environment) in [
+            (&["init.defaultRefFormat=reftable"][..], &[][..]),
+            (&["feature.experimental=true"][..], &[][..]),
+            (&["feature.experimental"][..], &[][..]),
+            (
+                &["init.defaultRefFormat=files"][..],
+                &[("GIT_REFERENCE_BACKEND", "reftable")][..],
+            ),
+            (&[][..], &[("GIT_REFERENCE_BACKEND", "files://elsewhere")][..]),
+            (&[][..], &[("GIT_DEFAULT_REF_FORMAT", "reftable")][..]),
+        ] {
+            let (_tmp, destination, repo) = init(overrides, environment)?;
+            let err = repo
+                .map(|_| ())
+                .expect_err("a format that isn't supported must not turn into files");
+            assert!(
+                err.is_unsupported(),
+                "{overrides:?} {environment:?}: callers can tell that a different strategy is needed: {err:?}"
+            );
+            assert!(
+                !destination.exists(),
+                "{overrides:?} {environment:?}: nothing is created for a refused request"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn invalid_values_are_errors_and_not_unsupported() -> Result {
+        for (overrides, environment) in [
+            (&["init.defaultRefFormat=bogus"][..], &[][..]),
+            (&["init.defaultRefFormat=Files"][..], &[][..]),
+            (&["init.defaultRefFormat"][..], &[][..]),
+            (&[][..], &[("GIT_DEFAULT_REF_FORMAT", "bogus")][..]),
+            (&[][..], &[("GIT_REFERENCE_BACKEND", "bogus")][..]),
+        ] {
+            let (_tmp, destination, repo) = init(overrides, environment)?;
+            let err = repo.map(|_| ()).expect_err("Git refuses unknown formats");
+            assert!(
+                err.is_validation(),
+                "{overrides:?} {environment:?}: the value is invalid rather than just unsupported: {err:?}"
+            );
+            assert!(!destination.exists(), "{overrides:?} {environment:?}");
+        }
+        Ok(())
+    }
+}
