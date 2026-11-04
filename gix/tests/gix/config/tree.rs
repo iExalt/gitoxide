@@ -271,6 +271,81 @@ mod keys {
     }
 }
 
+mod reftable {
+    use std::time::Duration;
+
+    use gix::config::tree::{Key, Reftable};
+
+    #[test]
+    fn values_are_limited_like_in_git() -> gix_testtools::TestResult {
+        assert_eq!(
+            Reftable::BLOCK_SIZE.try_into_block_size(Ok(None))?,
+            None,
+            "unset stays unset"
+        );
+        assert_eq!(
+            Reftable::BLOCK_SIZE.try_into_block_size(Ok(Some(0)))?,
+            Some(0),
+            "zero is valid and means the default"
+        );
+        assert_eq!(
+            Reftable::BLOCK_SIZE.try_into_block_size(Ok(Some(16_777_215)))?,
+            Some(16_777_215)
+        );
+        assert_eq!(
+            Reftable::RESTART_INTERVAL.try_into_restart_interval(Ok(Some(65_535)))?,
+            Some(65_535)
+        );
+        assert_eq!(
+            Reftable::GEOMETRIC_FACTOR.try_into_geometric_factor(Ok(Some(255)))?,
+            Some(255)
+        );
+        for (key, invalid) in [
+            (&Reftable::BLOCK_SIZE as &dyn Key, ["16777216", "-1"]),
+            (&Reftable::RESTART_INTERVAL, ["65536", "-1"]),
+            (&Reftable::GEOMETRIC_FACTOR, ["256", "-1"]),
+            (&Reftable::LOCK_TIMEOUT, ["-2", "-100"]),
+        ] {
+            for value in invalid {
+                assert!(
+                    key.validate(value.into()).is_err(),
+                    "{} rejects {value}",
+                    key.logical_name()
+                );
+            }
+        }
+        for key in [
+            &Reftable::BLOCK_SIZE as &dyn Key,
+            &Reftable::RESTART_INTERVAL,
+            &Reftable::GEOMETRIC_FACTOR,
+            &Reftable::LOCK_TIMEOUT,
+        ] {
+            assert!(key.validate("0".into()).is_ok(), "{}", key.logical_name());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_lock_timeout_distinguishes_forever_from_not_waiting() -> gix_testtools::TestResult {
+        assert_eq!(Reftable::LOCK_TIMEOUT.try_into_lock_timeout(Ok(None))?, None);
+        assert_eq!(
+            Reftable::LOCK_TIMEOUT.try_into_lock_timeout(Ok(Some(-1)))?,
+            Some(None),
+            "-1 waits for as long as it takes"
+        );
+        assert_eq!(
+            Reftable::LOCK_TIMEOUT.try_into_lock_timeout(Ok(Some(0)))?,
+            Some(Some(Duration::ZERO)),
+            "0 doesn't wait"
+        );
+        assert_eq!(
+            Reftable::LOCK_TIMEOUT.try_into_lock_timeout(Ok(Some(250)))?,
+            Some(Some(Duration::from_millis(250)))
+        );
+        Ok(())
+    }
+}
+
 mod compression {
     use gix::config::tree::Key;
 

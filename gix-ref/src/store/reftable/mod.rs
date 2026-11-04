@@ -12,12 +12,15 @@
 //! found it. Reflog reads look for changes too, whereas Git's iteration of reflogs doesn't, as its processes are short-lived.
 use std::path::{Path, PathBuf};
 
+use gix_error::{ErrorExt, Result};
 use gix_parallel::OwnShared;
 
 use crate::{Namespace, store::WriteReflog};
 
 mod find;
 pub use find::Snapshot;
+/// How stacks are changed: the lock timeout, the flushing, the layout of tables and when to compact them.
+pub use gix_reftable::stack::Options as StackOptions;
 mod iter;
 pub use iter::{Iter, Platform};
 mod log;
@@ -35,6 +38,7 @@ pub struct Store {
     pub(crate) write_reflog: WriteReflog,
     pub(crate) namespace: Option<Namespace>,
     unsupported_backend: Option<String>,
+    stack_options: std::result::Result<StackOptions, OwnShared<gix_error::Error>>,
     stacks: OwnShared<stacks::Stacks>,
 }
 
@@ -84,6 +88,7 @@ impl Store {
             write_reflog: options.write_reflog,
             namespace: None,
             unsupported_backend: None,
+            stack_options: Ok(StackOptions::default()),
             stacks: OwnShared::new(stacks),
         }
     }
@@ -98,7 +103,46 @@ impl Store {
             write_reflog: self.write_reflog,
             namespace: self.namespace.clone(),
             unsupported_backend: self.unsupported_backend.clone(),
+            stack_options: self.stack_options.clone(),
         }
+    }
+}
+
+/// Configuration
+impl Store {
+    /// Change how stacks are changed from now on, which is how tables are laid out, how long to wait for locks, what
+    /// to flush and when to compact. It has no effect on reading.
+    ///
+    /// Options that couldn't be determined, for example because the configuration they come from is invalid, are an
+    /// error that is reported by whatever needs them, which is changing references, and not before. That's what Git does,
+    /// which reads reftable configuration when it writes for the first time and thus can read references with invalid
+    /// settings.
+    pub fn set_stack_options(&mut self, options: Result<StackOptions>) {
+        self.stack_options = options.map_err(OwnShared::new);
+    }
+
+    /// The options with which stacks are changed, or the reason they are invalid, see
+    /// [`set_stack_options()`](Self::set_stack_options()).
+    pub fn stack_options(&self) -> Result<&StackOptions> {
+        self.stack_options.as_ref().map_err(|reason| {
+            InvalidOptions(reason.clone()).and_raise(gix_error::validation("The reftable configuration is invalid"))
+        })
+    }
+}
+
+/// The error that made options invalid, which is shared between all failures that are caused by it.
+#[derive(Debug)]
+struct InvalidOptions(OwnShared<gix_error::Error>);
+
+impl std::fmt::Display for InvalidOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+impl std::error::Error for InvalidOptions {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&*self.0)
     }
 }
 

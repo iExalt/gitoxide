@@ -116,6 +116,11 @@ pub mod protocol;
 pub struct Push;
 pub mod push;
 
+/// The `reftable` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Reftable;
+pub mod reftable;
+
 /// The `remote` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Remote;

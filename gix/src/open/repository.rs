@@ -555,6 +555,13 @@ impl ThreadSafeRepository {
         if let Some(files) = refs.as_file_mut() {
             files.fsync = config.fsync_options()?;
         }
+        // Like Git, only look at `reftable.*` for repositories that use reftables, and report what is invalid
+        // once something is written, so that references can be read.
+        #[cfg(feature = "reftable")]
+        if refs.as_reftable().is_some() {
+            let fsync = config.fsync_options()?;
+            refs.set_reftable_options(config.reftable_options(fsync));
+        }
         refs.set_namespace(config.refs_namespace.clone());
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
