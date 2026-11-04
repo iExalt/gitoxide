@@ -1073,7 +1073,7 @@ Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility
 * [ ] read and write reftable stacks
     * [x] read a stack from `tables.list`, reload it like Git does and share consistent snapshots of it
     * [x] fail closed on missing, damaged or foreign tables instead of reading them as empty
-    * [ ] add tables under the `tables.list` lock
+    * [x] add tables under the `tables.list` lock, with a view that is current once the lock is held, flushed as `core.fsync` asks, shared-repository permissions, and an outcome that says when it is uncertain whether the change was published
 * [ ] transactions and reflogs
 * [ ] compaction and table management
 * [ ] backend selection and migration between `files` and `reftable`

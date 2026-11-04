@@ -215,6 +215,11 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// The range of update indices set with [`set_limits()`](Self::set_limits()).
+    pub fn limits(&self) -> (u64, u64) {
+        (self.min_update_index, self.max_update_index)
+    }
+
     /// Whether no record was added yet, in which case [`finish()`](Self::finish()) produces a table without any content.
     pub fn is_empty(&self) -> bool {
         self.next == 0 && self.block.as_ref().is_none_or(|block| block.entries == 0)

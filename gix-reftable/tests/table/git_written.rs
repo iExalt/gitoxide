@@ -253,6 +253,11 @@ fn rewriting_tables_written_by_git_reproduces_what_git_wrote() -> Result {
                      but the first difference is at {:?}",
                     rewritten.iter().zip(&original).position(|(a, b)| a != b)
                 );
+                assert_eq!(
+                    log_section_offset(&rewritten),
+                    log_offset,
+                    "{object_format} {repo:?} {name}: the footer places the log section where Git's does"
+                );
                 // The deflated log blocks are the same when Git is linked against the zlib that `gix-zlib` imitates, which is
                 // the case for the Git we test with, but not for every Git. Their content is the same regardless.
                 let reread = gix_reftable::Table::from_block_source(

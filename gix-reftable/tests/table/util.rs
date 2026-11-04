@@ -219,3 +219,15 @@ pub fn write_table(
     }
     Ok(writer.finish()?)
 }
+
+/// Assert that Git considers the repository intact.
+pub fn assert_healthy(repo: &Path, what: &str) {
+    let mut verify = gix_testtools::git_command(repo);
+    let output = verify.args(["refs", "verify", "--strict"]).output().expect("git runs");
+    assert!(
+        output.status.success(),
+        "{what}: git refs verify --strict: {}",
+        output.stderr.as_bstr()
+    );
+    git(repo, &["fsck"]).unwrap_or_else(|err| panic!("{what}: fsck: {err}"));
+}
