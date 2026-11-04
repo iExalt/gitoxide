@@ -57,6 +57,45 @@ impl std::fmt::Display for ShallowSource {
 
 impl std::error::Error for ShallowSource {}
 
+#[cfg(feature = "hook")]
+fn run_pre_push_hook(repo: &Repository, pre_push: &PrePush<'_>) -> Result<()> {
+    use gix_hook::Stdin;
+    let mut hook = repo.hook("pre-push")?;
+    // Git sets it for programs that it runs from a worktree: empty at the top level, else the way down with a slash.
+    if repo.workdir().is_some() {
+        let mut prefix = repo
+            .prefix()
+            .ok()
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        hook = hook.env("GIT_PREFIX", prefix);
+    }
+    let outcome = hook
+        .arg(
+            crate::path::from_bstr(pre_push.remote_name)?
+                .into_owned()
+                .into_os_string(),
+        )
+        .arg(
+            crate::path::from_bstr(pre_push.remote_url)?
+                .into_owned()
+                .into_os_string(),
+        )
+        .stdin(Stdin::Bytes(pre_push.stdin().into()))
+        .run()
+        .or_raise(|| message("Could not run the `pre-push` hook"))?;
+    if let Some(path) = &outcome.not_executable
+        && let Some(advice) = repo.hook_advice(path)
+    {
+        eprintln!("{advice}");
+    }
+    outcome.into_veto()
+}
+
 /// What a `pre-push` hook gets to see, as Git passes it: the name and URL of the remote as arguments, and one line per update on standard input.
 #[derive(Debug)]
 pub struct PrePush<'a> {
@@ -118,6 +157,8 @@ where
     pub(crate) options: Options,
     pub(crate) trace: bool,
     pub(crate) before_send: Option<BeforeSend<'cb>>,
+    #[cfg_attr(not(feature = "hook"), allow(dead_code))]
+    pub(crate) pre_push_hook: bool,
     pub(crate) on_remote_message: Option<RemoteMessages<'cb>>,
 }
 
@@ -142,6 +183,22 @@ where
     /// its error is returned from [`send()`](Self::send()), and nothing was sent.
     pub fn with_before_send(mut self, check: impl FnOnce(&PrePush<'_>) -> Result<()> + 'cb) -> Self {
         self.before_send = Some(Box::new(check));
+        self
+    }
+
+    /// Run the `pre-push` hooks of the repository once everything is ready to be sent but before anything is, as `git push` does,
+    /// and refuse to send if one of them fails. Not calling this is what `git push --no-verify` does.
+    ///
+    /// The hooks are those of [`Repository::hook()`] for `pre-push`: they get the name of the remote, or its URL if it has none,
+    /// and the URL as arguments, [one line per update](PrePush::stdin()) on standard input, and run in the top-level directory
+    /// of the worktree with their standard output sent to standard error. No hook is fine. A repository that isn't owned by
+    /// the current user can't run hooks, which is an error that refuses the push. Updates that are up to date or refused
+    /// aren't passed to the hooks, but the hooks run, with nothing on standard input, if no update is left to send, like in Git.
+    ///
+    /// A [check](Self::with_before_send()) runs after the hooks.
+    #[cfg(feature = "hook")]
+    pub fn with_pre_push_hook(mut self) -> Self {
+        self.pre_push_hook = true;
         self
     }
 
@@ -172,6 +229,12 @@ where
         }
         let to_send: Vec<&Entry> = self.plan.to_send().collect();
         if to_send.is_empty() {
+            // Git runs the hook even if everything is up to date, with nothing on its standard input.
+            #[cfg(feature = "hook")]
+            if self.pre_push_hook {
+                run_pre_push_hook(repo, &self.pre_push(&to_send))
+                    .or_raise(|| message("The `pre-push` hook refused the push, so nothing was sent"))?;
+            }
             return Ok(self.finish(None, false));
         }
         if should_interrupt.load(std::sync::atomic::Ordering::SeqCst) {
@@ -213,31 +276,18 @@ where
             },
         )?;
 
-        if let Some(check) = self.before_send.take() {
-            let pre_push = PrePush {
-                remote_name: self.remote_name.as_ref(),
-                remote_url: self.remote_url.as_ref(),
-                entries: to_send
-                    .iter()
-                    .map(|entry| PrePushEntry {
-                        local_ref: match entry.update.new {
-                            Some(new) => entry
-                                .update
-                                .local_name
-                                .clone()
-                                .unwrap_or_else(|| new.to_string().into()),
-                            None => "(delete)".into(),
-                        },
-                        local_id: entry.update.new.unwrap_or(null),
-                        remote_ref: entry.update.name.as_bstr().to_owned(),
-                        remote_id: match entry.update.lease {
-                            Lease::At(id) => id,
-                            Lease::Absent => null,
-                        },
-                    })
-                    .collect(),
-            };
-            check(&pre_push).or_raise(|| message("The check before sending the push failed, so nothing was sent"))?;
+        let check = self.before_send.take();
+        if self.pre_push_hook || check.is_some() {
+            let pre_push = self.pre_push(&to_send);
+            #[cfg(feature = "hook")]
+            if self.pre_push_hook {
+                run_pre_push_hook(repo, &pre_push)
+                    .or_raise(|| message("The `pre-push` hook refused the push, so nothing was sent"))?;
+            }
+            if let Some(check) = check {
+                check(&pre_push)
+                    .or_raise(|| message("The check before sending the push failed, so nothing was sent"))?;
+            }
         }
 
         let pack = if request.expects_pack() {
@@ -334,6 +384,34 @@ where
                 Ok(self.finish(Some(Err(err)), server_finished))
             }
             Err(err) => Err(err.and_raise(message("The push failed before it could have changed the remote"))),
+        }
+    }
+
+    /// What the hook and the check before sending get to see.
+    fn pre_push(&self, to_send: &[&Entry]) -> PrePush<'_> {
+        let null = self.repo.object_hash().null();
+        PrePush {
+            remote_name: self.remote_name.as_ref(),
+            remote_url: self.remote_url.as_ref(),
+            entries: to_send
+                .iter()
+                .map(|entry| PrePushEntry {
+                    local_ref: match entry.update.new {
+                        Some(new) => entry
+                            .update
+                            .local_name
+                            .clone()
+                            .unwrap_or_else(|| new.to_string().into()),
+                        None => "(delete)".into(),
+                    },
+                    local_id: entry.update.new.unwrap_or(null),
+                    remote_ref: entry.update.name.as_bstr().to_owned(),
+                    remote_id: match entry.update.lease {
+                        Lease::At(id) => id,
+                        Lease::Absent => null,
+                    },
+                })
+                .collect(),
         }
     }
 
