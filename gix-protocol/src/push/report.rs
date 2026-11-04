@@ -115,7 +115,7 @@ pub(super) fn parse<'a>(request: &Request, lines: impl IntoIterator<Item = &'a [
     let mut lines = lines.into_iter().map(strip_newline);
     let unpack = {
         let line = lines.next().ok_or_else(|| {
-            corruption("The status report was empty: it must start with the unpack status").corrupted_error()
+            corruption("The status report was empty, so the outcome of the push is unknown").corrupted_error()
         })?;
         match line.strip_prefix(b"unpack ") {
             Some(status) if status == b"ok" => Unpack::Ok,
