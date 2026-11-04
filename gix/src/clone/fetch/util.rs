@@ -34,10 +34,8 @@ pub fn append_remote_to_local_config_file(
 /// and reload the repository handle.
 ///
 /// This relies on the initial reference database not having persisted any hash-format-dependent
-/// state. That is true for the current file-based ref store, but a future reftable backend must
-/// not be initialized with the wrong hash and then reused. If clone learns the remote hash only
-/// after repository creation, initialize a non-reftable reference database first, then convert it
-/// to reftable once the remote hash is known.
+/// state. That is true for the file-based ref store, and for reftables as no stack of tables is created before
+/// the remote's hash is known, see [`crate::init::create_reference_database()`].
 ///
 /// Existing local configuration, including the remote section written during clone setup,
 /// is preserved. Only local sections are written back to `.git/config`,
@@ -55,15 +53,24 @@ pub(super) fn reinitialize_with_object_hash(repo: &mut crate::Repository, object
     // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
     // `repositoryformatversion = 1` along with the `objectformat` extension.
     let is_sha256 = object_hash == gix_hash::Kind::Sha256;
+    // References that are stored as reftables need an extension, and thus version 1, regardless of the object format.
+    let has_ref_storage = config.string("extensions.refstorage").is_some();
     config
         .section_mut("core", None)
         .expect("freshly initialized repository has a core section")
-        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })?;
+        .set(
+            "repositoryformatversion",
+            if is_sha256 || has_ref_storage { "1" } else { "0" },
+        )?;
     if is_sha256 {
         config
             .section_mut_or_create_new("extensions", None)
             .expect("valid section name")
             .set("objectformat", object_hash.to_string())?;
+    } else if has_ref_storage {
+        if let Ok(mut extensions) = config.section_mut("extensions", None) {
+            extensions.remove("objectformat");
+        }
     } else {
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);

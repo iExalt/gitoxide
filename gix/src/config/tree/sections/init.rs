@@ -15,10 +15,11 @@ impl Init {
             .with_deviation("Invalid values are an error, whereas `git` only warns about invalid configuration");
     /// The `init.defaultRefFormat` key.
     ///
-    /// Only `files` is supported, so that requesting `reftable` is refused when creating a repository.
-    pub const DEFAULT_REF_FORMAT: keys::Any = keys::Any::new("defaultRefFormat", &config::Tree::INIT)
-        .with_environment_override("GIT_DEFAULT_REF_FORMAT")
-        .with_deviation("Invalid values are an error, whereas `git` only warns about invalid configuration");
+    /// `files` and, with the `reftable` feature, `reftable` can be created. Like in Git, a name that is none of them is ignored
+    /// if it is configured, and an error if it is passed explicitly or comes from `GIT_DEFAULT_REF_FORMAT`.
+    /// Unlike Git, which warns, we only trace that it is ignored.
+    pub const DEFAULT_REF_FORMAT: keys::Any =
+        keys::Any::new("defaultRefFormat", &config::Tree::INIT).with_environment_override("GIT_DEFAULT_REF_FORMAT");
 }
 
 impl Section for Init {
