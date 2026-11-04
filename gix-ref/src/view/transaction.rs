@@ -9,12 +9,16 @@ pub use crate::file::transaction::PackedRefs;
 /// The errors that recoverable transaction failures are identified by, which every kind of storage raises for the
 /// same failure so that callers can recover without knowing how references are stored.
 ///
-/// [`ReferenceOutOfDate`] and [`MustNotExist`] identify a failed constraint of an edit, and [`MissingCommitter`] a reflog
-/// entry that had to be written without an identity. Find them by downcasting the error of
+/// [`ReferenceOutOfDate`] and [`MustNotExist`] identify a failed constraint of an edit, [`NameConflict`] a name that
+/// would be the directory of another reference, and [`MissingCommitter`] a reflog entry that had to be written without
+/// an identity. Find them by downcasting the error of
 /// [`Transaction::prepare()`] or [`Prepared::commit()`].
-pub use crate::file::{
-    log::create_or_update::MissingCommitter,
-    transaction::prepare::{MustNotExist, ReferenceOutOfDate},
+pub use crate::{
+    file::{
+        log::create_or_update::MissingCommitter,
+        transaction::prepare::{MustNotExist, ReferenceOutOfDate},
+    },
+    transaction::NameConflict,
 };
 
 /// Options for obtaining the locks a transaction needs, which are different for each kind of storage.

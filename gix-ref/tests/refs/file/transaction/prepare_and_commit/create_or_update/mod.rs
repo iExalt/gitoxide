@@ -150,8 +150,6 @@ fn rollback_preserves_resolved_reference_roots() -> TestResult {
 
 #[test]
 fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_can_potentially_recover() -> TestResult {
-    #[cfg(not(windows))]
-    let mut error_snapshots = Vec::new();
     for is_empty in &[true, false] {
         let (dir, store) = empty_store()?;
         let head_dir = dir.path().join("HEAD");
@@ -161,47 +159,40 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
         }
 
         let mut buf = TimeBuf::default();
-        let edits = store
-            .transaction()
-            .prepare(
-                Some(RefEdit::update(
-                    "HEAD".try_into()?,
-                    Target::Symbolic("refs/heads/main".try_into().unwrap()),
-                    PreviousValue::MustNotExist,
-                    "",
-                )),
-                Fail::Immediately,
-                Fail::Immediately,
-            )?
-            .commit(committer().to_ref(&mut buf));
+        let prepared = store.transaction().prepare(
+            Some(RefEdit::update(
+                "HEAD".try_into()?,
+                Target::Symbolic("refs/heads/main".try_into().unwrap()),
+                PreviousValue::MustNotExist,
+                "",
+            )),
+            Fail::Immediately,
+            Fail::Immediately,
+        );
         if *is_empty {
-            let edits = edits?;
+            let edits = prepared?.commit(committer().to_ref(&mut buf))?;
             assert!(
                 store.try_find_loose(edits[0].name.as_ref())?.is_some(),
                 "HEAD was created despite a directory being in the way"
             );
         } else {
-            let err = edits.expect_err("the directory is not empty");
+            let err = prepared
+                .map(|_| ())
+                .expect_err("the directory is not empty, which is known before anything is locked in place");
             assert_eq!(
                 err.metadata().next().expect("failed reference")["reference"],
                 gix_error::MetadataValue::from(b"HEAD".as_slice())
             );
-            #[cfg(not(windows))]
-            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+            let conflict = err
+                .downcast_any_ref::<gix_ref::transaction::NameConflict>()
+                .expect("a file below the name makes it a directory, like Git sees it");
+            assert_eq!(conflict.other, "HEAD/file.ext");
+            assert!(
+                head_dir.join("file.ext").is_file(),
+                "nothing was removed when the transaction was refused"
+            );
         }
     }
-    #[cfg(not(windows))]
-    insta::assert_debug_snapshot!(error_snapshots, "reference with equally named empty or non empty directory already in place can potentially recover", @r#"
-    [
-        The transaction failed while committing, and may have been applied in part
-        
-        Caused by:
-            0: Could not commit reference, reference="HEAD"
-            1: I/O error (Other)
-            2: I/O error (Other)
-            3: Directory not empty,
-    ]
-    "#);
     Ok(())
 }
 
