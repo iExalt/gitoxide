@@ -61,6 +61,52 @@ where
     }
 }
 
+impl<T> Connection<'_, '_, '_, T>
+where
+    T: Transport,
+{
+    /// Look at what the remote has for each update of `outcome` that [was sent](push::OutcomeEntry::was_sent()), and compare it with
+    /// what the update expected and wanted. Use this when the outcome is [uncertain](push::Outcome::is_uncertain()), before
+    /// retrying or recording anything as done or failed.
+    ///
+    /// It reads the references that `receive-pack` advertises, not those of `upload-pack`, as the two can hide different ones, and
+    /// it sends no command. The server of the push has finished or was stopped before [`Prepare::send()`](push::Prepare::send())
+    /// returned, so what is observed is final, except for what other writers do.
+    ///
+    /// Observations are not verdicts. Only [`Observed::AtNew`](push::Observed::AtNew) shows that an update happened, so it is the
+    /// only one that permits to remove a marker that says it is pending. [`Observed::AtLease`](push::Observed::AtLease) permits
+    /// another attempt, which must keep the original lease and is checked against the advertisement again by
+    /// [`prepare_push()`](Self::prepare_push()), but can't tell an update that wasn't applied from one that was applied and reverted.
+    pub fn reconcile(self, mut progress: impl Progress, outcome: &push::Outcome) -> Result<push::Reconciliation> {
+        let repo = self.remote.repo;
+        let mut connection = self.into_detached();
+        let handshake =
+            connection.handshake_with(repo, gix_transport::Service::ReceivePack, Vec::new(), &mut progress)?;
+        let advertisement = Advertisement::from_refs(handshake.refs.as_deref().unwrap_or_default());
+        // Nothing is going to be sent, which `receive-pack` is told with a flush, and its end is awaited so it doesn't linger.
+        connection.transport.indicate_end_of_interaction().ok();
+        connection
+            .transport
+            .inner
+            .wait_for_server(std::time::Duration::from_secs(10))
+            .ok();
+        Ok(push::Reconciliation {
+            observations: outcome
+                .entries
+                .iter()
+                .filter(|entry| entry.was_sent())
+                .map(|entry| push::Observation {
+                    update: entry.update.clone(),
+                    observed: push::Observed::of(
+                        &entry.update,
+                        advertisement.refs.get(entry.update.name().as_bstr()).copied(),
+                    ),
+                })
+                .collect(),
+        })
+    }
+}
+
 /// Check what can be checked without talking to the remote.
 fn validate(repo: &Repository, updates: &[Update]) -> Result<()> {
     if updates.is_empty() {

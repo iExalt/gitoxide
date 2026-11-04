@@ -10,8 +10,11 @@
 //! 3. Look at the [`Plan`] if needed, optionally register a [`pre-push`](Prepare::with_before_send()) check, and
 //!    [`send()`](Prepare::send()) what the plan allows.
 //! 4. Inspect the [`Outcome`]. An error is only returned if nothing was sent. Once the request left, the result is
-//!    an [`Outcome`], which says whether the outcome is [uncertain](Outcome::is_uncertain()) and has to be reconciled
-//!    with the remote before retrying or recording anything as done.
+//!    an [`Outcome`], which says whether the outcome is [uncertain](Outcome::is_uncertain()).
+//! 5. [Reconcile](crate::remote::Connection::reconcile()) an uncertain outcome with what the remote has, before retrying or
+//!    recording anything as done. The result is an [`Observed`] value per update and not a verdict: only
+//!    [`AtNew`](Observed::AtNew) shows that an update happened, and a retry keeps its original lease, which is checked
+//!    against the advertisement again, so it can't overwrite what somebody else wrote in the meantime.
 //!
 //! ## Leases
 //!
@@ -38,7 +41,9 @@ pub(crate) use plan::{Advertisement, evaluate};
 pub use plan::{Decision, Entry, Plan, Refusal};
 
 mod outcome;
-pub use outcome::{Entry as OutcomeEntry, Outcome, ServerUpdate, Status, Unpack};
+pub use outcome::{
+    Entry as OutcomeEntry, Observation, Observed, Outcome, Reconciliation, ServerUpdate, Status, Unpack,
+};
 
 mod prepare;
 pub use prepare::{Options, PrePush, PrePushEntry, Prepare, ShallowSource};
