@@ -68,6 +68,7 @@ mod equality;
 mod error;
 mod file;
 mod fullname;
+mod reflog_names;
 #[cfg(feature = "reftable")]
 mod reftable;
 mod view;
