@@ -51,6 +51,7 @@ mod init {
             object_hash: gix_hash::Kind,
             crate::store::init::Options {
                 write_reflog,
+                fsync,
                 precompose_unicode,
                 prohibit_windows_device_names,
             }: crate::store::init::Options,
@@ -60,6 +61,7 @@ mod init {
                 packed_buffer_mmap_threshold: packed_refs_mmap_threshold(),
                 common_dir: None,
                 write_reflog,
+                fsync,
                 namespace: None,
                 prohibit_windows_device_names,
                 packed: gix_fs::SharedFileSnapshotMut::new().into(),
@@ -90,6 +92,7 @@ mod init {
             object_hash: gix_hash::Kind,
             crate::store::init::Options {
                 write_reflog,
+                fsync,
                 precompose_unicode,
                 prohibit_windows_device_names,
             }: crate::store::init::Options,
@@ -99,6 +102,7 @@ mod init {
                 packed_buffer_mmap_threshold: packed_refs_mmap_threshold(),
                 common_dir: Some(common_dir),
                 write_reflog,
+                fsync,
                 namespace: None,
                 prohibit_windows_device_names,
                 packed: gix_fs::SharedFileSnapshotMut::new().into(),

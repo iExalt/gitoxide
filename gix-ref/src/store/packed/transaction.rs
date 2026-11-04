@@ -17,8 +17,11 @@ impl packed::Transaction {
         lock: gix_lock::File,
         precompose_unicode: bool,
         namespace: Option<Namespace>,
+        fsync: gix_fs::fsync::Options,
     ) -> Self {
         packed::Transaction {
+            fsync,
+            num_written_lines: 0,
             buffer,
             edits: None,
             lock: Some(lock),
@@ -135,22 +138,40 @@ impl packed::Transaction {
             // NOTE that we don't do any additional checks here but apply all edits unconditionally.
             // This is because this transaction system is internal and will be used correctly from the
             // loose ref store transactions, which do the necessary checking.
+            self.write_new_file(&mut edits)?;
         }
         self.edits = Some(edits);
         Ok(self)
     }
 
-    /// Commit the prepared transaction.
+    /// Commit the prepared transaction by moving the file written while preparing into place.
     ///
     /// Please note that actual edits invalidated existing packed buffers.
-    /// Note: There is the potential to write changes into memory and return such a packed-refs buffer for reuse.
     pub fn commit(self) -> Result {
-        let mut edits = self.edits.expect("BUG: cannot call commit() before prepare(…)");
+        let edits = self.edits.expect("BUG: cannot call commit() before prepare(…)");
         if edits.is_empty() {
             return Ok(());
         }
 
-        let mut file = self.lock.expect("a write lock for applying changes");
+        let file = self.lock.expect("a write lock for applying changes");
+        if self.num_written_lines == 0 {
+            std::fs::remove_file(file.resource_path()).or_raise(|| message("Could not delete empty packed refs"))?;
+        } else {
+            file.commit().or_raise(|| message("Could not commit packed refs"))?;
+        }
+        Ok(())
+    }
+}
+
+impl packed::Transaction {
+    /// Write the new content of `packed-refs`, the current buffer with `edits` applied, into the lock file and flush it
+    /// if configured, which is the last thing that can fail before the file is moved into place.
+    /// Git does the same while preparing, so a failure to write or flush is one that has changed nothing.
+    fn write_new_file(&mut self, edits: &mut [Edit]) -> Result {
+        let fsync = self.fsync;
+        let mut file = self.lock.as_mut().expect("a write lock for applying changes");
+        let file = &mut file;
+        edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
         let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>>>> = match self.buffer.as_ref() {
             Some(buffer) => Box::new(buffer.iter()?),
             None => Box::new(std::iter::empty()),
@@ -158,7 +179,6 @@ impl packed::Transaction {
 
         let mut refs_sorted = refs_sorted.peekable();
 
-        edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
         let mut peekable_sorted_edits = edits.iter().peekable();
 
         file.with_mut(|f| f.write_all(HEADER_LINE))
@@ -210,12 +230,12 @@ impl packed::Transaction {
             }
         }
 
-        if num_written_lines == 0 {
-            std::fs::remove_file(file.resource_path()).or_raise(|| message("Could not delete empty packed refs"))?;
-        } else {
-            file.commit().or_raise(|| message("Could not commit packed refs"))?;
-        }
         drop(refs_sorted);
+        if num_written_lines > 0 {
+            file.with_mut(|f| fsync.flush(f, gix_fs::fsync::Components::REFERENCE))
+                .or_raise(|| message("Could not flush packed refs"))?;
+        }
+        self.num_written_lines = num_written_lines;
         Ok(())
     }
 }
@@ -267,9 +287,12 @@ pub(crate) fn buffer_into_transaction(
     lock_mode: gix_lock::acquire::Fail,
     precompose_unicode: bool,
     namespace: Option<Namespace>,
+    fsync: gix_fs::fsync::Options,
 ) -> Result<packed::Transaction> {
     let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None, 0)?;
     Ok(packed::Transaction {
+        fsync,
+        num_written_lines: 0,
         buffer: Some(buffer),
         lock: Some(lock),
         closed_lock: None,

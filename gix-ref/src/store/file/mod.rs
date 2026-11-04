@@ -22,6 +22,13 @@ pub struct Store {
 
     /// The way to handle reflog edits
     pub write_reflog: WriteReflog,
+    /// What to flush to disk, and how, which defaults to what Git does.
+    ///
+    /// Only the values of loose references and `packed-refs` are flushed, if [`REFERENCE`](gix_fs::fsync::Components::REFERENCE) is
+    /// selected, and that happens while preparing a transaction, before any reference is changed. So a transaction
+    /// which fails to flush doesn't change anything. Symbolic references and reflogs aren't flushed, nor are directories,
+    /// like in Git.
+    pub fsync: gix_fs::fsync::Options,
     /// The namespace to use for edits and reads
     pub namespace: Option<Namespace>,
     /// This is only needed on Windows, where some device names are reserved at any level of a path, so that

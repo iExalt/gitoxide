@@ -25,7 +25,7 @@ Only Linux on ext4 was observed. Statements marked *(source)* come from reading 
 
 - A ref update writes the new value into `<ref>.lock`, flushes that file **only if** `core.fsync` selects `reference`,
   appends the reflog entry, and then renames the lock file. Reflogs are never flushed, and no directory is ever
-  flushed. Flushing happens while the transaction is *prepared*, so a failed flush would leave every ref unchanged *(source: `refs/files-backend.c:2069` reached from `:2867`, `refs/packed-backend.c:1570` from `:1744`; no flush failure was injected)*.
+  flushed. Symbolic references that `git symbolic-ref` writes are not flushed either, unlike `update-ref --no-deref`. Flushing happens while the transaction is *prepared*, so a failed flush would leave every ref unchanged *(source: `refs/files-backend.c:2069` reached from `:2867`, `refs/packed-backend.c:1570` from `:1744`; no flush failure was injected)*.
 - `packed-refs.new` is flushed under the same condition, before its rename. For reftable repositories the new table
   and `tables.list.lock` are flushed under that condition as well.
 - `core.fsyncMethod=writeout-only` turns each flush into `sync_file_range()` on Linux, and `batch` still flushes
@@ -87,12 +87,18 @@ value still appends an entry to the `HEAD` reflog, but none to the branch's refl
 
 ## The fork's files store (P7)
 
-Run with the same triggers, between `prepare()` and `commit()`. It matches Git for the first four rows above, and
-deviates in three ways:
+Run with the same triggers, between `prepare()` and `commit()`, before the changes described below. It matched Git for
+the first four rows of the failure table, and deviated in three ways, which are now closed:
 
-- **Flushes**: it flushes nothing.
-- **Reflog deletion**: a reflog that cannot be deleted aborts the commit and leaves the ref in place, where Git
-  deletes the ref.
-- **Missing committer**: it fails after creating an empty reflog file, where Git succeeds with a derived identity.
-  The fork will keep failing, because deriving an identity from the system is an environment dependency that it
-  deliberately does not copy, but it will fail before it writes anything.
+| Deviation | Now |
+| --- | --- |
+| Nothing was flushed | `gix_ref::file::Store::fsync` selects what is flushed. The value of a loose reference and the new `packed-refs` file are flushed while *preparing*, if `reference` is selected, as in Git. Reflogs are not flushed. |
+| A reflog that could not be deleted aborted the commit and left the reference in place | The reference is deleted and the reflog remains, like Git. Only deleting nothing but the reflog still fails. |
+| A missing committer failed after creating an empty reflog file | It fails before anything is written, with the marker `NothingApplied`. Git succeeds with an identity derived from the system, which the fork deliberately does not copy. |
+
+The fork also wrote the whole `packed-refs` file after the loose files were renamed, where Git writes and flushes it
+while preparing. It does the same as Git now. Failures of `commit()` carry a marker, `NothingApplied` or `Uncertain`, with
+how far each edit got, which Git can't tell its caller. The tests that follow are in
+`gix-ref/tests/refs/file/transaction/prepare_and_commit/commit_failure.rs`. Two differences remain by design. Git derives
+an identity when the committer is missing. And updating the branch `HEAD` points at without changing it still appends to
+the `HEAD` reflog in Git, which the fork doesn't do.

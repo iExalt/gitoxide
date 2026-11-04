@@ -132,7 +132,7 @@ pub mod create_or_update {
         path::{Path, PathBuf},
     };
 
-    use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt};
+    use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt, bail};
     use gix_hash::{ObjectId, oid};
     use gix_object::bstr::BStr;
 
@@ -151,6 +151,10 @@ pub mod create_or_update {
             message: &BStr,
             mut force_create_reflog: bool,
         ) -> Result {
+            if committer.is_none() && self.reflog_append_planned(name, force_create_reflog)? {
+                // Fail before a reflog file is created or changed.
+                bail!(MissingCommitter);
+            }
             let (reflog_base, full_name) = self.reflog_base_and_relative_path(name)?;
             match self.write_reflog {
                 WriteReflog::Normal | WriteReflog::Always => {
@@ -205,6 +209,21 @@ pub mod create_or_update {
                 }
                 WriteReflog::Disable => Ok(()),
             }
+        }
+
+        /// Return `true` if [`reflog_create_or_append()`](Self::reflog_create_or_append()) is going to append to the reflog
+        /// of `name`, which is the case if it exists or is to be created.
+        pub(crate) fn reflog_append_planned(&self, name: &FullNameRef, mut force_create_reflog: bool) -> Result<bool> {
+            let (reflog_base, full_name) = self.reflog_base_and_relative_path(name)?;
+            Ok(match self.write_reflog {
+                WriteReflog::Disable => false,
+                WriteReflog::Normal | WriteReflog::Always => {
+                    force_create_reflog |= self.write_reflog == WriteReflog::Always;
+                    force_create_reflog
+                        || self.should_autocreate_reflog(&full_name)
+                        || reflog_base.join(&full_name).is_file()
+                }
+            })
         }
 
         fn should_autocreate_reflog(&self, full_name: &Path) -> bool {

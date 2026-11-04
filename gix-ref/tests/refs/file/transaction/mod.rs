@@ -70,5 +70,7 @@ pub(crate) mod prepare_and_commit {
 
     mod create_or_update;
 
+    mod commit_failure;
+
     mod delete;
 }

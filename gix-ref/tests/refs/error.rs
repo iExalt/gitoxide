@@ -494,10 +494,11 @@ fn invalid_reflog_input_is_classified() -> gix_testtools::TestResult {
             kind: Other,
             error: Messages must not contain newlines (\n),
         },
-        Could not update reflog, reference="refs/heads/new"
+        The transaction failed before it changed anything
         
         Caused by:
-            0: reflog messages need a committer which isn't set,
+            0: Could not update reflog, reference="refs/heads/new"
+            1: reflog messages need a committer which isn't set,
     ]
     "#);
     Ok(())

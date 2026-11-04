@@ -123,6 +123,7 @@ fn write_refs(
             },
             precompose_unicode,
             prohibit_windows_device_names: cfg!(windows),
+            ..Default::default()
         },
     );
     let edits = refs
