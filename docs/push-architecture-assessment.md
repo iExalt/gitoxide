@@ -543,6 +543,21 @@ and are labelled where they are searches.
 | Clone ordering | The clone path notes that a reftable store must not be initialized before the remote hash is known (`gix/src/clone/fetch/util.rs:30-41`) | Init order constraint for SHA-256 reftable clones |
 | Upstream port | See 4.2 | Codecs only; stack layer would need rewriting |
 
+**Probe P12 result (ran 2026-11-04, fork `dev` at `fb71d5805`, Git 2.56.0).** Opening the reftable fixture
+of `gix/tests/fixtures/make_reftable_repo.sh` with `gix` and using its public API confirmed the inference
+above, and found that reads were wrong as well:
+
+- `Repository::try_find_reference()` returned `Ok(None)` for `refs/heads/main` and `refs/remotes/origin/main`,
+  which `git for-each-ref` lists. `references().all()` yielded a single item.
+- `Repository::reference("refs/tags/…")` succeeded and wrote a loose file that `git for-each-ref` and `git fsck`
+  don't see. A write below `refs/heads/` failed, as `refs/heads` is a stub file there, and a write below
+  `refs/notes/` failed after leaving a reflog file behind.
+- Independently, a loose `refs/tags/ghost` written into a reftable repository is invisible to `git show-ref` and
+  `git rev-parse` (ran by the thread's reviewer).
+
+The interim refusal of decision 7, option (c), closes both cases: see the guard in `gix_ref::file::Store`
+(`set_unsupported_backend()`), set by `gix` when opening a repository.
+
 ### 4.2 The unmerged upstream `gix-reftable` port
 
 A single library commit `94793bb6fb932212ce763dc5e531051911f86386` on the upstream branch
