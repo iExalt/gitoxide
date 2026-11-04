@@ -53,6 +53,8 @@ pub mod signature;
 /// Capture complete, stable repository state for integration-test assertions.
 pub mod repository;
 
+pub mod strace;
+
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 const BASH_FIXTURE_PRELUDE: &str = include_str!("scripted_fixture_prelude.sh");
 
