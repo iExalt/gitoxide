@@ -140,12 +140,7 @@ pub fn serve_and_connect(
     version: Protocol,
 ) -> Result<(Server, http::Transport<Remote>), crate::Error> {
     let server = serve_once(name);
-    let url_str = format!(
-        "http://{}:{}/{}",
-        &server.addr.ip().to_string(),
-        &server.addr.port(),
-        path
-    );
+    let url_str = format!("http://{}:{}/{}", server.addr.ip(), server.addr.port(), path);
     let client =
         gix_transport::client::blocking_io::http::connect::<Remote>(url_str.as_str().try_into()?, version, false);
     assert_eq!(url_str, client.to_url().as_ref());

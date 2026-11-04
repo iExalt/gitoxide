@@ -289,7 +289,7 @@ fn http_will_use_pipelining() {
         }
     });
 
-    let url = format!("http://{}:{}/reponame", &addr.ip().to_string(), &addr.port());
+    let url = format!("http://{}:{}/reponame", addr.ip(), addr.port());
     let mut client = gix_transport::client::blocking_io::http::connect::<Remote>(
         url.try_into().expect("valid url"),
         gix_transport::Protocol::V2,
