@@ -20,15 +20,51 @@ pub mod pipe {
     pub struct Reader {
         channel: std::sync::mpsc::Receiver<io::Result<BytesMut>>,
         buf: BytesMut,
+        interrupt: Option<Interrupt>,
+    }
+
+    /// A flag that is checked while waiting for data, and the error to fail with once it is set.
+    type Interrupt = (std::sync::Arc<std::sync::atomic::AtomicBool>, fn() -> io::Error);
+
+    impl Reader {
+        /// Make reads that wait for data fail with the error that `error` creates as soon as `flag` is set, which it is
+        /// checked for every 25 ms of waiting, and keep failing.
+        ///
+        /// This lets another thread end a read that blocks on a writer that doesn't write.
+        pub fn fail_when_set(
+            mut self,
+            flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            error: fn() -> io::Error,
+        ) -> Self {
+            self.interrupt = Some((flag, error));
+            self
+        }
+
+        /// Wait for the next item, or return `None` if the writer is gone.
+        fn next_item(&self) -> Option<io::Result<BytesMut>> {
+            let Some((flag, error)) = &self.interrupt else {
+                return self.channel.recv().ok();
+            };
+            loop {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Some(Err(error()));
+                }
+                match self.channel.recv_timeout(std::time::Duration::from_millis(25)) {
+                    Ok(item) => return Some(item),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+                }
+            }
+        }
     }
 
     impl io::BufRead for Reader {
         fn fill_buf(&mut self) -> io::Result<&[u8]> {
             if self.buf.is_empty() {
-                match self.channel.recv() {
-                    Ok(Ok(buf)) => self.buf = buf,
-                    Ok(Err(err)) => return Err(err),
-                    Err(_) => {}
+                match self.next_item() {
+                    Some(Ok(buf)) => self.buf = buf,
+                    Some(Err(err)) => return Err(err),
+                    None => {}
                 }
             }
             Ok(&self.buf)
@@ -44,10 +80,10 @@ pub mod pipe {
             let mut written = 0;
             while !out.is_empty() {
                 if self.buf.is_empty() {
-                    match self.channel.recv() {
-                        Ok(Ok(buf)) => self.buf = buf,
-                        Ok(Err(err)) => return Err(err),
-                        Err(_) => break,
+                    match self.next_item() {
+                        Some(Ok(buf)) => self.buf = buf,
+                        Some(Err(err)) => return Err(err),
+                        None => break,
                     }
                 }
                 let bytes_to_write = self.buf.len().min(out.len());
@@ -88,6 +124,7 @@ pub mod pipe {
             Reader {
                 channel: rx,
                 buf: BytesMut::new(),
+                interrupt: None,
             },
         )
     }
