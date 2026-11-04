@@ -90,6 +90,64 @@ impl ProxyCredentials {
     }
 }
 
+/// Apply the CA bundle, the verification and the protocol versions that were configured, which `curl` takes in the same way:
+/// a CA bundle replaces the certificates that are trusted otherwise, and no verification also accepts any host name.
+#[cfg(any(
+    feature = "http-client-reqwest-rust-tls",
+    feature = "http-client-reqwest-rust-tls-trust-dns",
+    feature = "http-client-reqwest-native-tls"
+))]
+fn configure_tls(mut builder: reqwest::ClientBuilder, config: &http::Options) -> Result<reqwest::ClientBuilder> {
+    use http::options::SslVersion;
+    if let Some(path) = &config.ssl_ca_info {
+        let pem = std::fs::read(path).or_raise(|| message!("Could not read the CA bundle at {}", path.display()))?;
+        let certificates = reqwest::Certificate::from_pem_bundle(&pem)
+            .map_err(classify_reqwest)
+            .or_raise(|| message!("The CA bundle at {} is not valid", path.display()))?;
+        builder = builder.tls_certs_only(certificates);
+    }
+    if !config.ssl_verify {
+        builder = builder
+            .tls_danger_accept_invalid_certs(true)
+            .tls_danger_accept_invalid_hostnames(true);
+    }
+    if let Some(versions) = config.ssl_version {
+        let (min, max) = versions.min_max();
+        let convert = |version: SslVersion| -> Result<Option<reqwest::tls::Version>> {
+            Ok(Some(match version {
+                SslVersion::Default => return Ok(None),
+                SslVersion::TlsV1 | SslVersion::TlsV1_0 => reqwest::tls::Version::TLS_1_0,
+                SslVersion::TlsV1_1 => reqwest::tls::Version::TLS_1_1,
+                SslVersion::TlsV1_2 => reqwest::tls::Version::TLS_1_2,
+                SslVersion::TlsV1_3 => reqwest::tls::Version::TLS_1_3,
+                SslVersion::SslV2 | SslVersion::SslV3 => {
+                    return Err(message!("The `reqwest` backend doesn't support {version:?}").raise());
+                }
+            }))
+        };
+        if let Some(min_version) = convert(min)? {
+            builder = builder.tls_version_min(min_version);
+        }
+        // A single version, which is what `http.sslVersion` configures, is a minimum as `curl` and `git` take it.
+        if min != max
+            && let Some(max_version) = convert(max)?
+        {
+            builder = builder.tls_version_max(max_version);
+        }
+    }
+    Ok(builder)
+}
+
+/// Without a TLS implementation there are no `https://` connections to configure.
+#[cfg(not(any(
+    feature = "http-client-reqwest-rust-tls",
+    feature = "http-client-reqwest-rust-tls-trust-dns",
+    feature = "http-client-reqwest-native-tls"
+)))]
+fn configure_tls(builder: reqwest::ClientBuilder, _config: &http::Options) -> Result<reqwest::ClientBuilder> {
+    Ok(builder)
+}
+
 fn build_client(
     config: &http::Options,
     redirect_action: &Arc<Mutex<RedirectAction>>,
@@ -105,6 +163,7 @@ fn build_client(
     if config.http_version == Some(http::options::HttpVersion::V1_1) {
         builder = builder.http1_only();
     }
+    builder = configure_tls(builder, config)?;
     let mut proxy_credentials = None;
     // `reqwest` reads the proxy variables of the environment unless told not to, which would bypass the configuration:
     // it turns these variables into `http::Options` if it is allowed to, and an empty `http.proxy` is how `git` switches
