@@ -77,4 +77,5 @@ pub(crate) mod prepare_and_commit {
     mod durability;
 
     mod name_conflicts;
+    mod observe;
 }

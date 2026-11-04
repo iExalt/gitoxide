@@ -2,7 +2,10 @@
 use gix_error::Result;
 use gix_lock::acquire::Fail;
 
-use crate::{file, transaction::RefEdit};
+use crate::{
+    file,
+    transaction::{RefEdit, observe::Observer},
+};
 
 pub use crate::file::transaction::PackedRefs;
 
@@ -13,12 +16,20 @@ pub use crate::file::transaction::PackedRefs;
 /// would be the directory of another reference, and [`MissingCommitter`] a reflog entry that had to be written without
 /// an identity. Find them by downcasting the error of
 /// [`Transaction::prepare()`] or [`Prepared::commit()`].
+///
+/// [`Vetoed`] is what an [observer](Transaction::observer()) causes when it refuses a transaction while it is prepared.
+/// A failed [`Prepared::commit()`] carries [`NothingApplied`] if it changed nothing, and [`Uncertain`] with the
+/// progress of each edit if it may have changed something.
 pub use crate::{
     file::{
         log::create_or_update::MissingCommitter,
         transaction::prepare::{MustNotExist, ReferenceOutOfDate},
     },
-    transaction::NameConflict,
+    transaction::{
+        NameConflict,
+        commit_failure::{NothingApplied, Uncertain},
+        observe::Vetoed,
+    },
 };
 
 /// Options for obtaining the locks a transaction needs, which are different for each kind of storage.
@@ -61,6 +72,16 @@ impl<'s, 'p> Transaction<'s, 'p> {
     pub fn packed_refs(self, packed_refs: PackedRefs<'p>) -> Self {
         match self.inner {
             Inner::File(transaction) => Transaction::new_file(transaction.packed_refs(packed_refs)),
+        }
+    }
+
+    /// Tell `observer` about the states of the transaction, and let it refuse to prepare it, like a
+    /// `reference-transaction` hook does in Git. See [`observe`](crate::transaction::observe) for what is reported.
+    ///
+    /// Events with [`Scope::PackedRefs`](crate::transaction::observe::Scope::PackedRefs) only exist for files.
+    pub fn observer(self, observer: impl Observer + 'p) -> Self {
+        match self.inner {
+            Inner::File(transaction) => Transaction::new_file(transaction.observer(observer)),
         }
     }
 
