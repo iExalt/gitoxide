@@ -30,6 +30,46 @@ impl InterruptHandle {
     pub fn interrupt(&self) {
         (self.0)();
     }
+
+    /// Run `operation`, which uses the transport, and [interrupt](Self::interrupt()) the transport if `should_interrupt` is set
+    /// while it runs, which is checked every 20 ms by a thread that lives for as long as `operation` does.
+    ///
+    /// This is how a flag that is set elsewhere, such as by a handler for `Ctrl+C`, reaches I/O that blocks on a peer that doesn't
+    /// answer. Operations that take such a flag see it set only when they get to look at it.
+    pub fn watch<R>(&self, should_interrupt: &std::sync::atomic::AtomicBool, operation: impl FnOnce() -> R) -> R {
+        use std::sync::atomic::Ordering;
+
+        /// Stops the watching thread, also if the operation panics.
+        struct Done<'a>(&'a std::sync::atomic::AtomicBool, std::thread::Thread);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+                self.1.unpark();
+            }
+        }
+
+        let done = std::sync::atomic::AtomicBool::new(false);
+        // A flag that is set already ends the operation at its first read or write, rather than racing the thread that watches.
+        if should_interrupt.load(Ordering::SeqCst) {
+            self.interrupt();
+        }
+        std::thread::scope(|scope| {
+            let watcher = scope.spawn(|| {
+                while !done.load(Ordering::SeqCst) {
+                    if should_interrupt.load(Ordering::SeqCst) {
+                        // An operation that just returned has nothing left to end, and its transport may still be finishing.
+                        if !done.load(Ordering::SeqCst) {
+                            self.interrupt();
+                        }
+                        return;
+                    }
+                    std::thread::park_timeout(Duration::from_millis(20));
+                }
+            });
+            let _stop = Done(&done, watcher.thread().clone());
+            operation()
+        })
+    }
 }
 
 /// The error of an operation that was ended by an [`InterruptHandle`], which is [cancelled](gix_error::Class::Cancelled).
