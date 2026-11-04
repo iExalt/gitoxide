@@ -101,6 +101,15 @@ pub enum TypeChange {
 }
 
 impl Outcome {
+    /// Return the names of the references that were deleted because the remote doesn't have what they tracked anymore, or
+    /// that would be deleted in a dry-run. This is empty unless pruning was [enabled](crate::remote::fetch::Prepare::with_prune()).
+    pub fn pruned(&self) -> impl Iterator<Item = &gix_ref::FullName> {
+        self.edits
+            .iter()
+            .filter(|edit| matches!(edit.change, gix_ref::transaction::Change::Delete { .. }))
+            .map(|edit| &edit.name)
+    }
+
     /// Produce an iterator over all information used to produce the this outcome, ref-update by ref-update, using the `mappings`
     /// used when producing the ref update.
     ///
