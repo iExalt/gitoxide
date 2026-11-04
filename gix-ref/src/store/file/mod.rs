@@ -147,6 +147,12 @@ pub struct Transaction<'s, 'p> {
     packed_refs: transaction::PackedRefs<'p>,
     observer: transaction::Notifier<'p>,
     head_log: crate::transaction::HeadLog,
+    batch_updates: bool,
+    /// While looking for the edits that fail on their own, leave out conflicts between the names of edits.
+    skip_transaction_conflicts: bool,
+    /// A pass to find out what fails, which neither flushes nor tells the observer that all is prepared.
+    dry_pass: bool,
+    rejected: Vec<crate::transaction::Rejected>,
 }
 
 ///

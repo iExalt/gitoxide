@@ -54,6 +54,16 @@ pub(crate) struct Transaction<'s, 'p> {
     store: &'s Store,
     observer: Option<Box<dyn Observer + 'p>>,
     head_log: HeadLog,
+    batch_updates: bool,
+    /// While looking for the edits that fail on their own, leave out conflicts between the names of edits.
+    skip_transaction_conflicts: bool,
+    /// Updates of rejected edits with their position among all updates, which observers are told about as well.
+    rejected_updates: Vec<(usize, Update)>,
+    /// The observer was told already that the transaction is being prepared, which happens once even if edits are
+    /// rejected and prepared again.
+    announced: bool,
+    /// A pass to find out what fails, which doesn't tell the observer that all is prepared.
+    dry_pass: bool,
 }
 
 /// A transaction whose stacks are locked and whose edits are verified.
@@ -66,6 +76,7 @@ pub(crate) struct Prepared<'s, 'p> {
     /// The number of log-only edits of `HEAD` that were added after the edits of the caller, which are not reported back.
     synthetic: usize,
     notifier: Notifier<'p>,
+    rejected: Vec<crate::transaction::Rejected>,
 }
 
 /// Tells the observer about what happens to the transaction, which is reported as aborted if it is dropped once prepared.
@@ -73,6 +84,7 @@ pub(crate) struct Prepared<'s, 'p> {
 struct Notifier<'p> {
     observer: Option<Box<dyn Observer + 'p>>,
     prepared: Option<Vec<Update>>,
+    rejected: Vec<(usize, Update)>,
 }
 
 impl Notifier<'_> {
@@ -99,6 +111,7 @@ impl Notifier<'_> {
 
     /// Nothing is locked yet. A veto ends the transaction.
     fn preparing(&mut self, updates: &[Update]) -> std::result::Result<(), Vetoed> {
+        let updates = &crate::transaction::splice(updates, &self.rejected);
         self.notify(State::Preparing, updates).inspect_err(|_| {
             self.notify(State::Aborted, updates).ok();
         })
@@ -110,6 +123,7 @@ impl Notifier<'_> {
         if !self.is_observing() {
             return Ok(());
         }
+        let updates = crate::transaction::splice(&updates, &self.rejected);
         let result = self.notify(State::Prepared, &updates);
         self.prepared = Some(updates);
         result
@@ -141,7 +155,17 @@ impl<'s, 'p> Transaction<'s, 'p> {
             store,
             observer: None,
             head_log: HeadLog::default(),
+            batch_updates: false,
+            skip_transaction_conflicts: false,
+            rejected_updates: Vec::new(),
+            announced: false,
+            dry_pass: false,
         }
+    }
+
+    pub(crate) fn batch_updates(mut self) -> Self {
+        self.batch_updates = true;
+        self
     }
 
     pub(crate) fn head_log(mut self, head_log: HeadLog) -> Self {
@@ -155,20 +179,178 @@ impl<'s, 'p> Transaction<'s, 'p> {
     }
 
     /// Lock the stacks, verify the `edits` and decide what to write. Nothing is changed if this fails.
+    ///
+    /// With `batch_updates()`, the first attempt is the real one, like in Git, which locks each stack once. Only if it fails on an
+    /// edit, passes follow that try again without it, as failed attempts change nothing. The observer is told once about
+    /// what was requested, and about the final attempt together with the rejected edits, like in Git.
     pub(crate) fn prepare(self, edits: impl IntoIterator<Item = RefEdit>) -> Result<Prepared<'s, 'p>> {
+        if !self.batch_updates {
+            return self.prepare_attempt(edits, None);
+        }
+        let Transaction {
+            store,
+            mut observer,
+            head_log,
+            ..
+        } = self;
+        let edits: Vec<RefEdit> = edits.into_iter().collect();
+        let attempt = |observer: &mut Option<Box<dyn Observer + 'p>>,
+                       rejected_updates,
+                       remaining: &[(usize, RefEdit)],
+                       skip_transaction_conflicts,
+                       announced| {
+            Transaction {
+                store,
+                observer: observer.take(),
+                head_log,
+                batch_updates: false,
+                skip_transaction_conflicts,
+                rejected_updates,
+                announced,
+                // Only the passes that look for conflicts after the ones that fail on their own, count.
+                dry_pass: skip_transaction_conflicts,
+            }
+            .prepare_attempt(remaining.iter().map(|(_, edit)| edit.clone()), Some(observer))
+        };
+        let mut remaining: Vec<(usize, RefEdit)> = edits.into_iter().enumerate().collect();
+        let err = match attempt(&mut observer, Vec::new(), &remaining, false, false) {
+            Ok(prepared) => return Ok(prepared),
+            Err(err) => err,
+        };
+        let names: Vec<_> = remaining.iter().map(|(_, edit)| edit.name.as_bstr()).collect();
+        if crate::transaction::find_offender(&err, &names, true).is_none() {
+            return Err(err);
+        }
+        let observed: Vec<Option<Update>> = remaining
+            .iter()
+            .map(|(_, edit)| crate::transaction::observed(edit))
+            .collect();
+        let mut rejected: Vec<crate::transaction::Rejected> = Vec::new();
+        // Git checks what an edit expects before it checks if its name conflicts with another edit, and edits that are rejected
+        // can't conflict with others. Find the former first, with names of edits not conflicting, and the latter after.
+        let mut prepared = None;
+        for skip_conflicts in [true, false] {
+            // Release what the previous round holds before locking again.
+            drop(prepared.take());
+            prepared = Some(loop {
+                let mut by_index: Vec<_> = rejected
+                    .iter()
+                    .filter_map(|rejected: &crate::transaction::Rejected| {
+                        // Edits that only change a reflog aren't reported, so positions count the others.
+                        let position = observed[..rejected.index].iter().flatten().count();
+                        observed[rejected.index]
+                            .clone()
+                            .map(|update| (rejected.index, position, update))
+                    })
+                    .collect();
+                by_index.sort_by_key(|(index, ..)| *index);
+                let updates = by_index
+                    .into_iter()
+                    .map(|(_, position, update)| (position, update))
+                    .collect();
+                match attempt(&mut observer, updates, &remaining, skip_conflicts, true) {
+                    Ok(mut prepared) => {
+                        if skip_conflicts {
+                            observer = prepared.notifier.observer.take();
+                        }
+                        break prepared;
+                    }
+                    Err(err) => {
+                        let names: Vec<_> = remaining.iter().map(|(_, edit)| edit.name.as_bstr()).collect();
+                        let position = crate::transaction::find_offender(&err, &names, true);
+                        let Some((position, reason)) = position else {
+                            return Err(err);
+                        };
+                        let (index, edit) = remaining.remove(position);
+                        rejected.push(crate::transaction::Rejected {
+                            index,
+                            edit,
+                            reason,
+                            error: err.into(),
+                        });
+                    }
+                }
+            });
+        }
+        let mut prepared = prepared.expect("the second round always sets it");
+        rejected.sort_by_key(|rejected| rejected.index);
+        prepared.rejected = rejected;
+        Ok(prepared)
+    }
+
+    /// Prepare once. If that fails before the observer was told that all is prepared, it is handed back to `recover` so that it
+    /// can be used by the next attempt.
+    fn prepare_attempt(
+        self,
+        edits: impl IntoIterator<Item = RefEdit>,
+        recover: Option<&mut Option<Box<dyn Observer + 'p>>>,
+    ) -> Result<Prepared<'s, 'p>> {
         let Transaction {
             store,
             observer,
             head_log,
+            batch_updates: _,
+            skip_transaction_conflicts,
+            rejected_updates,
+            announced,
+            dry_pass,
         } = self;
+        let mut notifier = Notifier {
+            observer,
+            prepared: None,
+            rejected: rejected_updates,
+        };
+        match Self::verify(
+            store,
+            &mut notifier,
+            head_log,
+            skip_transaction_conflicts,
+            announced,
+            dry_pass,
+            edits,
+        ) {
+            Ok((options, locked, items, synthetic)) => Ok(Prepared {
+                store,
+                options,
+                locked,
+                items,
+                synthetic,
+                notifier,
+                rejected: Vec::new(),
+            }),
+            Err(err) => {
+                // An observer that was told that all is prepared is told about the abort when the notifier is dropped.
+                if notifier.prepared.is_none()
+                    && let Some(recover) = recover
+                {
+                    *recover = notifier.observer.take();
+                }
+                Err(err)
+            }
+        }
+    }
+
+    fn verify(
+        store: &'s Store,
+        notifier: &mut Notifier<'p>,
+        head_log: HeadLog,
+        skip_transaction_conflicts: bool,
+        announced: bool,
+        dry_pass: bool,
+        edits: impl IntoIterator<Item = RefEdit>,
+    ) -> Result<(StackOptions, Vec<Locked>, Vec<Item>, usize)> {
         store.assure_backend_supported()?;
         let options = *store.stack_options()?;
         let mut edits: Vec<RefEdit> = edits.into_iter().collect();
+        let requested = edits.len();
+        // The position of the edit that each edit made by splitting a symbolic reference stems from.
+        let mut parents: Vec<usize> = Vec::new();
         let settings = Settings {
             hash: store.object_hash(),
             write_reflog: store.write_reflog,
             message_limit: effective_block_size(&options) / 2,
             namespace: store.namespace.as_ref(),
+            check_transaction_conflicts: !skip_transaction_conflicts,
         };
         let duplicate = |name: BString| validation(format!("A reference named '{name}' has multiple edits")).raise();
         edits.assure_one_name_has_one_edit().map_err(duplicate)?;
@@ -183,11 +365,7 @@ impl<'s, 'p> Transaction<'s, 'p> {
             }
         }
 
-        let mut notifier = Notifier {
-            observer,
-            prepared: None,
-        };
-        if notifier.is_observing() {
+        if notifier.is_observing() && !announced {
             let requested = updates(&edits, &edits.iter().map(expected).collect::<Vec<_>>());
             if let Err(vetoed) = notifier.preparing(&requested) {
                 bail!(vetoed);
@@ -232,7 +410,10 @@ impl<'s, 'p> Transaction<'s, 'p> {
                         }
                     }
                 },
-                &mut |_, edit| edit,
+                &mut |parent, edit| {
+                    parents.push(parent);
+                    edit
+                },
             )
             .or_raise(|| message("Could not preprocess reference edits"))?;
         if let Some(err) = failure {
@@ -256,7 +437,34 @@ impl<'s, 'p> Transaction<'s, 'p> {
         // What each caller expects is lost while verifying, so remember it now.
         let previous: Vec<_> = edits.iter().map(expected).collect();
         let lookup = Existing { store, locked: &locked };
-        let planned = plan::plan(edits, &settings, &lookup)?;
+        // Failures are attributed to what was asked for, as they are for files, even if a split edit is the one that failed.
+        let names: Vec<BString> = edits.iter().map(|edit| edit.name.0.clone()).collect();
+        let planned = plan::plan(edits, &settings, &lookup).map_err(|err| {
+            let failed = err.metadata().find_map(|values| match values.get("reference")? {
+                gix_error::MetadataValue::Bytes(name) => Some(BString::from(name.clone())),
+                gix_error::MetadataValue::String(name) => Some(BString::from(name.as_str())),
+                _ => None,
+            });
+            let Some(mut position) = failed.and_then(|failed| names.iter().position(|name| *name == failed)) else {
+                return err;
+            };
+            let referent = names[position].clone();
+            while position >= requested {
+                // An edit that was added to log `HEAD` isn't the result of splitting one, and can't be attributed.
+                let Some(&parent) = parents.get(position - requested) else {
+                    return err;
+                };
+                position = parent;
+            }
+            if names[position] == referent {
+                return err;
+            }
+            err.and_raise(
+                message("Could not prepare reference edit")
+                    .with("reference", names[position].clone())
+                    .with("referent", referent),
+            )
+        })?;
         let observed = {
             let edits: Vec<_> = planned.iter().map(|planned| planned.edit.clone()).collect();
             updates(&edits, &previous)
@@ -273,24 +481,24 @@ impl<'s, 'p> Transaction<'s, 'p> {
                 Item { planned, stack, local }
             })
             .collect();
-        if let Err(vetoed) = notifier.prepared(observed) {
+        if !dry_pass && let Err(vetoed) = notifier.prepared(observed) {
             // The locks are released first, and the observer is told about the abort when the notifier is dropped.
             drop(locked);
-            drop(notifier);
             bail!(vetoed);
         }
-        Ok(Prepared {
-            store,
-            options,
-            locked,
-            items,
-            synthetic,
-            notifier,
-        })
+        Ok((options, locked, items, synthetic))
     }
 }
 
 impl Prepared<'_, '_> {
+    pub(crate) fn rejected(&self) -> &[crate::transaction::Rejected] {
+        &self.rejected
+    }
+
+    pub(crate) fn take_rejected(&mut self) -> Vec<crate::transaction::Rejected> {
+        std::mem::take(&mut self.rejected)
+    }
+
     /// Write and publish the tables, using `committer` for the entries of reflogs.
     pub(crate) fn commit(self, committer: Option<gix_actor::SignatureRef<'_>>) -> Result<Vec<RefEdit>> {
         let Prepared {
@@ -300,6 +508,7 @@ impl Prepared<'_, '_> {
             items,
             synthetic,
             mut notifier,
+            rejected: _,
         } = self;
         let stack_of_edit: Vec<_> = items.iter().map(|item| item.stack).collect();
 

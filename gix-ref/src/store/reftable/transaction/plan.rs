@@ -37,6 +37,9 @@ pub(super) struct Settings<'a> {
     /// The longest reflog message that is stored in bytes, which is half the block size.
     pub message_limit: usize,
     pub namespace: Option<&'a Namespace>,
+    /// Whether an edit conflicts with the names of other edits, which is not the case while the edits that fail on their own
+    /// are looked for.
+    pub check_transaction_conflicts: bool,
 }
 
 impl Settings<'_> {
@@ -252,7 +255,12 @@ pub(super) fn plan<L: Lookup>(edits: Vec<RefEdit>, settings: &Settings<'_>, look
         }
 
         if value_before.is_none() && !log_only && matches!(edit.change, Change::Update { .. }) {
-            verify_available(stored.as_ref(), &sorted_names, lookup)?;
+            let names: &[BString] = if settings.check_transaction_conflicts {
+                &sorted_names
+            } else {
+                &[]
+            };
+            verify_available(stored.as_ref(), names, lookup)?;
         }
 
         let record = if log_only {
@@ -397,6 +405,7 @@ mod tests {
             write_reflog,
             message_limit: 2048,
             namespace: None,
+            check_transaction_conflicts: true,
         }
     }
 
