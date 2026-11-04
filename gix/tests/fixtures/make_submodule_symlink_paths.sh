@@ -12,7 +12,9 @@ git init -q superproject
   ln -s ../other leaf
   ln -s actual inside
   ln -s missing dangling
-  ln -s / absolute
+  # An absolute target, but never `/`: tools that walk the checkout and follow symlinks
+  # (like Cargo fingerprinting the package) must not escape into the host filesystem.
+  ln -s "$(cd ../other && pwd)" absolute
   mkdir deps
   ln -s ../../other deps/nested
 
