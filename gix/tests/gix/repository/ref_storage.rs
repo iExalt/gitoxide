@@ -363,7 +363,11 @@ mod reftable {
             return Ok(None);
         };
         let work_dir = dir.path().join("reftable-clone");
-        let repo = gix::open_opts(&work_dir, gix::open::Options::isolated())?;
+        let repo = gix::open_opts(
+            &work_dir,
+            gix::open::Options::isolated()
+                .config_overrides(["committer.name=gitoxide", "committer.email=gitoxide@localhost"]),
+        )?;
         let head_id = gix_testtools::git(&work_dir, "rev-parse HEAD")?;
         let head_id = gix::ObjectId::from_hex(head_id.trim().as_bytes())?;
         Ok(Some((dir, repo, head_id)))
@@ -371,7 +375,7 @@ mod reftable {
 
     #[test]
     fn references_that_exist_are_not_reported_as_missing_and_writes_leave_no_files_git_cannot_see() -> Result {
-        // Editing is not supported for reftables yet, with or without reading them.
+        // Without the feature, editing is refused for reftables, with or without reading them.
         let Some((dir, repo, head_id)) = writable_repo()? else {
             return Ok(());
         };
@@ -412,6 +416,41 @@ mod reftable {
                 "also iteration is refused rather than yielding something"
             );
         }
+        if cfg!(feature = "reftable") {
+            for name in ["refs/tags/new", "refs/heads/new", "refs/notes/new"] {
+                repo.reference(
+                    name,
+                    head_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "message",
+                )?;
+            }
+            repo.tag_reference("tag", head_id, gix::refs::transaction::PreviousValue::MustNotExist)?;
+            let listed = gix_testtools::git(&work_dir, "for-each-ref --format=%(refname)")?;
+            for name in ["refs/tags/new", "refs/heads/new", "refs/notes/new", "refs/tags/tag"] {
+                assert!(
+                    listed.lines().any(|line| line == name),
+                    "Git sees the new reference {name}: {listed}"
+                );
+            }
+            let changed: Vec<_> = paths_below(repo.git_dir())?
+                .into_iter()
+                .filter(|path| !before.contains(path))
+                .collect();
+            assert!(
+                changed
+                    .iter()
+                    .all(|path| path.starts_with(repo.git_dir().join("reftable"))),
+                "only the stack changed, there is no loose reference, reflog or lock file: {changed:?}"
+            );
+            assert_eq!(
+                gix_testtools::git(&work_dir, "reflog show --format=%gs refs/heads/new")?.trim(),
+                "message",
+                "the reflog is written, with the configured committer"
+            );
+            gix_testtools::git(&work_dir, "refs verify")?;
+            return Ok(());
+        }
         for name in ["refs/tags/new", "refs/heads/new", "refs/notes/new"] {
             let err = repo
                 .reference(
@@ -446,22 +485,55 @@ mod reftable {
 
     #[test]
     #[cfg(all(feature = "worktree-mutation", feature = "reftable"))]
-    fn adding_a_worktree_fails_with_unsupported_while_editing_reftables_is_not_supported() -> Result {
-        // This changes to a success once references can be edited. Until then, creating the worktree's administrative
-        // directory before the edit of its `HEAD` fails is a known limit of building with the feature.
+    fn adding_a_worktree_stores_its_head_in_a_stack_of_its_own_like_git() -> Result {
         let Some((dir, repo, head_id)) = writable_repo()? else {
             return Ok(());
         };
-        let destination = dir.path().join("linked");
-        let err = repo
-            .prepare_add_worktree(
-                &destination,
-                gix::worktree::add::Head::Detached(head_id),
-                &std::sync::atomic::AtomicBool::default(),
-            )
-            .expect_err("the HEAD of the new worktree can't be created");
-        assert!(err.is_unsupported());
-        assert!(!destination.exists(), "the destination isn't created");
+        for (name, head, expected_branch) in [
+            ("detached", gix::worktree::add::Head::Detached(head_id), None),
+            (
+                "attached",
+                gix::worktree::add::Head::Attached("refs/heads/main".try_into()?),
+                Some("refs/heads/main"),
+            ),
+        ] {
+            let destination = dir.path().join(name);
+            // The branch can only be checked out once.
+            if expected_branch.is_some() {
+                gix_testtools::git(dir.path().join("reftable-clone"), "checkout --detach")?;
+            }
+            repo.prepare_add_worktree(&destination, head, &std::sync::atomic::AtomicBool::default())?
+                .persist()?;
+            assert_eq!(
+                gix_testtools::git(&destination, "rev-parse HEAD")?.trim(),
+                head_id.to_string(),
+                "{name}: Git reads the HEAD that was written"
+            );
+            let branch = gix_testtools::git(&destination, "symbolic-ref -q HEAD").unwrap_or_default();
+            assert_eq!(branch.trim(), expected_branch.unwrap_or_default(), "{name}");
+            assert_eq!(
+                gix_testtools::git(&destination, "reflog show --format=%H HEAD")?
+                    .lines()
+                    .count(),
+                1,
+                "{name}: HEAD has the entry that initializes it"
+            );
+            gix_testtools::git(dir.path().join("reftable-clone"), "refs verify")?;
+            gix_testtools::git(&destination, "refs verify")?;
+        }
+        let listed = gix_testtools::git(dir.path().join("reftable-clone"), "worktree list --porcelain")?;
+        assert_eq!(
+            listed.matches("worktree ").count(),
+            3,
+            "the repository and both new worktrees: {listed}"
+        );
+        let reopened = gix::open_opts(dir.path().join("attached"), gix::open::Options::isolated())?;
+        assert_eq!(
+            reopened.head_id()?,
+            head_id,
+            "the new worktree is read back through its own stack"
+        );
+        assert_eq!(reopened.head_name()?.expect("attached").as_bstr(), "refs/heads/main");
         Ok(())
     }
 

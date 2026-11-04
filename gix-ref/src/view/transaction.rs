@@ -1,7 +1,5 @@
 //! Backend-neutral transactions to edit references.
 use gix_error::Result;
-#[cfg(feature = "reftable")]
-use gix_error::bail;
 use gix_lock::acquire::Fail;
 
 use crate::{
@@ -62,7 +60,7 @@ pub struct Transaction<'s, 'p> {
 enum Inner<'s, 'p> {
     File(file::Transaction<'s, 'p>),
     #[cfg(feature = "reftable")]
-    Reftable(&'s crate::reftable::Store, std::marker::PhantomData<&'p ()>),
+    Reftable(crate::reftable::Transaction<'s, 'p>),
 }
 
 impl<'s, 'p> Transaction<'s, 'p> {
@@ -75,7 +73,7 @@ impl<'s, 'p> Transaction<'s, 'p> {
     #[cfg(feature = "reftable")]
     pub(crate) fn new_reftable(store: &'s crate::reftable::Store) -> Self {
         Transaction {
-            inner: Inner::Reftable(store, std::marker::PhantomData),
+            inner: Inner::Reftable(crate::reftable::Transaction::new(store)),
         }
     }
 
@@ -84,11 +82,11 @@ impl<'s, 'p> Transaction<'s, 'p> {
         match self.inner {
             Inner::File(transaction) => Transaction::new_file(transaction.packed_refs(packed_refs)),
             #[cfg(feature = "reftable")]
-            Inner::Reftable(store, marker) => {
+            Inner::Reftable(transaction) => {
                 // `packed-refs` don't exist in reftables, so there is nothing to configure.
                 drop(packed_refs);
                 Transaction {
-                    inner: Inner::Reftable(store, marker),
+                    inner: Inner::Reftable(transaction),
                 }
             }
         }
@@ -102,13 +100,9 @@ impl<'s, 'p> Transaction<'s, 'p> {
         match self.inner {
             Inner::File(transaction) => Transaction::new_file(transaction.observer(observer)),
             #[cfg(feature = "reftable")]
-            Inner::Reftable(store, marker) => {
-                // Editing reftables isn't supported yet, so preparing fails before there is anything to report.
-                drop(observer);
-                Transaction {
-                    inner: Inner::Reftable(store, marker),
-                }
-            }
+            Inner::Reftable(transaction) => Transaction {
+                inner: Inner::Reftable(transaction.observer(observer)),
+            },
         }
     }
 
@@ -122,13 +116,11 @@ impl<'s, 'p> Transaction<'s, 'p> {
                 .prepare(edits, lock.ref_files, lock.packed_refs)
                 .map(Prepared::new_file),
             #[cfg(feature = "reftable")]
-            Inner::Reftable(store, _) => {
-                drop((edits, lock));
-                store.assure_backend_supported()?;
-                bail!(
-                    gix_error::unsupported("Editing references that are stored in reftables is not supported yet")
-                        .with("git_dir", store.git_dir())
-                )
+            Inner::Reftable(transaction) => {
+                // Reftables don't have separate locks for references and `packed-refs`: stacks wait as configured with
+                // `reftable.lockTimeout`.
+                let _ = lock;
+                transaction.prepare(edits).map(Prepared::new_reftable)
             }
         }
     }
@@ -143,17 +135,20 @@ pub struct Prepared<'s, 'p> {
 enum PreparedInner<'s, 'p> {
     File(file::Transaction<'s, 'p>),
     #[cfg(feature = "reftable")]
-    #[expect(
-        dead_code,
-        reason = "editing reftables isn't implemented yet, so there is nothing to commit"
-    )]
-    Reftable(std::convert::Infallible, std::marker::PhantomData<&'s &'p ()>),
+    Reftable(crate::reftable::Prepared<'s, 'p>),
 }
 
 impl<'s, 'p> Prepared<'s, 'p> {
     fn new_file(transaction: file::Transaction<'s, 'p>) -> Self {
         Prepared {
             inner: PreparedInner::File(transaction),
+        }
+    }
+
+    #[cfg(feature = "reftable")]
+    fn new_reftable(transaction: crate::reftable::Prepared<'s, 'p>) -> Self {
+        Prepared {
+            inner: PreparedInner::Reftable(transaction),
         }
     }
 
@@ -164,7 +159,7 @@ impl<'s, 'p> Prepared<'s, 'p> {
         match self.inner {
             PreparedInner::File(transaction) => transaction.commit(committer).map(|edits| Outcome { edits }),
             #[cfg(feature = "reftable")]
-            PreparedInner::Reftable(never, _) => match never {},
+            PreparedInner::Reftable(transaction) => transaction.commit(committer.into()).map(|edits| Outcome { edits }),
         }
     }
 
@@ -173,7 +168,7 @@ impl<'s, 'p> Prepared<'s, 'p> {
         match self.inner {
             PreparedInner::File(transaction) => transaction.rollback(),
             #[cfg(feature = "reftable")]
-            PreparedInner::Reftable(never, _) => match never {},
+            PreparedInner::Reftable(transaction) => transaction.rollback(),
         }
     }
 }

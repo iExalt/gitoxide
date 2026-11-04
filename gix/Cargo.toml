@@ -65,12 +65,13 @@ default = [
 ## More fundamental components that most will be able to make good use of.
 basic = ["blob-diff", "revision", "index"]
 
-## Read the references of repositories that store them as reftables, which Git selects with `extensions.refStorage = reftable`.
+## Read and edit the references of repositories that store them as reftables, which Git selects with
+## `extensions.refStorage = reftable`.
 ##
 ## Without it, such repositories can be opened and their objects used, but every operation on references fails with an
 ## `Unsupported` error. It adds `gix-reftable` and its dependencies.
 ##
-## Editing references stored this way isn't supported yet, which fails with an `Unsupported` error as well.
+## Creating repositories that store references this way, with `init` or `clone`, isn't supported yet.
 reftable = ["gix-ref/reftable"]
 
 ## Various additional features and capabilities that are not necessarily part of what most users would need.

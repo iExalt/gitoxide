@@ -10,6 +10,8 @@
 //! Clones share what was read, and every lookup of a single reference reads the list of its stack again to see what other
 //! writers published, like Git does. Iterations and [snapshots](Store::snapshot()) use the state of the stacks as they
 //! found it. Reflog reads look for changes too, whereas Git's iteration of reflogs doesn't, as its processes are short-lived.
+//!
+//! References are edited with a [transaction](crate::Store::as_ref()) that adds one table to every stack it changes.
 use std::path::{Path, PathBuf};
 
 use gix_error::{ErrorExt, Result};
@@ -25,6 +27,8 @@ mod iter;
 pub use iter::{Iter, Platform};
 mod log;
 mod stacks;
+mod transaction;
+pub(crate) use transaction::{Prepared, Transaction};
 
 /// A store for references that are kept in stacks of reftables.
 ///
@@ -38,7 +42,7 @@ pub struct Store {
     pub(crate) write_reflog: WriteReflog,
     pub(crate) namespace: Option<Namespace>,
     unsupported_backend: Option<String>,
-    stack_options: std::result::Result<StackOptions, OwnShared<gix_error::Error>>,
+    stack_options: std::result::Result<StackOptions, std::sync::Arc<gix_error::Error>>,
     stacks: OwnShared<stacks::Stacks>,
 }
 
@@ -118,7 +122,7 @@ impl Store {
     /// which reads reftable configuration when it writes for the first time and thus can read references with invalid
     /// settings.
     pub fn set_stack_options(&mut self, options: Result<StackOptions>) {
-        self.stack_options = options.map_err(OwnShared::new);
+        self.stack_options = options.map_err(std::sync::Arc::new);
     }
 
     /// The options with which stacks are changed, or the reason they are invalid, see
@@ -132,7 +136,7 @@ impl Store {
 
 /// The error that made options invalid, which is shared between all failures that are caused by it.
 #[derive(Debug)]
-struct InvalidOptions(OwnShared<gix_error::Error>);
+struct InvalidOptions(std::sync::Arc<gix_error::Error>);
 
 impl std::fmt::Display for InvalidOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
