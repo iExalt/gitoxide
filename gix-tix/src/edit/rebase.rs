@@ -3974,7 +3974,14 @@ fn ref_edit(name: gix::refs::FullName, old: Option<ObjectId>, new: Option<Object
             log_change(),
         ),
         (Some(old), None) => RefEdit::delete(name, PreviousValue::MustExistAndMatch(Target::Object(old))),
-        (None, Some(new)) => RefEdit::update_with_log(name, new, PreviousValue::MustNotExist, log_change()),
+        // The document expects the reference to be missing, but one that was created while it was edited and already
+        // has the requested target is fine. `MustNotExist` refuses it, like Git does, so ask for exactly this instead.
+        (None, Some(new)) => RefEdit::update_with_log(
+            name,
+            new,
+            PreviousValue::ExistingMustMatch(Target::Object(new)),
+            log_change(),
+        ),
         (None, None) => unreachable!("unchanged absent refs are filtered before editing"),
     }
 }

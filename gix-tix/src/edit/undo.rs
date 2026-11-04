@@ -38,7 +38,14 @@ impl RefChange {
     pub(crate) fn from_edit(edit: &RefEdit) -> Result<Option<Self>> {
         let (before, after) = match &edit.change {
             Change::Update { expected, new, log } if log.mode == RefLog::AndReference => {
-                (state_from_expected(expected)?, state_from_target(new))
+                let before = match expected {
+                    // A creation that tolerates a reference which has the new value already, as `rebase` requests it.
+                    // An edit that took this shape and was applied was applied to a missing reference, as otherwise it
+                    // would be reported with the value it found. Before it is applied, it can't tell.
+                    PreviousValue::ExistingMustMatch(target) if target == new => State::Missing,
+                    _ => state_from_expected(expected)?,
+                };
+                (before, state_from_target(new))
             }
             Change::Delete {
                 expected,

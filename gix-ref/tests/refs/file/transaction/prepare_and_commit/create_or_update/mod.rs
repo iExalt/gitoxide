@@ -496,13 +496,13 @@ fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> T
 }
 
 #[test]
-fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one() -> Result {
+fn reference_with_must_not_exist_constraint_fails_even_if_the_new_value_matches_the_existing_one() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
     let previous_reflog_count = reflog_lines(&store, "HEAD")?.len();
 
-    let edits = store
+    let err = store
         .transaction()
         .prepare(
             Some(RefEdit::update(
@@ -513,23 +513,19 @@ fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_m
             )),
             Fail::Immediately,
             Fail::Immediately,
-        )?
-        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        )
+        .map(|_| ())
+        .expect_err("a reference that exists can't be created, no matter its value, so duplicate writers are noticed");
 
-    assert_eq!(
-        edits,
-        vec![RefEdit::update(
-            "HEAD".try_into()?,
-            target.clone(),
-            PreviousValue::MustExistAndMatch(target),
-            "",
-        )]
-    );
-
+    let conflict = err
+        .downcast_any_ref::<gix_ref::view::transaction::MustNotExist>()
+        .expect("the failure is identifiable");
+    assert_eq!(conflict.actual, target, "it tells what is there");
+    assert!(err.is_conflict(), "the caller has to reconcile, not to retry");
     assert_eq!(
         reflog_lines(&store, "HEAD")?.len(),
         previous_reflog_count,
-        "no new reflog is actually added"
+        "nothing was changed"
     );
     Ok(())
 }
