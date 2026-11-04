@@ -326,6 +326,33 @@ pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::WithWorktree, create::Options::default()).map(Into::into)
 }
 
+/// Open the repository at `directory` if there is one, or initialize one there like [`init()`] does.
+///
+/// Unlike `git init` in a directory that has a repository, which reinitializes it, this doesn't touch an existing
+/// repository, and it doesn't look at parent directories either, so a directory inside of a repository gets one of its
+/// own. An existing repository that can't be opened, because it is broken or not trusted, is an error and nothing is
+/// initialized over it. Use [`init_opts()`](ThreadSafeRepository::init_opts()) to initialize with other options.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
+/// # let dir = doctest::tempdir()?;
+/// let created = gix::init_or_open(dir.path())?;
+/// let reopened = gix::init_or_open(dir.path())?;
+/// assert_eq!(created.git_dir(), reopened.git_dir());
+/// # Ok(()) }
+/// ```
+pub fn init_or_open(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
+    let directory = directory.as_ref();
+    match open(directory) {
+        Ok(repo) => Ok(repo),
+        Err(err) if err.is_not_found() => init(directory),
+        Err(err) => Err(err),
+    }
+}
+
 /// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
 pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::Bare, create::Options::default()).map(Into::into)
