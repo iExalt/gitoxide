@@ -257,7 +257,7 @@ existing subscriptions is approved.
 | 4. Ref-store abstraction and interim reftable refusal | Probe P12 first; refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while opening and object access keep working; `gix init` follows Git's ref-format precedence and refuses a requested reftable; then the staged ref-store abstraction (assessment 5.1, additive handle first) and its call-site migration; probe P11 | None | None known | done |
 | 5. Durability plumbing and differential fault harness | Probes P1, P3, P5 and P7; `core.fsync` and `core.fsyncMethod` for objects, packs and refs, including the barrier flush; the files-store gaps in assessment 4.3; an uncertain-outcome class; a transaction observer; P1, P3 and P5 turned into differential tests against Git | None; rebases on thread 4 where both touch `gix-ref` | None known | done |
 | 6. Reftable codecs and stack layer | Probes P6 and P4; adopt the upstream reftable codecs after a parity review, both hashes and version 2; a new stack layer following Git's lock and publication protocol, with reload, segment compaction, cleanup and flush; interoperability tests where Git reads fork-written tables and stacks and the fork reads Git's. Integration as a ref backend waits for thread 4 | None for the standalone crate | None known | done: standalone `gix-reftable` crate, estimated at 4–5.5 sessions and run in that range; see the revision log |
-| 7. Reftable ref backend | A feature-gated `gix_ref::store::reftable` adapter over `gix-reftable` behind the neutral `gix_ref::Store`: reads, iteration, symrefs, peeled values, transactions with reflogs, the `HEAD` reflog and tombstones, reflog reading and expiry, worktree stacks; opening selects it for `extensions.refStorage=reftable` when the feature is built, and the interim refusal stays otherwise; `init` and clone create reftable only on an explicit or configured request, with `files` the default; outcome classes and the transaction observer through the neutral wrapper; a differential matrix against Git (selected `t0610`, `t0613`, `t0614` cases, mixed writers, both hashes). Excludes migration (decision 3) and the `reference-transaction` hook | Threads 4 and 6; rebases on thread 5 where both touch `gix-ref` | None known | ready |
+| 7. Reftable ref backend | A feature-gated `gix_ref::store::reftable` adapter over `gix-reftable` behind the neutral `gix_ref::Store`: reads, iteration, symrefs, peeled values, transactions with reflogs, the `HEAD` reflog and tombstones, reflog reading and expiry, worktree stacks; opening selects it for `extensions.refStorage=reftable` when the feature is built, and the interim refusal stays otherwise; `init` and clone create reftable only on an explicit or configured request, with `files` the default; outcome classes and the transaction observer through the neutral wrapper; a differential matrix against Git (selected `t0610`, `t0613`, `t0614` cases, mixed writers, both hashes). Excludes migration (decision 3) and the `reference-transaction` hook | Threads 4 and 6; rebases on thread 5 where both touch `gix-ref` | None known | done: the HEAD-log swap for thread 8's shared functions is the one open follow-up, see the revision log |
 | 8. Local consumer backend | The plan's consumer operation inventory for local work, against Git 2.56 as the oracle: opening and discovery that ignores locating and injected-config environment variables, reference lookup and listing, tree and object reads, object and commit writes without touching the index or checkout, local ref transactions, configuration persistence, initialization, readiness and ancestry, for both hashes and both ref formats; the `reference-transaction` hook with prepared, committed and aborted states and a prepare-phase veto through the hook runner and the transaction observer, matching `git update-ref`; the files store's reflog divergences from Git that thread 7 records. Starts with an audit that replaces the placeholder estimate | Threads 3, 4 and 5; the hook part waits for thread 5's observer; rebases on thread 7 where both touch `gix-ref` | None known | ready |
 | 9. Repository push and fetch | Repository-level push on top of `gix_protocol::push` and the bounded pack writer: multi-ref create, update and delete, expected absence, caller leases checked before and after the advertisement (a fresh advertisement never replaces a stale caller lease), log fast-forward and state-rewrite policy, server refusal, the typed shallow-source refusal thread 2 left open, and reconciliation of ambiguous results before retry; fetch with forced explicit mappings into private tracking namespaces, pruning only stale destinations those mappings cover after a complete successful fetch. Differential tests against Git 2.56 over local transports, both hashes. Starts with an audit that replaces the placeholder estimate. Excludes SSH, HTTPS, authentication and client hooks (a later thread) | Threads 2, 4 and 5; rebases on threads 7 and 8 where they touch `gix-ref` or `gix` | None known | ready |
 
@@ -406,3 +406,72 @@ sequencing; the overseer proposes each as its dependencies finish.
     change selected the whole workspace). Neither is a baseline.
   - Changes to public fields without `!` on the way: `gix_ref::store::init::Options` gained `fsync` in the transaction
     change, under the 0.x exemption. `gix-odb` and `gix-pack` option structs gained `fsync` with `!`.
+
+- 2026-11-04: thread 7 (reftable ref backend) is done, in PRs #38 (reading and opening), #40 (writing), #42 (reflog expiry
+  and deletion), #43 (`init` and clone), #44 and #47 (fixes found on the way) and #48 (the default features). The reviewer accepted
+  every one; the owner's decisions held: a store behind the neutral `gix_ref::Store`, Git's ref-format precedence with
+  `files` the default for new repositories, and no conversion between the formats.
+  - `gix_ref::reftable::Store` reads and edits references, symbolic references, peeled values and reflogs in the main
+    repository and in linked worktrees, one table per touched stack and one update index per transaction, like Git. Stacks
+    are locked before anything is written, so a failure maps to `NothingApplied` or `Uncertain`. Auto-compaction follows
+    each commit. `StoreRef::reflog_expire()` and `reflog_delete()` exist for both formats; there is no `--rewrite` or
+    `--updateref`. `init` and clone create reftable repositories on request (`--ref-format`, `GIT_DEFAULT_REF_FORMAT`,
+    `init.defaultRefFormat`, `feature.experimental`) and Git reads them back; the first table matches Git's range.
+    `reftable.*`, `core.fsync` and `core.sharedRepository` configure how stacks are written.
+  - Default features: `reftable` is on in `gix` and in the `max`, `max-pure`, `lean` and `lean-async` presets of
+    `gitoxide`, and off in `small`, which exists to stay minimal and can't clone; it stays available there as
+    `--features reftable`. Cold release builds on the 8-core station, one sample per row, only the feature toggled:
+    `gix` binary +1.5 to +2.9% (small +2.9%), `ein` binary +5.5 to +14.4% (small +14.4%, from 4.42 to 5.06 MB), cold
+    build time within noise (load 6.5 to 12). `ein` grows by 0.65 to 0.70 MB in each preset. In the `.text` of `ein` with
+    `small`, `gix-reftable` adds 90 KiB, `gix-ref` 72 KiB, `gix` 41 KiB, `std` 34 KiB and `crc32fast` 5 KiB: the
+    functionality itself, not duplicated generics. The growth is above the 3% that was set as a limit for `ein` in all
+    presets, and for `gix` in `small` it is just below it. The overseer chose including it in the full presets and leaving
+    `small` out. With the feature off, operations on references of a reftable repository keep failing as unsupported.
+  - Runtimes. `mise run check` on the station at the tip of #48: 14 tasks, exhaustive because `Cargo.toml` changed, 920 s;
+    `mise run check:msrv` 936 s. CI at the tip of #48: `tests@linux-x86_64` 7m16s, features lanes 5m17 to 6m20. That lane
+    was 5m36 to 7m08 on `dev` before this thread, so the lane the FORK.md 5-minute target applies to was already above it;
+    #40 moved total CI from 7m05 to 7m54 with an identical set of compile units in that lane, which is runner variance. The
+    new tests run in under a second each, both hashes (`git_cases.rs`: 14 cases in 0.4 s). `mise run check:thorough` on the
+    station at the tests' tip (a960c728e; the next commit changed only documentation): all 100 QA cases passed, with 5,604
+    tests in `native-tests`, in 1,263 s (21 m 03 s) with Git 2.56.0 first on `PATH` and no other check holding the lock. That is
+    above the 12-minute budget and the 530 s baseline that the overseer gave for it. The load average was 2.9, 3.3 and 4.0 (1, 5 and 15 minutes) when the run started on the
+    8-core machine, and 0.1, 2.7 and 4.9 right after it. The log has no per-stage timestamps, so the stages that took the
+    longest can't be named from it; what it does show is that the 100 QA cases ran in the order `self-test`, `policy`,
+    `housekeeping`, `lint`, `feature-builds`, `feature-contracts`, `native-tests`, `isolated-tests` and `feature-tests`,
+    and that the test executions of `native-tests` took 66 s and 84 s in its two passes of 5,604 tests, so most of its time is
+    likely compiling, which wasn't measured. A budget review needs the stage timings, and they weren't investigated here.
+  - Differential coverage: Git 2.56 reads what the store writes (`for-each-ref`, `reflog show`, `refs verify`, `fsck`)
+    and the store reads what Git writes, for both hashes. `git_cases.rs` mirrors the cases of `t0610`, `t0613` and
+    `t0614` that apply to a store of references, and its module doc lists the rest by where they are covered or why
+    they don't apply. Git 2.56 reads nothing from a stack with a corrupted table or a list naming a missing one
+    (`for-each-ref` prints nothing and exits 0) and crashes in `git refs verify` on it, so those cases compare whether Git
+    finds a reference, not a verdict.
+  - Deviations from Git that remain: no object index is written, and tags are written as one value rather than a value
+    and its peeled value, so table bytes differ from Git's though the content and `refs verify` agree; Git's `--rewrite`
+    and `--updateref` of `reflog expire` don't exist; `reftable://<path>` payloads are refused; the reftable store has its
+    own copy of the `HEAD` reflog rules and of reflog message normalisation, which thread 8's shared functions replace; Windows isn't covered by
+    CI or by any test run here.
+  - Files reflog divergences, for thread 8 to fix. The reviewer verified each with a probe against Git 2.56.0 on the same
+    repository; Git lines are for v2.56.0.
+    1. Updating the referent of `HEAD` directly writes no `HEAD` entry. Git adds a log-only update in
+       `refs/files-backend.c:2499-2531` (`split_head_update`, called at :2709). The files arm logs `HEAD` only for edits
+       through `HEAD` with `deref: true`. `git update-ref -m direct refs/heads/main <c1>` logs `direct` for `HEAD`; an
+       `Update` of `refs/heads/main` with `deref: false` doesn't.
+    2. A same-value update writes no `HEAD` entry. Git skips the branch entry (:2859-2864, :3355-3357) and still logs
+       `HEAD`. The files arm returns no entry when previous equals new (`gix-ref/src/store/file/transaction/commit.rs`,
+       `reflog_entry()`) and has no log-only `HEAD` update. `git update-ref -m same HEAD <c2>` with `main` at `c2` logs
+       `same` for `HEAD`; the files arm logs neither.
+    3. With `core.logAllRefUpdates=false`, Git still appends to reflogs that exist (`refs/files-backend.c:1912-1953`,
+       `log_ref_setup`); `WriteReflog::Disable` never writes (`gix-ref/src/store/file/loose/reflog.rs`, `Disable => Ok(())`).
+       `git -c core.logAllRefUpdates=false update-ref -m off refs/heads/side <c1>` logs `off` for a branch that has a reflog.
+    4. Reflog messages are written as given, so a newline corrupts the file; Git normalises them (`refs.c:1030-1046`,
+       `copy_reflog_msg`, applied at :1350: leading whitespace dropped, whitespace runs including newlines become one
+       space, the end trimmed). `Update` with the message `"  a \t b\n\nc  "` writes three physical lines where Git writes
+       `a b c`. This is a correctness bug, not only a divergence, and the reftable arm already normalises.
+    Not divergences: updating through a dangling symbolic reference, and deleting then recreating a reference in separate
+    transactions. Not probed against the files store: both in one transaction. The `HEAD` reflog after `worktree add` is
+    `gix` behaviour and was compared only in a reftable repository, with Git 2.56: for an attached branch Git's log of the
+    new worktree has an empty-message entry and a `reset: moving to HEAD` one (only the empty one with `--detach`), and
+    `gix` writes the single empty-message entry.
+  - Open follow-up: when thread 8's `HEAD`-log PR lands, the reftable arm's own `head_log_edit` and same-value rule are
+    replaced by their shared functions and `head_log()` is wired in.
