@@ -375,6 +375,7 @@ impl TryFrom<&super::Store> for super::Store {
                 alloc_limit_bytes: s.alloc_limit_bytes,
                 current_dir: s.current_dir.clone().into(),
                 loose_compression: s.loose_compression,
+                fsync: s.fsync,
             },
         )
     }

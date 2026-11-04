@@ -113,6 +113,7 @@ impl gix::objs::Write for OutputWriter {
 impl OutputWriter {
     fn new(path: Option<impl AsRef<Path>>, compress: bool, object_hash: gix::hash::Kind) -> Self {
         match path {
+            // There is no repository here and thus no `core.fsync`: objects are written with the default flushing.
             Some(path) => OutputWriter::Loose(loose::Store::at(path.as_ref(), object_hash)),
             None => OutputWriter::Sink(
                 odb::sink(object_hash).compress(compress.then_some(gix::zlib::Compression::BEST_SPEED)),

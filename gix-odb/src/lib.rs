@@ -182,6 +182,8 @@ pub struct Store {
     alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     loose_compression: gix_zlib::Compression,
+    /// What to flush when writing loose objects.
+    fsync: gix_fs::fsync::Options,
 }
 
 /// Create a new cached handle to the object store with support for additional options.
