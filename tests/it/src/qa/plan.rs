@@ -244,6 +244,10 @@ fn global_input(path: &Path) -> bool {
 }
 
 fn prose_only(path: &Path) -> bool {
+    // Nothing reads `docs/`: no code includes it and no script or workflow refers to it.
+    if path.starts_with("docs") && path.extension().is_some_and(|extension| extension == "md") {
+        return true;
+    }
     matches!(
         path.to_str(),
         Some(
@@ -356,6 +360,23 @@ mod tests {
         }
         let plan = select(&packages, &BTreeSet::from(["DEVELOPMENT.md".into()]));
         assert_eq!(plan["packages"], json!([]), "Known prose changes need no Rust builds");
+        let plan = select(&packages, &BTreeSet::from(["docs/notes/design.md".into()]));
+        assert_eq!(
+            plan["packages"],
+            json!([]),
+            "Markdown below docs/ is prose that no build reads"
+        );
+        for path in [
+            "docs/notes/data.json",
+            "docs/generate.sh",
+            "etc/scripts/durability/p1.sh",
+        ] {
+            let plan = select(&packages, &BTreeSet::from([path.into()]));
+            assert_eq!(
+                plan["mode"], "exhaustive",
+                "{path} is not Markdown below docs/, so it may be read or run and cannot skip checks"
+            );
+        }
         Ok(())
     }
 
