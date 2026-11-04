@@ -346,6 +346,13 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
     * [ ] read object header (size + kind) without full decompression
 * **sink**
     * [x] write objects and obtain id
+* **quarantine** (feature `quarantine`)
+    * _receive a pack into a temporary object directory and move it into place once accepted, like `git receive-pack`_
+    * [x] explode small packs into loose objects, keep others as pack with a `.keep` file, per `receive.unpackLimit`
+    * [x] complete thin packs from the object database, including its alternates
+    * [x] freshen objects that exist already, flush, and move in the order Git does
+    * [x] `receive.maxInputSize`, `core.createObject`, `core.fsync*`
+    * [ ] `receive.fsckObjects`, `core.sharedRepository` and `pack.indexVersion` other than 2 (refused, not ignored)
 * **alternates**
     * _resolve links between object databases_
     * [x] safe with cycles and recursive configurations
