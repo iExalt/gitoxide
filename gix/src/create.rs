@@ -36,6 +36,11 @@ const TPL_HOOKS_PREPARE_COMMIT_MSG: &[u8] = include_bytes!("assets/init/hooks/pr
 const TPL_HOOKS_DOCS_URL: &[u8] = include_bytes!("assets/init/hooks/docs.url");
 const TPL_DESCRIPTION: &[u8] = include_bytes!("assets/init/description");
 const TPL_HEAD: &[u8] = include_bytes!("assets/init/HEAD");
+/// What `HEAD` contains while the references are stored as reftables. It doesn't name a branch that can exist, so that
+/// versions of Git which don't know reftables don't mistake the repository for one that stores its references in files.
+const REFTABLE_HEAD: &[u8] = b"ref: refs/heads/.invalid\n";
+/// The contents of `refs/heads`, which is a file when references are stored as reftables, like Git leaves it.
+const REFTABLE_REFS_HEADS: &[u8] = b"this repository uses the reftable format\n";
 
 struct PathCursor<'a>(&'a mut PathBuf);
 
@@ -148,12 +153,25 @@ pub fn into(directory: impl Into<PathBuf>, kind: Kind, options: Options) -> Resu
 pub(crate) fn into_with_capabilities(
     directory: impl Into<PathBuf>,
     kind: Kind,
+    options: Options,
+) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
+    into_with_ref_format(directory, kind, options, crate::init::RefFormat::Files)
+}
+
+/// Like [`into()`], but with the references stored as `ref_format` says. For reftables, only what lets Git find the
+/// repository is created, which are `HEAD`, `refs/heads` as a file, and the configuration. Creating the stack of
+/// tables is up to the caller, as it can only be done once the object hash is known.
+pub(crate) fn into_with_ref_format(
+    directory: impl Into<PathBuf>,
+    kind: Kind,
     Options {
         fs_capabilities,
         destination_must_be_empty,
         object_hash,
     }: Options,
+    ref_format: crate::init::RefFormat,
 ) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
+    let reftable = ref_format == crate::init::RefFormat::Reftable;
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
     let object_hash = object_hash.or_else(default_object_hash);
@@ -221,11 +239,18 @@ pub(crate) fn into_with_capabilities(
 
     {
         let mut cursor = NewDir(&mut dot_git).at("refs")?;
-        create_dir(PathCursor(cursor.as_mut()).at("heads"))?;
-        create_dir(PathCursor(cursor.as_mut()).at("tags"))?;
+        if reftable {
+            write_file(REFTABLE_REFS_HEADS, PathCursor(cursor.as_mut()).at("heads"))?;
+        } else {
+            create_dir(PathCursor(cursor.as_mut()).at("heads"))?;
+            create_dir(PathCursor(cursor.as_mut()).at("tags"))?;
+        }
     }
 
-    for (tpl, filename) in &[(TPL_HEAD, "HEAD"), (TPL_DESCRIPTION, "description")] {
+    for (tpl, filename) in &[
+        (if reftable { REFTABLE_HEAD } else { TPL_HEAD }, "HEAD"),
+        (TPL_DESCRIPTION, "description"),
+    ] {
         write_file(tpl, PathCursor(&mut dot_git).at(filename))?;
     }
 
@@ -252,16 +277,21 @@ pub(crate) fn into_with_capabilities(
             core.push("ignorecase", bool(caps.ignore_case))?;
             core.push("precomposeunicode", bool(caps.precompose_unicode))?;
 
-            match object_hash {
+            let sha256 = match object_hash {
                 #[cfg(feature = "sha256")]
-                Some(gix_hash::Kind::Sha256) => {
-                    core.push("repositoryformatversion", "1")?;
-
-                    let mut extensions = config.new_section("extensions", None).expect("valid section name");
+                Some(gix_hash::Kind::Sha256) => true,
+                _ => false,
+            };
+            // Extensions need version 1, which Git also writes if only the references need one.
+            core.push("repositoryformatversion", if sha256 || reftable { "1" } else { "0" })?;
+            if sha256 || reftable {
+                let mut extensions = config.new_section("extensions", None).expect("valid section name");
+                #[cfg(feature = "sha256")]
+                if sha256 {
                     extensions.push("objectformat", gix_hash::Kind::Sha256.to_string())?;
                 }
-                _ => {
-                    core.push("repositoryformatversion", "0")?;
+                if reftable {
+                    extensions.push("refstorage", "reftable")?;
                 }
             }
 

@@ -157,11 +157,13 @@ impl PrepareFetch {
         };
 
         // Refuse reference storage that can't be created, before anything is created.
-        crate::init::assure_ref_format_is_supported(&open_opts)?;
+        let ref_format = crate::init::select_ref_format(&open_opts)?;
 
-        // Clones adopt the remote's object format, so `init.defaultObjectFormat` doesn't apply.
+        // Clones adopt the remote's object format, so `init.defaultObjectFormat` doesn't apply. That also means that reftables
+        // can only be created once the remote told its format, which is why only what makes Git find the repository is written.
         let mut repo =
-            crate::ThreadSafeRepository::create_and_open(path, kind, create_opts, open_opts)?.to_thread_local();
+            crate::ThreadSafeRepository::create_and_open(path, kind, create_opts, open_opts, ref_format, false)?
+                .to_thread_local();
         url.canonicalize(repo.options.current_dir_or_empty()).or_raise(|| {
             gix_error::message!(
                 "Failed to turn the relative file url {:?} into an absolute one",

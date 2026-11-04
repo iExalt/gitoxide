@@ -67,7 +67,7 @@ pub fn init(directory: Option<PathBuf>) -> Result<gix::discover::repository::Pat
 ///
 /// `ref_format` is the equivalent of `git init --ref-format`. Like in Git, it takes precedence over
 /// `GIT_DEFAULT_REF_FORMAT` and `init.defaultRefFormat`, but not over `GIT_REFERENCE_BACKEND`.
-/// Anything but `files` is refused, before anything is created.
+/// `reftable` is refused, before anything is created, if the `reftable` feature isn't enabled.
 ///
 /// Apart from the reference format, it applies `init.defaultBranch` and `init.defaultObjectFormat` as well.
 pub fn init_with_ref_format(

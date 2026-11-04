@@ -347,8 +347,8 @@ fn assert_init_into_empty_directory(repo_kind: gix::create::Kind) -> gix_testtoo
     Ok(())
 }
 
-/// Git creates repositories with `reftable` references on request, which isn't supported, so it has to be refused
-/// explicitly instead of silently creating a repository that stores its references in files.
+/// Repositories that store references as `reftable` are created on request, with Git's precedence of what asks for it, if
+/// the `reftable` feature is enabled, and refused before anything is created otherwise.
 mod ref_format {
     use gix_testtools::{Result, tempfile};
     use serial_test::serial;
@@ -372,6 +372,7 @@ mod ref_format {
         let mut permissions = gix::open::Permissions::isolated();
         if !environment.is_empty() {
             permissions.env = gix::open::permissions::Environment::all();
+            permissions.config.user = true;
         }
         let open_options = gix::open::Options::isolated()
             .permissions(permissions)
@@ -383,16 +384,40 @@ mod ref_format {
         let res = gix::ThreadSafeRepository::init_opts(
             &destination,
             gix::create::Kind::WithWorktree,
-            gix::create::Options::default(),
+            gix::create::Options {
+                object_hash: Some(gix_testtools::object_hash()),
+                ..Default::default()
+            },
             open_options,
         );
         drop(env);
         Ok((tmp, destination, res))
     }
 
+    /// Configuration that doesn't come from the API, so that it is as lenient as the one of a configuration file. It is
+    /// the global configuration, which has to be kept alive as long as it is used.
+    fn configured(key_values: &[(&str, &str)]) -> (tempfile::TempDir, Vec<(String, String)>) {
+        let tmp = tempfile::tempdir().expect("a temporary directory can be created");
+        use std::fmt::Write;
+        let mut contents = String::new();
+        for (key, value) in key_values {
+            let (section, name) = key.split_once('.').expect("keys have a section");
+            writeln!(contents, "[{section}]\n\t{name} = {value}").expect("writing to a string works");
+        }
+        let path = tmp.path().join("global.config");
+        std::fs::write(&path, contents).expect("the file can be written");
+        (tmp, vec![("GIT_CONFIG_GLOBAL".to_owned(), path.display().to_string())])
+    }
+
+    fn as_refs(env: &[(String, String)]) -> Vec<(&str, &str)> {
+        env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+    }
+
     #[test]
     #[serial]
     fn files_is_created_unless_something_else_is_requested() -> Result {
+        let (_bogus_dir, bogus) = configured(&[("init.defaultRefFormat", "bogus")]);
+        let (_wrong_case_dir, wrong_case) = configured(&[("init.defaultRefFormat", "Files")]);
         for (overrides, environment) in [
             (&[][..], &[][..]),
             (&["init.defaultRefFormat=files"][..], &[][..]),
@@ -409,27 +434,49 @@ mod ref_format {
                 &["init.defaultRefFormat=files"][..],
                 &[("GIT_DEFAULT_REF_FORMAT", "reftable")][..],
             ),
+            (&[][..], &as_refs(&bogus)[..]),
+            (&[][..], &as_refs(&wrong_case)[..]),
         ] {
             let (_tmp, destination, repo) = init(overrides, environment)?;
             let repo = repo.unwrap_or_else(|err| panic!("{overrides:?} {environment:?}: {err:?}"));
             assert_eq!(repo.refs.unsupported_backend(), None);
-            assert!(destination.join(".git").is_dir());
+            assert!(
+                destination.join(".git/refs/heads").is_dir(),
+                "{overrides:?} {environment:?}"
+            );
         }
         Ok(())
     }
 
     #[test]
     #[serial]
-    fn unsupported_formats_are_refused_before_anything_is_created() -> Result {
+    fn formats_at_other_locations_are_refused_before_anything_is_created() -> Result {
+        let (_tmp, destination, repo) = init(&[], &[("GIT_REFERENCE_BACKEND", "files://elsewhere")])?;
+        let err = repo
+            .map(|_| ())
+            .expect_err("a format that isn't supported must not turn into files");
+        assert!(
+            err.is_unsupported(),
+            "callers can tell that a different strategy is needed: {err:?}"
+        );
+        assert!(!destination.exists(), "nothing is created for a refused request");
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(not(feature = "reftable"))]
+    fn reftable_is_refused_before_anything_is_created_without_the_feature() -> Result {
+        let (_experimental_dir, experimental) = configured(&[("feature.experimental", "true")]);
         for (overrides, environment) in [
             (&["init.defaultRefFormat=reftable"][..], &[][..]),
             (&["feature.experimental=true"][..], &[][..]),
             (&["feature.experimental"][..], &[][..]),
+            (&[][..], &as_refs(&experimental)[..]),
             (
                 &["init.defaultRefFormat=files"][..],
                 &[("GIT_REFERENCE_BACKEND", "reftable")][..],
             ),
-            (&[][..], &[("GIT_REFERENCE_BACKEND", "files://elsewhere")][..]),
             (&[][..], &[("GIT_DEFAULT_REF_FORMAT", "reftable")][..]),
         ] {
             let (_tmp, destination, repo) = init(overrides, environment)?;
@@ -450,16 +497,18 @@ mod ref_format {
 
     #[test]
     #[serial]
-    fn invalid_values_are_errors_and_not_unsupported() -> Result {
+    fn invalid_values_are_errors_where_git_dies_and_ignored_where_it_warns() -> Result {
         for (overrides, environment) in [
+            // A format that is passed explicitly, like `--ref-format`, and one of the environment, are strict.
             (&["init.defaultRefFormat=bogus"][..], &[][..]),
             (&["init.defaultRefFormat=Files"][..], &[][..]),
+            // A value that is missing is fatal whatever its source.
             (&["init.defaultRefFormat"][..], &[][..]),
             (&[][..], &[("GIT_DEFAULT_REF_FORMAT", "bogus")][..]),
             (&[][..], &[("GIT_REFERENCE_BACKEND", "bogus")][..]),
         ] {
             let (_tmp, destination, repo) = init(overrides, environment)?;
-            let err = repo.map(|_| ()).expect_err("Git refuses unknown formats");
+            let err = repo.map(|_| ()).expect_err("Git refuses these");
             assert!(
                 err.is_validation(),
                 "{overrides:?} {environment:?}: the value is invalid rather than just unsupported: {err:?}"
@@ -467,5 +516,178 @@ mod ref_format {
             assert!(!destination.exists(), "{overrides:?} {environment:?}");
         }
         Ok(())
+    }
+
+    #[cfg(feature = "reftable")]
+    mod reftable {
+        use gix_testtools::Result;
+        use serial_test::serial;
+
+        use super::{as_refs, configured, init};
+
+        #[test]
+        #[serial]
+        fn it_is_created_by_each_request_that_wins_with_git_precedence() -> Result {
+            let (_a, experimental_unknown) =
+                configured(&[("init.defaultRefFormat", "bogus"), ("feature.experimental", "true")]);
+            let (_b, configured_reftable) = configured(&[("init.defaultRefFormat", "reftable")]);
+            let (_c, configured_experimental) = configured(&[("feature.experimental", "true")]);
+            let (_d, files_beats_experimental) =
+                configured(&[("feature.experimental", "true"), ("init.defaultRefFormat", "files")]);
+            for (overrides, environment, reftable) in [
+                (&["init.defaultRefFormat=reftable"][..], &[][..], true),
+                (&["feature.experimental=true"][..], &[][..], true),
+                (&["feature.experimental"][..], &[][..], true),
+                (&[][..], &as_refs(&configured_reftable)[..], true),
+                (&[][..], &as_refs(&configured_experimental)[..], true),
+                (&[][..], &as_refs(&experimental_unknown)[..], true),
+                (&[][..], &as_refs(&files_beats_experimental)[..], false),
+                (&[][..], &[("GIT_DEFAULT_REF_FORMAT", "reftable")][..], true),
+                (&[][..], &[("GIT_REFERENCE_BACKEND", "reftable")][..], true),
+                (
+                    &["init.defaultRefFormat=files"][..],
+                    &[("GIT_REFERENCE_BACKEND", "reftable")][..],
+                    true,
+                ),
+                (
+                    &["init.defaultRefFormat=reftable"][..],
+                    &[("GIT_DEFAULT_REF_FORMAT", "files")][..],
+                    true,
+                ),
+            ] {
+                let (_tmp, destination, repo) = init(overrides, environment)?;
+                let repo = repo.unwrap_or_else(|err| panic!("{overrides:?} {environment:?}: {err:?}"));
+                assert_eq!(
+                    repo.refs.as_reftable().is_some(),
+                    reftable,
+                    "{overrides:?} {environment:?}"
+                );
+                if reftable {
+                    assert_eq!(
+                        gix_testtools::git(&destination, "rev-parse --show-ref-format")?.trim(),
+                        "reftable",
+                        "{overrides:?} {environment:?}: Git agrees on the format"
+                    );
+                    assert_eq!(
+                        gix_testtools::git(&destination, "symbolic-ref HEAD")?.trim(),
+                        "refs/heads/main",
+                        "{overrides:?} {environment:?}: HEAD is stored in the stack that was created"
+                    );
+                    gix_testtools::git(&destination, "refs verify")?;
+                }
+            }
+            Ok(())
+        }
+
+        #[test]
+        #[serial]
+        fn the_new_repository_looks_like_the_one_git_creates() -> Result {
+            let _environment = gix_testtools::isolate_git_environment()?;
+            let hash = gix_testtools::object_hash();
+            let tmp = gix_testtools::tempfile::tempdir()?;
+            let git_root = tmp.path().join("git");
+            let ours_root = tmp.path().join("ours");
+            std::fs::create_dir(&git_root)?;
+            gix_testtools::git(
+                &git_root,
+                &format!("init -q --ref-format=reftable --object-format={hash} -b trunk ."),
+            )?;
+            let repo = gix::ThreadSafeRepository::init_opts(
+                &ours_root,
+                gix::create::Kind::WithWorktree,
+                gix::create::Options {
+                    object_hash: Some(hash),
+                    ..Default::default()
+                },
+                gix::open::Options::isolated()
+                    .config_overrides(["init.defaultRefFormat=reftable", "init.defaultBranch=trunk"]),
+            )?;
+            assert_eq!(repo.objects.object_hash(), hash);
+
+            let (git_dir, ours_dir) = (git_root.join(".git"), ours_root.join(".git"));
+            assert_eq!(
+                listing(&git_dir)?,
+                listing(&ours_dir)?,
+                "the same files and directories with the same modes and the contents that make Git find the repository"
+            );
+            assert_eq!(
+                std::fs::read_to_string(ours_dir.join("refs/heads"))?,
+                "this repository uses the reftable format\n",
+                "the stub is what Git leaves, and only a file so that tools can't mistake it for a directory of references"
+            );
+            assert_eq!(
+                std::fs::read_to_string(ours_dir.join("HEAD"))?,
+                "ref: refs/heads/.invalid\n",
+                "HEAD can't name a branch while the stack holds the references"
+            );
+            for key in [
+                "core.repositoryformatversion",
+                "core.bare",
+                "core.logallrefupdates",
+                "extensions.refstorage",
+                "extensions.objectformat",
+            ] {
+                assert_eq!(
+                    gix_testtools::git(&ours_root, &format!("config --local --get {key}")).ok(),
+                    gix_testtools::git(&git_root, &format!("config --local --get {key}")).ok(),
+                    "{key}"
+                );
+            }
+            assert_eq!(
+                gix_testtools::git(&ours_root, "symbolic-ref HEAD")?,
+                gix_testtools::git(&git_root, "symbolic-ref HEAD")?,
+                "Git reads the HEAD that is in the table"
+            );
+            assert_eq!(
+                gix_testtools::git(&ours_root, "for-each-ref")?,
+                gix_testtools::git(&git_root, "for-each-ref")?
+            );
+            gix_testtools::git(&ours_root, "refs verify")?;
+            gix_testtools::git(&ours_root, "fsck")?;
+            Ok(())
+        }
+
+        /// Everything of a repository that Git's templates don't decide, as `(path, what it is, mode)`, with the file names of
+        /// tables normalized as they contain a hash of the table's content, and the contents of the files that make Git find
+        /// the repository.
+        fn listing(git_dir: &std::path::Path) -> Result<Vec<String>> {
+            use std::os::unix::fs::PermissionsExt;
+            fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) -> Result {
+                for entry in std::fs::read_dir(dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    let relative = path.strip_prefix(root)?.to_string_lossy().into_owned();
+                    if ["hooks", "info", "description"].contains(&relative.as_str()) {
+                        continue;
+                    }
+                    let metadata = entry.metadata()?;
+                    let mode = metadata.permissions().mode() & 0o777;
+                    if metadata.is_dir() {
+                        out.push(format!("{relative}/ {mode:o}"));
+                        walk(root, &path, out)?;
+                    } else {
+                        // The names of tables have the range of update indices, which Git's are the same as ours, and a hash
+                        // of the content, which is of no concern.
+                        let relative = if relative.starts_with("reftable/0x") {
+                            let (range, _) = relative.rsplit_once('-').expect("table names have a hash");
+                            format!("{range}-<hash>.ref")
+                        } else {
+                            relative
+                        };
+                        let contents = if ["HEAD", "refs/heads"].contains(&relative.as_str()) {
+                            format!(" {:?}", std::fs::read_to_string(&path)?)
+                        } else {
+                            String::new()
+                        };
+                        out.push(format!("{relative} {mode:o}{contents}"));
+                    }
+                }
+                Ok(())
+            }
+            let mut out = Vec::new();
+            walk(git_dir, git_dir, &mut out)?;
+            out.sort();
+            Ok(out)
+        }
     }
 }

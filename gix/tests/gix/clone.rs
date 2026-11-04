@@ -1535,6 +1535,76 @@ mod blocking_io {
         );
         Ok(())
     }
+
+    /// Clones into reftables are compared with what `git clone --ref-format=reftable` makes of the same remote, which also
+    /// has to find nothing wrong with them.
+    #[test]
+    #[cfg(feature = "reftable")]
+    fn cloning_into_reftables_has_the_references_and_reflogs_git_makes() -> TestResult {
+        let _environment = gix_testtools::isolate_git_environment()?;
+        let sha1_remote = remote::repo_path("base");
+        #[cfg_attr(not(feature = "sha256"), allow(unused_mut))]
+        let mut remotes = vec![("the object format of the fixtures", sha1_remote)];
+        #[cfg(feature = "sha256")]
+        remotes.push((
+            "an object format that the new repository has to adopt",
+            gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote"),
+        ));
+        for (name, remote) in remotes {
+            let remote = std::fs::canonicalize(remote)?;
+            for (kind, flag) in [
+                (gix::create::Kind::Bare, "--bare"),
+                (gix::create::Kind::WithWorktree, "--no-checkout"),
+            ] {
+                let tmp = gix_testtools::tempfile::TempDir::new()?;
+                let git_clone = tmp.path().join("git");
+                gix_testtools::git(
+                    tmp.path(),
+                    &format!("clone -q {flag} --ref-format=reftable {} git", remote.display()),
+                )?;
+                let ours = tmp.path().join("ours");
+                gix::clone::PrepareFetch::new(
+                    remote.as_path(),
+                    &ours,
+                    kind,
+                    Default::default(),
+                    restricted().config_overrides(["init.defaultRefFormat=reftable"]),
+                )?
+                .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+                let context = format!("{name}, {kind:?}");
+                for command in [
+                    "rev-parse --show-ref-format",
+                    "symbolic-ref HEAD",
+                    "for-each-ref --format=%(refname)%20%(objectname)%20%(symref)",
+                    "reflog show --format=%gs HEAD --",
+                    "config --local --get core.repositoryformatversion",
+                    "config --local --get extensions.refstorage",
+                    "config --local --get extensions.objectformat",
+                ] {
+                    let in_dir = |dir: &Path| gix_testtools::git(dir, command).ok();
+                    assert_eq!(
+                        in_dir(&ours),
+                        in_dir(&git_clone),
+                        "{context}: `git {command}` says the same about both clones"
+                    );
+                }
+                assert!(
+                    ours.join(if matches!(kind, gix::create::Kind::Bare) {
+                        ""
+                    } else {
+                        ".git"
+                    })
+                    .join("refs/heads")
+                    .is_file(),
+                    "{context}: the stub is a file"
+                );
+                gix_testtools::git(&ours, "refs verify")?;
+                gix_testtools::git(&ours, "fsck")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -1617,7 +1687,8 @@ fn clone_ignores_default_object_format() -> TestResult {
 }
 
 #[test]
-fn clone_refuses_unsupported_ref_format_before_creating_anything() -> TestResult {
+#[cfg(not(feature = "reftable"))]
+fn clone_refuses_reftable_without_the_feature_before_creating_anything() -> TestResult {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let destination = tmp.path().join("clone");
     for (overrides, supported) in [
@@ -1645,6 +1716,39 @@ fn clone_refuses_unsupported_ref_format_before_creating_anything() -> TestResult
             }
         }
     }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "reftable")]
+fn a_clone_that_is_interrupted_before_the_object_format_is_known_leaves_what_makes_git_find_the_repository()
+-> TestResult {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let destination = tmp.path().join("clone");
+    let prepare = gix::clone::PrepareFetch::new(
+        remote::repo("base").path(),
+        &destination,
+        gix::create::Kind::Bare,
+        Default::default(),
+        restricted().config_overrides(["init.defaultRefFormat=reftable"]),
+    )?
+    .persist();
+    assert_eq!(
+        std::fs::read_to_string(destination.join("HEAD"))?,
+        "ref: refs/heads/.invalid\n",
+        "no branch can be named before the stack exists"
+    );
+    assert!(destination.join("refs/heads").is_file(), "the stub that Git leaves");
+    assert!(
+        !destination.join("reftable").exists(),
+        "a stack of tables depends on the object hash, which the remote is yet to tell"
+    );
+    assert_eq!(
+        gix_testtools::git(&destination, "rev-parse --show-ref-format")?.trim(),
+        "reftable",
+        "Git finds it"
+    );
+    drop(prepare);
     Ok(())
 }
 
