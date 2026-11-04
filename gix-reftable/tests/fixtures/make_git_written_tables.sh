@@ -14,6 +14,8 @@ set -eu -o pipefail
 # * `stacked`:   default settings, which includes the object index. As the references were written by many
 #                transactions the stack has several tables, and the newest ones hold tombstones that hide
 #                references of the oldest table.
+# * `stacked-plain`: like `stacked`, but without the object index, and not compacted, so that merging its tables can be compared
+#                with what Git merges them into, byte for byte.
 # * `compacted`: `stacked` after `git pack-refs --all`, which merges everything into a single table.
 # * `plain`:     one table written without the object index, which this crate doesn't write. It can be
 #                reproduced byte for byte.
@@ -70,6 +72,8 @@ if [ "$(wc -l <stacked/.git/reftable/tables.list)" -lt 3 ]; then
   echo "the fixture needs a stack of several tables, but has $(wc -l <stacked/.git/reftable/tables.list)" >&2
   exit 1
 fi
+
+populate stacked-plain reftable.indexObjects=false
 
 cp -R stacked compacted
 git -C compacted pack-refs --all
