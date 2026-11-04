@@ -10,6 +10,8 @@
 //! 4. Write the [header](Request::encode_header()), followed by a pack if [one is expected](Request::expects_pack()).
 //! 5. [Parse the report](Request::parse_report()) the server sends back.
 //!
+//! With the `blocking-client` feature, [`push()`] performs steps 4 and 5 over a transport.
+//!
 //! ## Outcomes
 //!
 //! A [`Report`] means the server answered completely and consistently, even when it rejected some or all commands.
@@ -35,6 +37,11 @@ pub use command::Command;
 
 mod request;
 pub use request::{Options, Request, StatusFormat};
+
+#[cfg(feature = "blocking-client")]
+mod function;
+#[cfg(feature = "blocking-client")]
+pub use function::push;
 
 ///
 pub mod report;

@@ -2,6 +2,10 @@ use gix_hash::{Kind, ObjectId};
 use gix_protocol::push::{Command, Options, Request, ServerCapabilities};
 
 mod command;
+#[cfg(feature = "blocking-client")]
+mod driver;
+#[cfg(feature = "blocking-client")]
+mod real_peer;
 mod report;
 mod request;
 

@@ -28,7 +28,7 @@ fn header_matches_the_bytes_git_sends_for_a_single_update() {
     )
     .expect("valid request");
     let line = format!(
-        "{OLD} {NEW} refs/heads/main\0report-status side-band-64k object-format=sha1 agent=git/2.56.0-gitoxide"
+        "{OLD} {NEW} refs/heads/main\0report-status side-band-64k quiet object-format=sha1 agent=git/2.56.0-gitoxide"
     );
     let expected = format!("{:04x}{line}0000", line.len() + 4);
     assert_eq!(
@@ -49,7 +49,7 @@ fn capabilities_follow_the_choices_and_are_only_announced_if_offered() {
                 status_format: StatusFormat::V2,
                 atomic: true,
                 push_options: vec!["topic=x".into(), "ci.skip".into()],
-                quiet: true,
+                progress: false,
                 agent: Some("agent/1".into()),
             },
         );
@@ -89,10 +89,7 @@ fn capabilities_follow_the_choices_and_are_only_announced_if_offered() {
         commands(kind, &[("refs/heads/a", 0, 1)]),
         kind,
         &server_with(&format!("report-status object-format={kind}")),
-        Options {
-            quiet: true,
-            ..Default::default()
-        },
+        Options::default(),
     )
     .expect("valid request");
     assert_eq!(
@@ -101,6 +98,21 @@ fn capabilities_follow_the_choices_and_are_only_announced_if_offered() {
         "quiet and side-band-64k are optional, so they are left out when the server doesn't offer them"
     );
     assert!(!unquiet.uses_side_band() && !unquiet.ofs_delta_allowed());
+
+    let with_progress = Request::new(
+        commands(kind, &[("refs/heads/a", 0, 1)]),
+        kind,
+        &server(kind, ""),
+        Options {
+            progress: true,
+            ..Default::default()
+        },
+    )
+    .expect("valid request");
+    assert!(
+        !with_progress.capabilities().contains("quiet"),
+        "asking for progress leaves out quiet"
+    );
 }
 
 #[test]

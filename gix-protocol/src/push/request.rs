@@ -28,8 +28,12 @@ pub struct Options {
     pub atomic: bool,
     /// Push options to pass to the server's hooks. Refused if the server doesn't offer `push-options`.
     pub push_options: Vec<BString>,
-    /// Ask the server to suppress progress output. Ignored if the server doesn't offer `quiet`.
-    pub quiet: bool,
+    /// Ask the server to report progress while it receives the pack, instead of suppressing it with `quiet`.
+    ///
+    /// Drivers that can't read the progress while they write the pack, like [`push()`](super::push()), risk a stall if the
+    /// server produces more of it than the connection buffers, so leave this off unless the pack is small. The server
+    /// is only asked to be quiet if it offers `quiet`.
+    pub progress: bool,
     /// The value to announce as `agent`, which should look like `git/2.50.0-gitoxide`. It is omitted if `None`.
     pub agent: Option<String>,
 }
@@ -148,7 +152,7 @@ impl Request {
             atomic: options.atomic,
             push_options: options.push_options,
             side_band: server.side_band_64k,
-            quiet: options.quiet && server.quiet,
+            quiet: !options.progress && server.quiet,
             ofs_delta: server.ofs_delta,
             object_format,
             agent: options.agent,
