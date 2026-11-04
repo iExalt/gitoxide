@@ -266,7 +266,21 @@ fn reuc_extension() {
     let file = loose_file("REUC");
     assert_eq!(file.version(), Version::V2);
 
-    assert!(file.resolve_undo().is_some());
+    let paths = file.resolve_undo().expect("the extension is there");
+    assert_eq!(
+        paths.iter().map(|path| path.name().to_string()).collect::<Vec<_>>(),
+        ["fi/le"],
+    );
+    let modes: Vec<_> = paths[0]
+        .stages()
+        .iter()
+        .map(|stage| stage.map(|stage| (stage.mode(), stage.id().is_null())))
+        .collect();
+    assert_eq!(
+        modes,
+        [Some((0o100644, false)); 3],
+        "the ancestor, ours and theirs of the conflict that was resolved, with the objects to keep"
+    );
 }
 
 #[test]
