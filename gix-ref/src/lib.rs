@@ -57,6 +57,9 @@ mod raw;
 
 pub use raw::Reference;
 
+pub mod view;
+pub use view::StoreRef;
+
 mod target;
 
 ///
