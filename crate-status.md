@@ -547,6 +547,7 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
 |      05     |          |             |
 |      06     |     X    |      X      |
 |      07     |     X    |      X      |
+|      08     |     X    |      X      |
 
 * **01** -> async
 * **02** -> proxy support, with `http.noProxy` and an empty `http.proxy` to switch proxies off; `curl` also reads proxy variables of the environment by itself
@@ -555,6 +556,23 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
 * **05** -> [reauthentication after redirect](https://github.com/git/git/blob/eea7033409a0ed713c78437fc76486983d211e25/http.c#L1931)
 * **06** -> TLS settings: `http.sslCAInfo`, `http.sslVerify` and `http.sslVersion` (`reqwest` has no SSLv2/v3 and, with `rustls`, no TLS before 1.2)
 * **07** -> low-speed limits (`http.lowSpeedLimit` and `http.lowSpeedTime`), which end a transfer that stays below the speed for that long
+* **08** -> ending a request or upload from another thread with an `InterruptHandle`, which fetch and push use to honor their `should_interrupt` flag while a server is silent
+
+#### Cancellation and what stays unbounded
+
+* `TransportWithoutIO::interrupt_handle()` ends what a transport blocks on from another thread: it kills the process of a _file://_
+  or _ssh://_ transport, shuts down the socket of a _git://_ transport and aborts the request of an HTTP backend. `InterruptHandle::watch()`
+  connects a flag, such as the one of a handler for `Ctrl+C`, to it. `Prepare::receive()` and `Prepare::send()` do that with their
+  `should_interrupt`, and `gix free pack receive` does it for its flag. The handshake of `ref_map()` and `prepare_push()` takes
+  no flag, so bound it with `interrupt_handle()` and `watch()`; the same goes for opening the connection.
+* An interrupt that ends a push before the pack was sent is a failure that couldn't have changed the remote. Later, the push has an
+  uncertain outcome, which `Connection::reconcile()` resolves.
+* Credential helpers, `core.askpass` programs, `ssh -G` and the client `pre-push` hook run as long as they run and aren't ended by the
+  limits or by interrupts. With prompts disabled (`GIT_TERMINAL_PROMPT=0`), programs that would ask fail at once.
+* The low-speed limits count the bytes that arrive and leave. The keep-alive packets of `receive.keepAlive` are four bytes per
+  interval, so with a policy of 1000 bytes per
+  second a hook that stays silent for longer than the time of the limits ends the push, which is not tested. A consumer that stops reading for
+  a few seconds doesn't end a transfer on either backend.
 
 ### gix-protocol
 * _abstract over protocol versions to allow delegates to deal only with a single way of doing things_
