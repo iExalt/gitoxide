@@ -208,6 +208,13 @@ impl<T> Prepare<'_, '_, T>
 where
     T: Transport,
 {
+    /// Return a handle that ends what the fetch blocks on from another thread, if the transport has one, to make a cancelled
+    /// fetch end promptly even if the server stopped responding. See
+    /// [`Connection::interrupt_handle()`](crate::remote::Connection::interrupt_handle()).
+    pub fn interrupt_handle(&self) -> Option<gix_protocol::transport::client::InterruptHandle> {
+        gix_protocol::transport::client::TransportWithoutIO::interrupt_handle(&self.inner.con.as_ref()?.transport.inner)
+    }
+
     /// If dry run is enabled, no change to the repository will be made.
     ///
     /// This works by not actually fetching the pack after negotiating it, nor will refs be updated.
