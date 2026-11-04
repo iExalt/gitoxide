@@ -31,6 +31,7 @@ mod http_proxy;
 mod http_push;
 mod http_tls;
 mod interrupt;
+mod pre_push;
 mod ssh;
 mod ssh_config;
 
@@ -267,4 +268,18 @@ where
         return Err(err.into());
     }
     Ok(())
+}
+
+/// The commit two steps behind `HEAD`, which `HEAD~2` names, for fixtures with a linear history and without the `revision` feature.
+pub(crate) fn grandparent_of_head(repo: &gix::Repository) -> TestResult<gix::ObjectId> {
+    let mut id = repo.head_id()?.detach();
+    for _ in 0..2 {
+        id = repo
+            .find_commit(id)?
+            .parent_ids()
+            .next()
+            .expect("the fixture has three commits")
+            .detach();
+    }
+    Ok(id)
 }

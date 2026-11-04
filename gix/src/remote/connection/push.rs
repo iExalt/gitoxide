@@ -56,6 +56,7 @@ where
             options,
             trace,
             before_send: None,
+            pre_push_hook: false,
             on_remote_message: None,
         })
     }
