@@ -270,6 +270,25 @@ impl<'a> StoreRef<'a> {
         ReflogPlatform::new(self, name)
     }
 
+    /// Return the names of all references that have a reflog, even an empty one, in the order of their names, for example to
+    /// expire them or to find the objects they keep alive.
+    ///
+    /// These are the reflogs Git's `reflog list` shows, as seen from the worktree this store is for:
+    ///
+    /// * The references all worktrees share, and the ones private to this worktree like its `HEAD`, which are
+    ///   the main worktree's own if this is the main worktree.
+    /// * From the main worktree only, those that are private to the linked worktrees, named `worktrees/<id>/HEAD`,
+    ///   `worktrees/<id>/refs/bisect/bad` and so on. A linked worktree doesn't see the ones of the others, nor those of the main one.
+    ///
+    /// Namespaces are ignored. The names are read now, and a reflog that is created or removed meanwhile may or may not be among them.
+    pub fn reflog_names(self) -> Result<Vec<crate::FullName>> {
+        match self.backend {
+            Backend::File(store) => store.reflog_names_inner(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.reflog_names_inner(),
+        }
+    }
+
     /// Return `true` if a reflog exists for the reference with the given fully qualified `name`.
     ///
     /// This is the fastest possible way to learn about the existence of a reflog. It might still not be readable.
