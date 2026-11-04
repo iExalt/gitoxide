@@ -27,6 +27,7 @@ mod http_authentication;
 mod http_connections;
 mod http_fetch;
 mod http_low_speed;
+mod http_proxy;
 mod ssh;
 mod ssh_config;
 
@@ -169,6 +170,15 @@ pub(crate) fn transport<H: http::Http + Default>(url: &str) -> TestResult<http::
 
 /// Run `case` in an isolated process with an environment that can't redirect traffic, and return `true` in the parent process.
 pub(crate) fn isolated() -> TestResult<Option<gix_testtools::Env<'static>>> {
+    Ok(isolated_environment()?.map(|env| env.set("NO_PROXY", "*").set("no_proxy", "*")))
+}
+
+/// Like [`isolated()`], but without `NO_PROXY`, which would take precedence over the proxy that a test configures.
+pub(crate) fn isolated_for_proxy_tests() -> TestResult<Option<gix_testtools::Env<'static>>> {
+    Ok(isolated_environment()?.map(|env| env.unset("NO_PROXY").unset("no_proxy")))
+}
+
+fn isolated_environment() -> TestResult<Option<gix_testtools::Env<'static>>> {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(None);
     }
@@ -181,9 +191,7 @@ pub(crate) fn isolated() -> TestResult<Option<gix_testtools::Env<'static>>> {
             .unset("https_proxy")
             .unset("HTTPS_PROXY")
             .unset("all_proxy")
-            .unset("ALL_PROXY")
-            .set("NO_PROXY", "*")
-            .set("no_proxy", "*"),
+            .unset("ALL_PROXY"),
     ))
 }
 
