@@ -4,11 +4,11 @@
 //! state of the references stored in a directory. A repository has one stack with the shared references and those of
 //! the main worktree, in `<common-dir>/reftable`, and every linked worktree has another one for the references that are
 //! private to it, like its `HEAD`, in `<git-dir>/reftable`. Which stack holds a reference follows Git, see
-//! [`Store::find()`].
+//! [`Store::find()`](crate::reftable::Store::find()).
 //!
-//! Stacks are opened when they are first needed, which is why creating and cloning a [`Store`] cannot fail and is cheap.
+//! Stacks are opened when they are first needed, which is why creating and cloning a [`Store`](crate::reftable::Store) cannot fail and is cheap.
 //! Clones share what was read, and every lookup of a single reference reads the list of its stack again to see what other
-//! writers published, like Git does. Iterations and [snapshots](Store::snapshot()) use the state of the stacks as they
+//! writers published, like Git does. Iterations and [snapshots](crate::reftable::Store::snapshot()) use the state of the stacks as they
 //! found it. Reflog reads look for changes too, whereas Git's iteration of reflogs doesn't, as its processes are short-lived.
 //!
 //! References are edited with a [transaction](crate::Store::as_ref()) that adds one table to every stack it changes.
