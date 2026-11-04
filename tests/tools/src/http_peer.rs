@@ -120,6 +120,9 @@ pub struct Config {
     pub fault: Fault,
     /// If `true`, `fault` applies to `POST` requests only, so that clients can get their advertisement.
     pub fault_posts_only: bool,
+    /// The number of requests to serve normally before `fault` begins to apply, which lets a client get through the handshake of
+    /// a push, an advertisement and the `POST` that probes for authentication, before it hits the fault.
+    pub fault_after_requests: usize,
     /// If set, `GET` requests below the old name are redirected to the new one with a `301`, like services do for repositories
     /// that were renamed, and all other requests to the old name fail with a `404`.
     pub moved: Option<Moved>,
@@ -349,7 +352,7 @@ fn handle_request(
             .find_map(|(key, value)| (key == name).then_some(value.as_str()))
     };
 
-    let fault = if shared.config.fault_posts_only && method != "POST" {
+    let fault = if (shared.config.fault_posts_only && method != "POST") || index < shared.config.fault_after_requests {
         Fault::None
     } else {
         shared.config.fault
