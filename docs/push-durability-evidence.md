@@ -172,6 +172,14 @@ same. These differences remain, for the network phase to decide about:
 * Keep-alive packets are sent every `receive.keepAlive` seconds from the start of each hook, where Git sends one after that
   many seconds of silence. None are sent while connectivity is checked or deltas are resolved, which Git does as well, and
   which matters to clients with timeouts for large pushes.
+* The post-receive and post-update hooks are skipped for reference names that can't be represented on Windows, as in Git.
+* The `reference-transaction` hook runs in the Git directory with `GIT_DIR` set, like the other receive-side hooks, for the
+  one transaction of an atomic push or the two of a push without atomicity, where deletions come first. A refusal in the
+  `preparing` or `prepared` state ends the receiver without a report, as `die()` does in Git: the client gets what was said
+  before, and nothing after, and no hook that follows runs. What the hook prints isn't relayed to the client in either.
+  The receiver releases the `.keep` file of the pack on the way out, which Git leaves behind.
+* Observers learn of rejected updates in the order of Git, with updates that go through symbolic references last. The
+  lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
 unsupported: hooks, `updateInstead`, signed pushes, `proc-receive`, namespaces, shallow and partial repositories,

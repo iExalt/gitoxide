@@ -404,6 +404,8 @@ pub(super) enum StoreFailure {
     Start,
     /// The transaction failed as a whole, which is the only way for an atomic transaction to fail, or committing failed.
     Commit,
+    /// A hook refused the transaction, which makes Git stop without telling the client what happened to the commands.
+    Died,
 }
 
 /// The reference store, which executes a transaction at a time.
@@ -508,6 +510,7 @@ fn execute_non_atomic(
         } else {
             match refs.commit(&queued) {
                 Ok(rejected) => rejected,
+                Err(StoreFailure::Died) => return,
                 Err(_) => {
                     reported = Some("failed to update refs");
                     Vec::new()
@@ -1052,6 +1055,8 @@ mod tests {
     struct FakeRefs {
         begin_fails: bool,
         commit_fails: bool,
+        /// Die in the first transaction that is committed.
+        dies: bool,
         reject: Vec<(usize, &'static str)>,
         commits: RefCell<Vec<Vec<usize>>>,
         began: RefCell<Vec<bool>>,
@@ -1070,6 +1075,9 @@ mod tests {
             self.commits
                 .borrow_mut()
                 .push(queued.iter().map(|queued| queued.index).collect());
+            if self.dies {
+                return Err(StoreFailure::Died);
+            }
             if self.commit_fails {
                 return Err(StoreFailure::Commit);
             }
@@ -1079,6 +1087,28 @@ mod tests {
 
     fn errors(commands: &[Command]) -> Vec<Option<&str>> {
         commands.iter().map(|command| command.error.as_deref()).collect()
+    }
+
+    #[test]
+    fn a_death_in_the_transaction_of_deletions_stops_the_transaction_after_it() {
+        let mut commands = vec![update("refs/heads/a"), delete("refs/heads/b")];
+        let mut refs = FakeRefs {
+            dies: true,
+            ..Default::default()
+        };
+        execute(
+            &mut commands,
+            false,
+            &policy(),
+            &Fake::default(),
+            &mut refs,
+            &mut Messages::default(),
+        );
+        assert_eq!(
+            *refs.commits.borrow(),
+            [vec![1]],
+            "Git exits where the hook refused, so the other updates are never attempted"
+        );
     }
 
     #[test]
