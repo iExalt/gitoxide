@@ -91,6 +91,7 @@ fastrand = "2.0.0"
 bstr = { version = "1.12.0", default-features = false }
 crc = "3.4.0"
 tempfile = "3.26.0"
+socket2 = "0.6.5"
 fs_extra = "1.2.0"
 parking_lot = { version = "0.12.4" }
 serial_test = { version = "3.4.0", default-features = false }
