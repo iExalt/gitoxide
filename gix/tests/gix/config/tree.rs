@@ -271,6 +271,50 @@ mod keys {
     }
 }
 
+mod maintenance {
+    use gix::config::tree::{Gc, Key, Maintenance, Section};
+
+    #[test]
+    fn keys_are_registered_with_the_names_git_uses() {
+        for (actual, expected) in [
+            (Gc::AUTO.logical_name(), "gc.auto"),
+            (Gc::AUTO_PACK_LIMIT.logical_name(), "gc.autoPackLimit"),
+            (Gc::PRUNE_EXPIRE.logical_name(), "gc.pruneExpire"),
+            (Gc::REFLOG_EXPIRE.logical_name(), "gc.reflogExpire"),
+            (Gc::PATTERN_REFLOG_EXPIRE.logical_name(), "gc.<pattern>.reflogExpire"),
+            (
+                Gc::PATTERN_REFLOG_EXPIRE_UNREACHABLE.logical_name(),
+                "gc.<pattern>.reflogExpireUnreachable",
+            ),
+            (Maintenance::AUTO.logical_name(), "maintenance.auto"),
+            (Maintenance::TASK_ENABLED.logical_name(), "maintenance.<task>.enabled"),
+            (Maintenance::TASK_AUTO.logical_name(), "maintenance.<task>.auto"),
+            (
+                Maintenance::GEOMETRIC_REPACK_SPLIT_FACTOR.logical_name(),
+                "maintenance.<task>.splitFactor",
+            ),
+        ] {
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(gix::config::Tree::GC.keys().len(), 15, "all keys of `gc` are listed");
+        assert_eq!(
+            gix::config::Tree::MAINTENANCE.keys().len(),
+            7,
+            "all keys of `maintenance` are listed"
+        );
+    }
+
+    #[test]
+    fn auto_accepts_values_that_disable_it_and_rejects_text() {
+        for value in ["0", "-1", "6700", "1k"] {
+            assert!(Gc::AUTO.validate(value.into()).is_ok(), "{value}");
+        }
+        assert!(Gc::AUTO.validate("many".into()).is_err());
+        assert!(Maintenance::AUTO.validate("true".into()).is_ok());
+        assert!(Maintenance::AUTO.validate("sometimes".into()).is_err());
+    }
+}
+
 mod reftable {
     use std::time::Duration;
 
