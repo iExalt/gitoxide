@@ -569,10 +569,11 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
   uncertain outcome, which `Connection::reconcile()` resolves.
 * Credential helpers, `core.askpass` programs, `ssh -G` and the client `pre-push` hook run as long as they run and aren't ended by the
   limits or by interrupts. With prompts disabled (`GIT_TERMINAL_PROMPT=0`), programs that would ask fail at once.
-* The low-speed limits count the bytes that arrive and leave. The keep-alive packets of `receive.keepAlive` are four bytes per
-  interval, so with a policy of 1000 bytes per
-  second a hook that stays silent for longer than the time of the limits ends the push, which is not tested. A consumer that stops reading for
-  a few seconds doesn't end a transfer on either backend.
+* The low-speed limits count the bytes that arrive and leave. A server whose `pre-receive` hook stays silent for longer than the time of
+  the limits ends the push with an uncertain outcome, as it does for `git push` with `curl`, which the tests compare. The
+  keep-alive packets of `receive.keepAlive` don't change that for a policy of 1000 bytes per second, as they are four bytes per
+  interval; whether Git agrees with a server that streams them is not verified, as the test peer relays the output at the end.
+  A consumer that stops reading for a few seconds doesn't end a transfer on either backend.
 
 ### gix-protocol
 * _abstract over protocol versions to allow delegates to deal only with a single way of doing things_
