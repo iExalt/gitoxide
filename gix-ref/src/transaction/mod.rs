@@ -19,6 +19,8 @@ pub use availability::NameConflict;
 pub(crate) use availability::{ExistingRefs, verify_available};
 pub mod commit_failure;
 pub mod observe;
+mod reflog_message;
+pub(crate) use reflog_message::normalize_reflog_message;
 
 use crate::{FullName, Target};
 
