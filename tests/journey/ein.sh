@@ -230,14 +230,15 @@ title "Porcelain ${kind}"
         )
       )
     )
-    (with "the unsupported reference format reftable"
+    (with "the reference format reftable"
       (sandbox
-        it "fails without creating anything" && {
-          WITH_SNAPSHOT="$snapshot/fail-with-unsupported-ref-format" \
-          expect_run $WITH_FAILURE "$exe" init --ref-format=reftable
+        it "succeeds" && {
+          WITH_SNAPSHOT="$snapshot/success-with-ref-format-reftable" \
+          expect_run $SUCCESSFULLY "$exe" init --ref-format=reftable
         }
-        it "didn't create a repository" && {
-          expect_run_sh $WITH_FAILURE "test -e .git"
+        # `git rev-parse --show-ref-format` needs Git 2.45 and `git refs verify` Git 2.47.
+        it "creates a repository whose references Git finds in a stack of tables" && {
+          expect_run_sh $SUCCESSFULLY "test \"\$(git rev-parse --show-ref-format)\" = reftable && git refs verify"
         }
       )
     )
