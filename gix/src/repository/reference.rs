@@ -155,16 +155,59 @@ impl crate::Repository {
         committer: Option<gix_actor::SignatureRef<'_>>,
         head_log: gix_ref::transaction::HeadLog,
     ) -> Result<Vec<RefEdit>> {
+        self.edit_references_inner(edits, committer, head_log, false)
+    }
+
+    /// Like [`edit_references_as()`](Self::edit_references_as()), but run the `reference-transaction` hook the way
+    /// `git update-ref` does it, so that a hook can watch and refuse the changes.
+    ///
+    /// The hook is called with `preparing`, `prepared` and then `committed`, or `aborted` if the transaction was refused or
+    /// isn't committed, with a line `<old> <new> <name>` for each reference on standard input. A hook that fails
+    /// in the first two states refuses the transaction, which then fails with
+    /// [`Vetoed`](gix_ref::transaction::observe::Vetoed) as marker and changes nothing. The exit code is ignored in the
+    /// last two states, as in Git. The sequence of calls is the one of Git, including the one for the transaction
+    /// Git opens on `packed-refs` when it deletes references, and a hook that is configured with `hook.*` or `core.hooksPath` is found
+    /// like [`hook()`](Self::hook()) finds it.
+    ///
+    /// Like Git, this refuses to change references while `GIT_QUARANTINE_PATH` is set, which is the case in the hooks that
+    /// check what is received, where nothing may be updated. Hooks are programs, so it's an error to use this in a repository
+    /// that isn't fully trusted, as [`hook()`](Self::hook()) has it.
+    #[cfg(feature = "hook")]
+    pub fn edit_references_with_hooks(
+        &self,
+        edits: impl IntoIterator<Item = RefEdit>,
+        committer: Option<gix_actor::SignatureRef<'_>>,
+    ) -> Result<Vec<RefEdit>> {
+        self.edit_references_inner(edits, committer, gix_ref::transaction::HeadLog::Git, true)
+    }
+
+    #[cfg_attr(not(feature = "hook"), allow(unused_variables, unused_mut))]
+    fn edit_references_inner(
+        &self,
+        edits: impl IntoIterator<Item = RefEdit>,
+        committer: Option<gix_actor::SignatureRef<'_>>,
+        head_log: gix_ref::transaction::HeadLog,
+        run_hooks: bool,
+    ) -> Result<Vec<RefEdit>> {
         let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().or_raise(|| {
             gix_error::message(
                 "Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in \
                  milliseconds to wait for locks or negative to wait forever",
             )
         })?;
-        Ok(self
-            .ref_store()
-            .transaction()
-            .head_log(head_log)
+        let mut transaction = self.ref_store().transaction().head_log(head_log);
+        #[cfg(feature = "hook")]
+        if run_hooks {
+            if std::env::var_os("GIT_QUARANTINE_PATH").is_some() {
+                gix_error::bail!(gix_error::message(
+                    "ref updates forbidden inside quarantine environment"
+                ));
+            }
+            // Fail early, and once, if hooks can't be run at all.
+            self.hook("reference-transaction")?;
+            transaction = transaction.observer(ReferenceTransactionHook { repo: self });
+        }
+        Ok(transaction
             .prepare(
                 edits,
                 gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),
@@ -369,5 +412,53 @@ impl crate::Repository {
         std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
         Ok(self.ref_store().try_find(name)?.map(|r| Reference::from_ref(r, self)))
+    }
+}
+
+#[cfg(feature = "hook")]
+/// Runs the `reference-transaction` hook for each state of a transaction, and refuses the transaction if the hook fails
+/// in a state that can be refused.
+struct ReferenceTransactionHook<'repo> {
+    repo: &'repo crate::Repository,
+}
+
+#[cfg(feature = "hook")]
+impl gix_ref::transaction::observe::Observer for ReferenceTransactionHook<'_> {
+    fn observe(
+        &mut self,
+        event: &gix_ref::transaction::observe::Event<'_>,
+    ) -> std::result::Result<(), gix_ref::transaction::observe::Veto> {
+        use gix_ref::transaction::observe::{State, Veto};
+        let can_refuse = matches!(event.state, State::Preparing | State::Prepared);
+        let value = |target: Option<&Target>| -> BString {
+            match target {
+                None => self.repo.object_hash().null().to_string().into(),
+                Some(Target::Object(id)) => id.to_string().into(),
+                Some(Target::Symbolic(name)) => {
+                    let mut value = BString::from("ref:");
+                    value.extend_from_slice(name.as_bstr());
+                    value
+                }
+            }
+        };
+        let mut input = BString::default();
+        for update in event.updates {
+            input.extend_from_slice(&value(update.previous.as_ref()));
+            input.push(b' ');
+            input.extend_from_slice(&value(update.new.as_ref()));
+            input.push(b' ');
+            input.extend_from_slice(update.name.as_bstr());
+            input.push(b'\n');
+        }
+        let outcome = self.repo.hook("reference-transaction").and_then(|hook| {
+            hook.arg(event.state.as_str())
+                .stdin(gix_hook::Stdin::Bytes(input.into()))
+                .run()
+        });
+        match outcome {
+            Ok(outcome) if outcome.is_success() => Ok(()),
+            _ if !can_refuse => Ok(()),
+            _ => Err(Veto),
+        }
     }
 }
