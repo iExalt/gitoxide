@@ -30,18 +30,53 @@ use gix_hash::Kind;
 
 use crate::{BlockSource, MergedTable, Table, basics::corrupt};
 
+mod addition;
+mod files;
 mod list;
 mod reload;
 
+pub use addition::{Addition, UncertainAfterPublish};
+
 /// The name of the file that lists the tables of a stack.
 pub const LIST_FILE_NAME: &str = "tables.list";
+
+/// Configure how a stack is changed.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Options {
+    /// How long to wait for the lock of `tables.list` while somebody else holds it, which is `reftable.lockTimeout`
+    /// and 100 milliseconds by default. `None` waits for as long as it takes.
+    pub lock_timeout: Option<Duration>,
+    /// Git's sharing policy, usually derived from `core.sharedRepository`, which is applied to the files that are created
+    /// after the process umask. See [`gix_fs::set_shared_repository_permissions()`] for the encoding.
+    pub shared_repository_permissions: i32,
+    /// What to flush to stable storage, according to `core.fsync` and `core.fsyncMethod`. Tables and the list are
+    /// flushed as references are, before they are made visible by renaming them.
+    pub fsync: gix_fs::fsync::Options,
+    /// The layout of the tables that are written.
+    pub write: crate::writer::Options,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            lock_timeout: Some(Duration::from_millis(100)),
+            shared_repository_permissions: 0,
+            fsync: gix_fs::fsync::Options::default(),
+            write: crate::writer::Options::default(),
+        }
+    }
+}
 
 /// A stack of tables in a directory, kept up to date with [`reload()`](Stack::reload()).
 #[derive(Debug)]
 pub struct Stack {
     dir: PathBuf,
     hash_kind: Kind,
+    options: Options,
     snapshot: Snapshot,
+    #[cfg(test)]
+    inject: Option<files::Inject>,
 }
 
 /// The tables of a stack as they were when the stack was read.
@@ -99,12 +134,20 @@ impl Stack {
     /// A directory without `tables.list`, or none at all, is an empty stack. A table of another hash, or one that is
     /// listed but doesn't exist, is an error.
     pub fn open(dir: impl Into<PathBuf>, hash_kind: Kind) -> Result<Self> {
+        Self::open_with_options(dir, hash_kind, Options::default())
+    }
+
+    /// Like [`open()`](Self::open()), but with `options` that apply when the stack is changed.
+    pub fn open_with_options(dir: impl Into<PathBuf>, hash_kind: Kind, options: Options) -> Result<Self> {
         let dir = dir.into();
         let (list, tables) = reload::reload(&mut Disk::new(&dir, hash_kind), &[])?;
         Ok(Self {
             dir,
             hash_kind,
+            options,
             snapshot: Snapshot::new(list, tables)?,
+            #[cfg(test)]
+            inject: None,
         })
     }
 
@@ -123,6 +166,11 @@ impl Stack {
     /// The stack as it was read last.
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
+    }
+
+    /// Change how the stack is changed from now on.
+    pub fn set_options(&mut self, options: Options) {
+        self.options = options;
     }
 
     /// The directory of the stack.

@@ -12,7 +12,7 @@ use gix_reftable::{
 
 use crate::{
     Result,
-    util::{self, HASHES, git, git_ref_lines, reftable_dir, writable_git_written_tables},
+    util::{self, HASHES, assert_healthy, git, git_ref_lines, reftable_dir, writable_git_written_tables},
 };
 
 /// Replace all tables of `repo` with `tables`, which are given as bytes and their update index limits, oldest first.
@@ -43,17 +43,6 @@ fn reflog_of_main(repo: &Path) -> Result<Vec<u8>> {
             "refs/heads/main",
         ],
     )
-}
-
-fn assert_healthy(repo: &Path, what: &str) {
-    let mut verify = gix_testtools::git_command(repo);
-    let output = verify.args(["refs", "verify", "--strict"]).output().expect("git runs");
-    assert!(
-        output.status.success(),
-        "{what}: git refs verify --strict: {}",
-        output.stderr.as_bstr()
-    );
-    git(repo, &["fsck"]).unwrap_or_else(|err| panic!("{what}: fsck: {err}"));
 }
 
 #[test]
