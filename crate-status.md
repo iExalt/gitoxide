@@ -622,8 +622,9 @@ Fetching and pushing as a client runs no `git` and none of its credential helper
     * [x] receive-pack advertisement, request parsing, status reports and side bands, see `receive`
     * [x] receive-pack object ingestion into a quarantine, connectivity, reference policy and atomic or partial updates, see `gix::receive`
         * [x] `receive.denyDeletes`, `receive.denyNonFastForwards`, `receive.denyCurrentBranch` (not `updateInstead`), `receive.denyDeleteCurrent`, `receive.hideRefs`, `transfer.hideRefs`
-        * [x] refusing what isn't supported yet instead of ignoring it: hooks, signed pushes, `proc-receive`, namespaces, shallow and partial repositories, `core.alternateRefs*`
-        * [ ] hooks, `receive.denyCurrentBranch=updateInstead` and `push-to-checkout`, shallow pushes, and receiving through a local transport
+        * [x] `pre-receive`, `update`, `post-receive` and `post-update` hooks, with push options, the quarantine environment, output on the side band and keep-alive packets while they run (`receive.keepAlive`)
+        * [x] refusing what isn't supported yet instead of ignoring it: `reference-transaction` and `push-to-checkout` hooks, signed pushes, `proc-receive`, namespaces, shallow and partial repositories, `core.alternateRefs*`
+        * [ ] the `reference-transaction` hook while receiving, namespaces, `receive.denyCurrentBranch=updateInstead` and `push-to-checkout`, shallow pushes, and receiving through a local transport
     * [ ] push certificates
     * [ ] upload-pack
 * [ ] bundle-uri protocol integration

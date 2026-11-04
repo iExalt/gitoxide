@@ -5,6 +5,7 @@
 pub mod connectivity;
 
 mod hidden;
+mod hooks;
 pub use hidden::HiddenRefs;
 
 mod options;
