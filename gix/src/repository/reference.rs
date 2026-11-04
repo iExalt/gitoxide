@@ -144,6 +144,17 @@ impl crate::Repository {
         edits: impl IntoIterator<Item = RefEdit>,
         committer: Option<gix_actor::SignatureRef<'_>>,
     ) -> Result<Vec<RefEdit>> {
+        self.edit_references_with_head_log(edits, committer, gix_ref::transaction::HeadLog::Git)
+    }
+
+    /// Like [`edit_references_as()`](Self::edit_references_as()), but decide with `head_log` how the reflog of `HEAD`
+    /// follows the branch it points at, which is what Git does with [`HeadLog::Git`](gix_ref::transaction::HeadLog::Git).
+    pub fn edit_references_with_head_log(
+        &self,
+        edits: impl IntoIterator<Item = RefEdit>,
+        committer: Option<gix_actor::SignatureRef<'_>>,
+        head_log: gix_ref::transaction::HeadLog,
+    ) -> Result<Vec<RefEdit>> {
         let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().or_raise(|| {
             gix_error::message(
                 "Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in \
@@ -153,6 +164,7 @@ impl crate::Repository {
         Ok(self
             .ref_store()
             .transaction()
+            .head_log(head_log)
             .prepare(
                 edits,
                 gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),

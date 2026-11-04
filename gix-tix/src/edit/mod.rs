@@ -5,6 +5,42 @@ use gix::{
     error::{OptionExt, ResultExt, bail, message},
 };
 
+/// Reference edits as `gix-tix` needs them: it moves a branch while it re-attaches `HEAD`, and guards references by
+/// writing the value they have, which are two deliberate deviations from Git that
+/// [`HeadLog::CallerDecides`](gix::refs::transaction::HeadLog::CallerDecides) allows. The names differ from the ones of
+/// `gix::Repository` so that it is clear which ones are used.
+pub(crate) trait EditRefs {
+    fn edit_refs(
+        &self,
+        edits: impl IntoIterator<Item = gix::refs::transaction::RefEdit>,
+    ) -> Result<Vec<gix::refs::transaction::RefEdit>>;
+    fn edit_ref(&self, edit: gix::refs::transaction::RefEdit) -> Result<Vec<gix::refs::transaction::RefEdit>> {
+        self.edit_refs(Some(edit))
+    }
+    fn edit_refs_as(
+        &self,
+        edits: impl IntoIterator<Item = gix::refs::transaction::RefEdit>,
+        committer: Option<gix::actor::SignatureRef<'_>>,
+    ) -> Result<Vec<gix::refs::transaction::RefEdit>>;
+}
+
+impl EditRefs for gix::Repository {
+    fn edit_refs(
+        &self,
+        edits: impl IntoIterator<Item = gix::refs::transaction::RefEdit>,
+    ) -> Result<Vec<gix::refs::transaction::RefEdit>> {
+        self.edit_refs_as(edits, self.committer().transpose()?)
+    }
+
+    fn edit_refs_as(
+        &self,
+        edits: impl IntoIterator<Item = gix::refs::transaction::RefEdit>,
+        committer: Option<gix::actor::SignatureRef<'_>>,
+    ) -> Result<Vec<gix::refs::transaction::RefEdit>> {
+        self.edit_references_with_head_log(edits, committer, gix::refs::transaction::HeadLog::CallerDecides)
+    }
+}
+
 pub(crate) fn is_internal_ref(name: &gix::bstr::BStr) -> bool {
     undo::is_queue_ref(name) || rebase::session::is_ref(name)
 }

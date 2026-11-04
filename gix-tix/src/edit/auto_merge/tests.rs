@@ -1,4 +1,5 @@
 use super::*;
+use crate::edit::EditRefs as _;
 use gix::error::message;
 use gix::prelude::ObjectIdExt;
 
@@ -2667,7 +2668,7 @@ fn input_pins_survive_checkout_and_removal_choices_disambiguate_memberships() ->
         gix::refs::transaction::PreviousValue::MustNotExist,
         "pin input",
     )?;
-    repo.edit_references([
+    repo.edit_refs([
         gix::refs::transaction::RefEdit::update(
             "HEAD".try_into()?,
             a.commit_id,

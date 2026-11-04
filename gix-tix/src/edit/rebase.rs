@@ -1,3 +1,4 @@
+use crate::edit::EditRefs as _;
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
@@ -2887,7 +2888,7 @@ fn rollback<T>(
         }
     }
     let mut time = gix::date::parse::TimeBuf::default();
-    if let Err(err) = repo.edit_references_as(refs.iter().cloned(), Some(committer.to_ref(&mut time))) {
+    if let Err(err) = repo.edit_refs_as(refs.iter().cloned(), Some(committer.to_ref(&mut time))) {
         failures.push(format!("reference rollback failed: {err}"));
     }
     if failures.is_empty() {
@@ -3913,7 +3914,7 @@ fn update_refs(
     super::undo::changes_from_edits(edits.iter().cloned())?;
     let mut time = gix::date::parse::TimeBuf::default();
     let applied = repo
-        .edit_references_as(edits, Some(committer.to_ref(&mut time)))
+        .edit_refs_as(edits, Some(committer.to_ref(&mut time)))
         .or_raise(|| message("could not update references after rebasing"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     ref_rewrites.sort_by(|a, b| a.name.cmp(&b.name));

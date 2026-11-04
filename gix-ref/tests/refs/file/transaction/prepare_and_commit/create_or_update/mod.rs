@@ -891,9 +891,9 @@ fn symbolic_head_missing_referent_then_update_referent() -> TestResult {
 }
 
 #[test]
-/// Writing a peeled ref to which head points to doesn't update HEAD on the fly even though that might be what's would
-/// be needed to keep the reflog consistent
-fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_though_it_should() -> TestResult {
+/// Writing a peeled ref to which head points to also logs the change in the reflog of `HEAD`, like Git does, without
+/// adding an edit of `HEAD` to what is returned.
+fn write_reference_to_which_head_points_to_updates_heads_reflog_too() -> TestResult {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     let referent = head.target.to_ref().try_name().expect("symbolic ref").to_owned();
@@ -914,7 +914,11 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
         )?
         .commit(committer().to_ref(&mut TimeBuf::default()))?;
 
-    assert_eq!(edits.len(), 1, "HEAD wasn't update");
+    assert_eq!(
+        edits.len(),
+        1,
+        "the log entry of HEAD isn't an edit the caller asked for"
+    );
     assert_eq!(
         edits,
         vec![RefEdit::update(
@@ -924,10 +928,13 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
             "",
         )]
     );
+    let old_id = hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0");
+    let mut expected_head_reflog = previous_head_reflog;
+    expected_head_reflog.push(log_line(old_id, new_id, ""));
     assert_eq!(
         reflog_lines(&store, "HEAD")?,
-        previous_head_reflog,
-        "nothing changed in the heads reflog"
+        expected_head_reflog,
+        "the reflog of HEAD records the change of its branch"
     );
 
     let expected_line = log_line(hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0"), new_id, "");

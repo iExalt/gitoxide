@@ -1,3 +1,4 @@
+use crate::edit::EditRefs as _;
 use std::{
     collections::{BTreeMap, HashSet},
     path::PathBuf,
@@ -135,7 +136,7 @@ fn apply_with_worktrees(
             ));
         }
     }
-    if let Err(err) = repo.edit_references(edits) {
+    if let Err(err) = repo.edit_refs(edits) {
         return Err(rollback_transitions(
             &transitions,
             err.and_raise(message("could not atomically move references and the undo cursor")),
@@ -222,7 +223,7 @@ fn ends_review(changes: &[RefChange]) -> bool {
 
 pub(crate) fn clear(repo: &gix::Repository) -> Result<()> {
     super::rebase::session::ensure_idle(repo)?;
-    repo.edit_references(clear_edits(repo)?)
+    repo.edit_refs(clear_edits(repo)?)
         .or_raise(|| message("could not clear undo history"))
         .map(|_| ())
 }
@@ -254,7 +255,7 @@ pub(crate) fn apply_reversed_changes(repo: &gix::Repository, changes: &[RefChang
         .map(RefChange::reversed)
         .map(|change| checked_edit(&change))
         .collect::<Result<Vec<_>>>()?;
-    repo.edit_references(edits)
+    repo.edit_refs(edits)
         .or_raise(|| message("could not roll back provisional reference changes"))
         .map(|_| ())
 }
@@ -299,7 +300,7 @@ pub(crate) fn changes_from_edits(edits: impl IntoIterator<Item = RefEdit>) -> Re
 pub(crate) fn record(repo: &gix::Repository, title: &str, changes: &[RefChange]) -> Result<Option<ObjectId>> {
     let (entry, edits) = prepare_record(repo, title, changes)?;
     if !edits.is_empty() {
-        repo.edit_references(edits)
+        repo.edit_refs(edits)
             .or_raise(|| message("could not publish the undo entry"))?;
     }
     Ok(entry)
@@ -1011,7 +1012,7 @@ mod tests {
     }
 
     fn set(repo: &gix::Repository, name: FullName, before: State, after: State) -> TestResult {
-        repo.edit_references([checked_edit(&RefChange { name, before, after })?])?;
+        repo.edit_refs([checked_edit(&RefChange { name, before, after })?])?;
         Ok(())
     }
 

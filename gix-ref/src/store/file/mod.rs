@@ -146,6 +146,7 @@ pub struct Transaction<'s, 'p> {
     updates: Option<Vec<transaction::Edit>>,
     packed_refs: transaction::PackedRefs<'p>,
     observer: transaction::Notifier<'p>,
+    head_log: crate::transaction::HeadLog,
 }
 
 ///
