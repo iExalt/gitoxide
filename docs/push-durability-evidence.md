@@ -172,11 +172,18 @@ same. These differences remain, for the network phase to decide about:
 * Keep-alive packets are sent every `receive.keepAlive` seconds from the start of each hook, where Git sends one after that
   many seconds of silence. None are sent while connectivity is checked or deltas are resolved, which Git does as well, and
   which matters to clients with timeouts for large pushes.
+* A hook that a signal ended, other than an interrupt, quit or broken pipe, declines like in Git, and the client is told
+  `error: <program> died of signal <n>` after what the hook said. The program is named relative to the Git directory like
+  Git does, which differs only for a `core.hooksPath` that is an absolute path inside the Git directory.
+* Hooks that are configured to run at the same time say what they say in the order in which they finish, in Git and in the
+  receiver, so the tests of that case use hooks that say nothing. Everything else, including the input each hook gets and
+  that one failing hook declines the push, is compared.
 * The post-receive and post-update hooks are skipped for reference names that can't be represented on Windows, as in Git.
 * The `reference-transaction` hook runs in the Git directory with `GIT_DIR` set, like the other receive-side hooks, for the
   one transaction of an atomic push or the two of a push without atomicity, where deletions come first. A refusal in the
   `preparing` or `prepared` state ends the receiver without a report, as `die()` does in Git: the client gets what was said
-  before, and nothing after, and no hook that follows runs. What the hook prints isn't relayed to the client in either.
+  before, and nothing after, and no hook that follows runs. What the hook prints isn't relayed to the client in either:
+  Git runs it outside of the side band, so its output goes to the standard error of the receiver. That is deliberate.
   The receiver releases the `.keep` file of the pack on the way out, which Git leaves behind.
 * Observers learn of rejected updates in the order of Git, with updates that go through symbolic references last. The
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.

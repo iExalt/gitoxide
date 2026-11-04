@@ -203,6 +203,196 @@ fn a_reference_transaction_hook_that_refuses_ends_the_push_without_a_report() ->
     Ok(())
 }
 
+/// `count` commands that create references below `refs/heads/bulk/`, enough to fill a pipe, which holds 64KiB, with 800.
+fn bulk_commands(count: usize) -> Vec<Cmd> {
+    (0..count)
+        .map(|index| {
+            let name: &'static str = Box::leak(format!("refs/heads/bulk/{index}").into_boxed_str());
+            Cmd("0", "next", name)
+        })
+        .collect()
+}
+
+#[test]
+fn hooks_are_found_where_git_looks_for_them_and_only_if_they_can_be_executed() -> TestResult {
+    let world = World::new()?;
+    let commands = [Cmd("0", "next", "refs/heads/next")];
+    // `core.hooksPath` replaces the directory of hooks, and relative paths start where the hooks run, which is the Git directory.
+    let pushed = Push {
+        hooks: vec![
+            Hook::new("pre-receive").exiting(1),
+            Hook::new("pre-receive").in_dir("custom-hooks"),
+            Hook::new("post-update").in_dir("custom-hooks"),
+        ],
+        ..with_setup(push(&commands), &["config core.hooksPath custom-hooks"])
+    };
+    let results = compare_on(&world, "hooks-path", &pushed, &["files", "reftable"])?;
+    assert!(
+        !results[0].report.is_empty()
+            && !String::from_utf8_lossy(&results[0].report).contains("ng ")
+            && results[0].hooks.contains("== post-update"),
+        "the hooks of the configured directory ran, and the declining one of the default directory didn't:\n{}",
+        results[0].hooks
+    );
+    // A hook that isn't executable is ignored, with a hint for people that Git prints but doesn't tell the client.
+    let pushed = Push {
+        hooks: vec![
+            Hook::new("pre-receive").exiting(1).with_mode(0o644),
+            Hook::new("post-receive"),
+        ],
+        ..push(&commands)
+    };
+    let results = compare_on(&world, "hooks-not-executable", &pushed, &["files"])?;
+    assert!(
+        !results[0].hooks.contains("== pre-receive") && results[0].hooks.contains("== post-receive"),
+        "the hook that can't be executed is skipped:\n{}",
+        results[0].hooks
+    );
+    Ok(())
+}
+
+#[test]
+fn hooks_from_configuration_run_with_those_of_the_directory_like_in_git() -> TestResult {
+    let world = World::new()?;
+    let commands = [Cmd("0", "next", "refs/heads/next")];
+    let configured = |jobs: &'static str| {
+        let hooks = vec![
+            // What hooks that run at the same time say is relayed in the order of their completion, which is a race.
+            Hook::new("pre-receive").named("directory").silent(),
+            Hook::new("pre-receive").named("first").in_dir("configured").silent(),
+            Hook::new("pre-receive")
+                .named("second")
+                .in_dir("configured")
+                .exiting(1)
+                .silent(),
+        ];
+        Push {
+            hooks,
+            ..with_setup(
+                push(&commands),
+                &[
+                    "config hook.first.event pre-receive",
+                    "config hook.first.command ./configured/first",
+                    "config hook.second.event pre-receive",
+                    "config hook.second.command ./configured/second",
+                    jobs,
+                ],
+            )
+        }
+    };
+    // `directory` is the hook of the event, which has to be called `pre-receive` to be found.
+    let mut pushed = configured("config hook.jobs 1");
+    pushed.hooks[0].file = None;
+    let results = compare_on(&world, "config-hooks-serial", &pushed, &["files"])?;
+    assert!(
+        results[0].hooks.contains("== first") && results[0].hooks.contains("== second"),
+        "Git runs the hooks of the configuration:\n{}",
+        results[0].hooks
+    );
+    assert!(
+        String::from_utf8_lossy(&results[0].report).contains("ng refs/heads/next pre-receive hook declined"),
+        "the exit code of one hook declines the push:\n{}",
+        String::from_utf8_lossy(&results[0].report)
+    );
+    // At the same time, each hook has to get everything the other gets, and a failure of one is the failure of all.
+    let mut pushed = configured("config hook.jobs 3");
+    pushed.hooks[0].file = None;
+    let setup: Vec<&'static str> = pushed
+        .setup
+        .iter()
+        .copied()
+        .chain(["config hook.first.parallel true", "config hook.second.parallel true"])
+        .collect();
+    pushed.setup = setup;
+    let results = compare_on(&world, "config-hooks-parallel", &pushed, &["files"])?;
+    assert_eq!(
+        results[0].hooks.matches("stdin: ").count(),
+        3,
+        "all three hooks got the command on their input:\n{}",
+        results[0].hooks
+    );
+    Ok(())
+}
+
+#[test]
+fn a_hook_that_is_killed_declines_and_one_that_ignores_its_input_doesnt_matter() -> TestResult {
+    let world = World::new()?;
+    let commands = [Cmd("0", "next", "refs/heads/next")];
+    for event in ["pre-receive", "update"] {
+        let results = compare_on(
+            &world,
+            &format!("killed-{event}"),
+            &with_hooks(push(&commands), vec![Hook::new(event).killed()]),
+            &["files"],
+        )?;
+        assert!(
+            String::from_utf8_lossy(&results[0].report).contains("ng refs/heads/next"),
+            "{event}: a hook that dies of a signal declines:\n{}",
+            String::from_utf8_lossy(&results[0].report)
+        );
+    }
+    // A hook of the configuration is run by a shell, which decides if it is reported as ended by a signal or as an exit code.
+    let results = compare_on(
+        &world,
+        "killed-configured",
+        &Push {
+            hooks: vec![Hook::new("pre-receive").named("guard").in_dir("configured").killed()],
+            ..with_setup(
+                push(&commands),
+                &[
+                    "config hook.guard.event pre-receive",
+                    "config hook.guard.command ./configured/guard",
+                ],
+            )
+        },
+        &["files"],
+    )?;
+    assert!(
+        String::from_utf8_lossy(&results[0].report).contains("ng refs/heads/next"),
+        "a configured hook that dies of a signal declines:\n{}",
+        String::from_utf8_lossy(&results[0].report)
+    );
+    // The hook is gone before everything was written to it, which is no reason to fail.
+    // The recording hook is left out as it checks every line of its input, which is slow with this many.
+    let many = bulk_commands(800);
+    let results = compare_on(
+        &world,
+        "ignored-input",
+        &Push {
+            no_recorder: true,
+            ..with_hooks(push(&many), vec![Hook::new("pre-receive").ignoring_stdin()])
+        },
+        &["files"],
+    )?;
+    assert!(
+        !String::from_utf8_lossy(&results[0].report).contains("ng "),
+        "a hook that doesn't read its input accepts the push:\n{}",
+        String::from_utf8_lossy(&results[0].report)
+    );
+    Ok(())
+}
+
+#[test]
+fn a_lot_of_output_of_a_hook_is_relayed_in_full() -> TestResult {
+    let world = World::new()?;
+    let results = compare_on(
+        &world,
+        "noisy",
+        &with_hooks(
+            push(&[Cmd("0", "next", "refs/heads/next")]),
+            vec![Hook::new("pre-receive").noisy(10_000)],
+        ),
+        &["files"],
+    )?;
+    assert!(
+        results[0]
+            .messages
+            .contains("pre-receive noise on the other output 9999"),
+        "Git relays all of it, which is more than a pipe holds"
+    );
+    Ok(())
+}
+
 #[test]
 fn the_objects_of_the_push_are_found_in_a_repository_that_has_a_colon_in_its_path() -> TestResult {
     let world = World::new()?;
