@@ -10,21 +10,21 @@ use gix_transport::{Protocol, Service};
 use super::classes;
 
 /// The refs of the repository in `dir`, as `name id` lines.
-fn refs(dir: &Path) -> TestResult<String> {
+pub(super) fn refs(dir: &Path) -> TestResult<String> {
     Ok(gix_testtools::git(
         dir,
         "for-each-ref --format='%(refname) %(objectname)'",
     )?)
 }
 
-fn rev(dir: &Path, rev: &str) -> TestResult<ObjectId> {
+pub(super) fn rev(dir: &Path, rev: &str) -> TestResult<ObjectId> {
     Ok(ObjectId::from_hex(
         gix_testtools::git(dir, &format!("rev-parse {rev}"))?.trim().as_bytes(),
     )?)
 }
 
 /// A pack without objects, as Git produces it for the repository at `dir`.
-fn empty_pack(dir: &Path) -> TestResult<Vec<u8>> {
+pub(super) fn empty_pack(dir: &Path) -> TestResult<Vec<u8>> {
     let output = gix_testtools::git_command(dir)
         .args(["pack-objects", "--stdout"])
         .stdin(std::process::Stdio::null())
@@ -33,15 +33,15 @@ fn empty_pack(dir: &Path) -> TestResult<Vec<u8>> {
     Ok(output.stdout)
 }
 
-struct Fixture {
-    kind: Kind,
+pub(super) struct Fixture {
+    pub(super) kind: Kind,
     _dir: gix_testtools::tempfile::TempDir,
-    source: std::path::PathBuf,
-    remote: std::path::PathBuf,
-    empty: std::path::PathBuf,
+    pub(super) source: std::path::PathBuf,
+    pub(super) remote: std::path::PathBuf,
+    pub(super) empty: std::path::PathBuf,
 }
 
-fn fixtures() -> TestResult<Vec<Fixture>> {
+pub(super) fn fixtures() -> TestResult<Vec<Fixture>> {
     Kind::all()
         .iter()
         .copied()
@@ -63,7 +63,7 @@ fn fixtures() -> TestResult<Vec<Fixture>> {
 }
 
 /// Perform the handshake with the repository at `remote`, and return what's needed to push to it.
-fn connect(
+pub(super) fn connect(
     remote: &Path,
 ) -> TestResult<(
     gix_transport::client::blocking_io::file::SpawnProcessOnDemand,
@@ -98,7 +98,7 @@ fn push_to(
     Ok(push(&mut transport, &request, pack, None, false))
 }
 
-fn write_all(bytes: Vec<u8>) -> impl FnOnce(&mut dyn Write) -> gix_error::Result {
+pub(super) fn write_all(bytes: Vec<u8>) -> impl FnOnce(&mut dyn Write) -> gix_error::Result {
     move |out| out.write_all(&bytes).map_err(gix_error::Error::from_error)
 }
 
