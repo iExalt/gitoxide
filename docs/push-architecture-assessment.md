@@ -594,3 +594,125 @@ object-migration code, policy checks, strict fsck, the unpack-or-keep decision,
 `updateInstead`, `proc-receive` and the hook-runner integration. The matrix in section 2
 is the specification for that new code.
 
+## 5. Candidate reference-storage and coordination designs
+
+Both backends must follow Git's own coordination (lock files for the files store, the
+`tables.list.lock` publication protocol for reftable), so that fork and Git writers
+interoperate; that part is fixed by the plan. What is open is the shape of the types, the
+source of the reftable implementation, and how hooks, durability and uncertain outcomes
+surface in the API. Each choice below lists what it commits the public API to.
+
+### 5.1 Where the backend choice lives
+
+| Option | Description | Public API consequence | Assessment |
+| --- | --- | --- | --- |
+| A. Enum store | `gix_ref::Store` becomes `File(file::Store) \| Reftable(reftable::Store)`, completing the dead-code scaffolding in `gix-ref/src/lib.rs:100-131`; `gix::RefStore` aliases the enum; transactions and iteration platforms become backend-neutral types | Breaking: `Repository.refs` and `ThreadSafeRepository.refs` are public fields (`gix/src/types.rs:161`, `:202`) and `file::Store` has public fields that callers mutate (`write_reflog`, `namespace`, `prohibit_windows_device_names`; `gix-ref/src/store/file/mod.rs:24-29`). Anything outside `gix` that touches them breaks; the downstream advisory QA list in `gix/Cargo.toml` (`[package.metadata.qa]`, `:509-520`, includes large consumers) would measure it, and it is not checked here. Inside `gix`, about 80 call sites (4.1) | Static dispatch, no lifetime problems, matches the existing scaffolding |
+| B. Trait-object core | An object-safe `dyn RefBackend` core taking `&PartialNameRef`/`&FullNameRef` and returning `gix_error::Result`, behind a concrete handle that keeps the generic convenience methods (today's `find` is generic over name and error types, `gix-ref/src/store/file/find.rs:448-455`) | `Repository.refs` type changes anyway | Feasible. Costs: dynamic dispatch, boxing of the borrowed platforms and iterators, and a rewrite of the public platform types. Gains: extensibility for in-memory stores in tests, alternate-location storage (6.1) and consumer-provided stores. A wins on cost and on matching the existing scaffolding, not on feasibility |
+| C. Additive, parallel type | Keep `gix::RefStore = file::Store` and `Repository.refs` unchanged for files repositories; add a backend-neutral `Repository::ref_store()` handle and route new APIs through it; for a reftable repository the old field keeps today's "unsupported storage backend" behavior | Non-breaking first step; the old field is deprecated and migrated away in a later breaking release | Lowest churn, but leaves two access paths for one release train |
+
+Recommendation: A, staged through C (introduce the neutral handle first without
+breaking anything, then flip the alias in one breaking commit per the `AGENTS.md`
+rule that breaking changes and their adaptations land together). Option B stays open if
+alternate-location or consumer-provided stores become requirements; it is not needed
+for the plan's list. **Precondition for every option:** option C's "old field keeps
+today's behavior" is not safe as it stands (4.1, unsafe-write hazard); the fork must
+first refuse writes, or the open, for any repository whose `extensions.refStorage` is
+not `files`, until a reftable store exists.
+
+### 5.2 Source of the reftable implementation
+
+| Option | Description | Risks | Assessment |
+| --- | --- | --- | --- |
+| R1. Adopt the codecs, build the stack new | Take the upstream branch's record, block, table, merged-iterator and writer modules (4.2) after a parity review against Git's `reftable/` directory (7,113 lines of C plus 2,123 of headers at the pin) and its 9 unit-test files (4,832 lines); write the stack layer to Git's protocol | Dependence on an unmerged upstream branch; a later upstream `gix-reftable` could conflict with the fork's rebases; `thiserror` versus `gix-error` migration; no new third-party crates (`crc32fast`, `flate2`, `thiserror` are already in `Cargo.lock`) | Best cost, moderate coordination risk; codecs are the largest byte-compatibility surface |
+| R2. Write from the specification | A fork-owned `gix-reftable` from Git's specification and C sources | Highest effort; the C library's edge cases must be rediscovered | Only if R1's parity review fails |
+| R3. Wait for upstream | Track upstream's announced reftable work and consume it | Timing outside the fork's control; the plan says upstream acceptance is not a delivery dependency | Not viable as the primary route; worth checking again before the reftable thread starts |
+
+Recommendation: R1, with the stack layer, locking, compaction, fsync and `ref-store`
+adapter written new, and a one-session parity review of the codecs as the first gate.
+Name the crate so that a later upstream landing can be reconciled: the fork should keep
+the upstream crate name and public module layout where the review finds them sound.
+
+### 5.3 Coordination design
+
+- **Files store.** Keep the existing lock-file approach (it already matches Git's shape,
+  4.3), and close the gaps found in 4.3: reflog-deletion failure, missing-committer
+  handling, `~pid.lock` tolerance, default signal-handler cleanup in server contexts,
+  nested `packed-refs` hook events, and an uncertain-outcome classification for commit
+  failures after the first rename.
+- **Reftable.** Implement Git's publication protocol exactly: exclusive `tables.list.lock`
+  with the same wait (100 ms default, `reftable.lockTimeout`), reload under the lock,
+  new table renamed into place, list written, flushed per `core.fsync`, renamed over
+  `tables.list`; segment compaction with per-table locks and the lock released while
+  merging; readers retry only on a missing table with a changed list; `tables.list` is
+  never rewritten in place. One transaction per stack, committed stack by stack, with
+  Git's documented non-atomicity across stacks.
+- **Corruption and verification.** Reftable tables carry checksums and Git exposes fsck
+  checks for both backends (`t/t0614-reftable-fsck.sh`, 102 lines); the fork needs an
+  equivalent and a defined result for a damaged table, distinct from the retryable
+  missing-table case (3.3). Tombstones follow section 3.3: a deletion record plus log
+  tombstones, dropped only by a compaction that includes the bottom of the stack.
+- **In-process layering (additive).** A consumer that already serializes writes can add an
+  in-process queue in front of either backend; it does not replace the on-disk protocol,
+  and Git's own documentation suggests exactly this for servers
+  (`Documentation/technical/reftable.adoc:947-953`). The assessment recommends no
+  library-level global lock, since it would diverge from Git's contention profile.
+- **Compaction contention.** A fork compactor must release `tables.list.lock` while merging
+  (3.3). Holding it throughout is safe but can starve Git writers past their 100 ms wait.
+
+### 5.4 Public API implications beyond the store type
+
+| Concern | Implication |
+| --- | --- |
+| Uncertain outcomes | `gix_error::Class` has no "outcome uncertain" class (`gix-error/src/error.rs:268-304`); it is `#[non_exhaustive]`, so adding one is non-breaking. Commit failures after a partial or published change need it, and so does the client's reconciliation rule. Reftable "failed after publication" and files "some refs renamed" are the two producers |
+| Lock options | `Transaction::prepare` takes file-specific `Fail` modes for loose refs and `packed-refs` (`gix/src/repository/reference.rs:139-149`); a neutral options value is needed, with reftable's `lockTimeout` |
+| Hooks | `reference-transaction` is raised in Git's generic layer, above the backends. The fork needs a transaction observer in `gix-ref` (plumbing must not spawn processes) that `gix` implements with the hook runner; the files backend must raise the nested `packed-refs` events (section 2.5). The observer must support Git's two veto points, `preparing` (before locks) and `prepared` (locks held); Git aborts and calls `die()` at either (`refs.c:2713-2727`), so the client of a receiving process sees no report. The fork must choose between returning an error after releasing locks and matching process death in the CLI and receiver; that choice is a documented divergence point. Exit codes of `committed` and `aborted` are ignored (`refs.c:2753`, `:2785`), which is the Git behavior behind the plan's rule that a post-commit hook failure is not a rolled-back commit |
+| Quarantine | Honoring `GIT_QUARANTINE_PATH` means ref updates are refused (`refs.c:2702-2706`); the fork records this as a TODO needing `gix-sec` and `gix-ref` support (`gix/src/open/repository.rs:142`). In the opposite direction, a `gix`-based tool run as a hook inside *Git's* receive-pack cannot see quarantined objects and would not refuse ref updates, because the fork ignores `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_QUARANTINE_PATH` (4.4); that is an interoperability item for consumers independent of a native receiver |
+| Durability | `core.fsync` and `core.fsyncMethod` need one options value passed to `gix-lock`, `gix-tempfile`, `gix-ref`, loose and pack object writing, and the reftable stack. Today none of them flushes (4.3); the plumbing progress table lists the config as planned |
+| Hashes | Both hashes already flow into the store constructors (`gix/src/repository/location.rs:58`); reftable needs version-2 tables for SHA-256 and the clone-ordering rule in `gix/src/clone/fetch/util.rs:30-41` |
+| Reflog | Backend-neutral reflog reading with reftable's non-reloading iteration semantics stated (3.3), and `HEAD`-split behavior per backend |
+| Errors | Plumbing crates still on `thiserror` keep it; the new reftable crate migrates to `gix-error` per `AGENTS.md` |
+| File-specific public surface | The file store also exposes packed-buffer accessors (`cached_packed_buffer`, `open_packed_buffer`, `packed_refs_path`, used by `gix` and by `gix-protocol` negotiation), iteration platforms and loose iterators, reflog path and iterator APIs that take caller buffers, `git_dir()`, `common_dir()`, `namespace` and `write_reflog`. Each needs a neutral equivalent or a files-only marker |
+| Stability policy | New store, handle, observer or flush-options types exposed from `gix` must be gated with `gix_macros::unstable(since = ...)` or listed as allowed unstable types, per `AGENTS.md` and `STABILITY.md:21-53`; the `api-check` block in `gix/Cargo.toml` is still a commented sample (`:477-499`), so this is policy rather than a CI gate today |
+| Feature flags | Reftable log blocks are zlib-compressed; the upstream crate depends on `flate2` directly. The crate must work with the small, lean and max-pure builds that `AGENTS.md` requires, so the zlib backend selection and whether reftable is a cargo feature need a decision before the crate lands (not examined) |
+
+## 6. Repository default, conversion, worktrees and concurrency
+
+### 6.1 Default format for new repositories
+
+| Option | Effect | Assessment |
+| --- | --- | --- |
+| Follow Git, refusing what is unsupported | New-repository format follows Git's precedence at the pin: `--ref-format`, `GIT_DEFAULT_REF_FORMAT` (`setup.c:2803`), `init.defaultRefFormat`, then `feature.experimental` (`setup.c:2747-2757`), then the compiled default `files` (`repository.h:25-29`); it moves when the pin moves. The fork reads none of these today (4.1), so until reftable exists a request for it must be **refused explicitly, never silently replaced by `files`**. The alternate-location forms (`GIT_REFERENCE_BACKEND`, the `<format>://<payload>` value of `extensions.refStorage`; `setup.c:690-705`, `:2824-2835`, `Documentation/config/extensions.adoc:59-71`) must likewise be refused or priced | Recommended. Matches the compatibility target, and keeps new repositories readable by every Git |
+| Fork default `reftable` | Newly created repositories use reftable | Not recommended before the differential matrix passes; the consumer can opt in per repository |
+| `files` only, refuse reftable | No reftable work | Conflicts with the plan's requirement list; only valid as an owner-approved scope cut, priced in section 9 |
+
+### 6.2 Conversion of existing repositories
+
+Git's own conversion is `git refs migrate`: it creates a new store in a scratch
+directory, writes all refs and (by default) reflogs, then deletes the old store and moves
+the new files into place, and finally rewrites the repository format. It refuses
+repositories that have worktrees and assumes no concurrent writers; the destructive steps
+are not atomic, and an interrupted run leaves the migrated refs in the scratch directory
+for manual recovery (`refs.c:3344-3470`, `Documentation/git-refs.adoc:40-48`).
+
+| Policy | Description | Assessment |
+| --- | --- | --- |
+| Never convert | Both formats are read and written in place; format is a property of each repository | Recommended default; nothing to authorize or lose |
+| Explicit, consumer-invoked migration | A native equivalent of `refs migrate`, with a dry run, matching Git's refusal of worktrees and its no-concurrent-writer assumption. A check that no writer holds locks would go beyond Git, which has none and treats concurrent writes as the caller's problem (`Documentation/git-refs.adoc:44-48`); it would be fork policy, not parity | Offer only after the reftable store passes differential tests; priced separately in section 9; requires an authorized migration policy per the plan |
+| Conversion on clone or init | Create reftable directly when the remote hash is known | Cheap once reftable exists; the init-order constraint is in 4.1 |
+| Automatic conversion on open | Convert when a repository is opened | Rejected: surprises other readers and destroys the "no worse than Git" property |
+
+### 6.3 Worktrees and concurrency
+
+- Reftable keeps one stack per worktree for per-worktree refs and one shared stack;
+  multi-stack transactions are not atomic (3.3). The consumer inventory requires correct
+  linked-worktree common-directory resolution, so worktree stacks must be supported for
+  reading and writing; migration with worktrees stays out of scope, as in Git.
+- Contention: reftable has one writer lock per stack with a 100 ms default wait, so bursts
+  of writers fail with `cannot lock references` unless callers queue; the files store
+  locks per ref. A consumer with write serialization is already shaped for this; a
+  second-process Git writer is not, and mixed-writer tests must run with Git's defaults.
+- Reader behavior differs by operation (3.3); consumers that need a consistent view
+  across several lookups should hold a ref iterator or a reftable snapshot rather than
+  repeating single-ref reads; reflog iteration does not reload, so a held reflog
+  iterator is not a fresh view.
+
