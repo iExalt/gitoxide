@@ -249,7 +249,7 @@ beyond existing subscriptions is approved.
 
 | Thread | Scope | Depends on | Human | State |
 | --- | --- | --- | --- | --- |
-| 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | ready |
+| 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | done: [assessment](push-architecture-assessment.md) delivered; owner decisions pending |
 | 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | ready |
 | 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks | None | None known | ready |
 
@@ -261,3 +261,7 @@ cutover) wait for the owner to accept thread 1 and agree their scope.
 - 2026-11-04: the owner agreed to run threads 1–3 in parallel ("Add the hook runner too")
   and granted the overseer high autonomy for this run ("Grant for this session").
   Releases and tags still need the owner's approval naming them.
+- 2026-11-04: thread 1 delivered the [architecture assessment](push-architecture-assessment.md)
+  and stopped for the owner's decisions listed in its section 10. It ran in about 17 minutes
+  of wall-clock by the sandbox clock against a 5–8 hour allowance, and found one defect
+  independent of this plan (the fork opens reftable repositories with the files store).
