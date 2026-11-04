@@ -279,6 +279,96 @@ mod iter_references {
         Ok(())
     }
 
+    /// What Git lists is what resolves: it skips broken references and symbolic references that dangle or loop, with a
+    /// warning. Here these are returned or fail to peel, so a caller that wants Git's list keeps what resolves.
+    #[test]
+    fn what_resolves_is_what_git_lists_and_the_rest_can_be_told_apart() -> TestResult {
+        let (repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
+        std::fs::write(repo.git_dir().join("refs/heads/dangling"), "ref: refs/heads/gone\n")?;
+        std::fs::create_dir(repo.git_dir().join("refs/heads/m"))?;
+        std::fs::write(repo.git_dir().join("refs/heads/m/x"), repo.head_id()?.to_string())?;
+        std::fs::write(repo.git_dir().join("refs/heads/mine"), repo.head_id()?.to_string())?;
+        let git_lists = |args: &str| -> TestResult<Vec<String>> {
+            Ok(gix_testtools::git(repo.git_dir(), args)?
+                .lines()
+                .map(ToOwned::to_owned)
+                .collect())
+        };
+        let resolvable = |prefix: Option<&str>| -> TestResult<Vec<String>> {
+            let platform = repo.references()?;
+            let mut names = Vec::new();
+            let iter = match prefix {
+                Some(prefix) => platform.under(prefix)?,
+                None => platform.all()?,
+            };
+            for reference in iter.filter_map(std::result::Result::ok) {
+                let name = reference.name().as_bstr().to_string();
+                if reference.clone().peel_to_id().is_ok() {
+                    names.push(name);
+                }
+            }
+            Ok(names)
+        };
+        assert_eq!(
+            resolvable(None)?,
+            git_lists("for-each-ref --format=%(refname)")?,
+            "the references that resolve are the ones `git for-each-ref` lists, in the same order"
+        );
+        assert_eq!(
+            resolvable(Some("refs/heads/"))?,
+            git_lists("for-each-ref --format=%(refname) refs/heads/")?,
+            "also with a prefix that ends in a directory"
+        );
+        assert_eq!(
+            resolvable(Some("refs/heads/m"))?,
+            git_lists("for-each-ref --format=%(refname) refs/heads/m")?,
+            "`under()` is made of whole components, as it is for Git, so `m` doesn't match `main`"
+        );
+
+        for exact_or_directory in [
+            "refs/heads/m",
+            "refs/heads/m/",
+            "refs/heads/main",
+            "refs/heads/main/",
+            "refs/heads/mine",
+            "refs/tags",
+            "refs/remotes/origin",
+        ] {
+            let git = git_lists(&format!("for-each-ref --format=%(refname) {exact_or_directory}"))?;
+            assert_eq!(
+                resolvable(Some(exact_or_directory))?,
+                git,
+                "{exact_or_directory} is matched like Git does it, as a name or a directory"
+            );
+            if !exact_or_directory.ends_with("main/") {
+                assert!(
+                    !git.is_empty(),
+                    "{exact_or_directory} has matches, so this isn't comparing nothing"
+                );
+            }
+        }
+
+        assert!(
+            repo.try_find_reference("refs/nope")?.is_none(),
+            "absent references are None"
+        );
+        assert!(
+            repo.try_find_reference("refs/broken").is_err(),
+            "a corrupt reference is an error, not an absent one"
+        );
+        for dangling in ["refs/heads/dangling", "refs/loop-a"] {
+            let mut reference = repo
+                .try_find_reference(dangling)?
+                .expect("a symbolic reference that doesn't resolve still exists");
+            assert!(
+                reference.target().try_name().is_some(),
+                "{dangling} is a symbolic reference, which Git's `symbolic-ref` reads"
+            );
+            reference.peel_to_id().expect_err("but it doesn't resolve to an object");
+        }
+        Ok(())
+    }
+
     #[test]
     fn prefixed() -> TestResult {
         let repo = repo()?;
