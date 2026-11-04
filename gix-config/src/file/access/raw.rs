@@ -786,7 +786,8 @@ impl File {
     }
 
     /// Sets a value in a given `section_name`, optional `subsection_name`, and `value_name`.
-    /// Creates the section if necessary and the value as well, or overwrites the last existing value otherwise.
+    /// Creates the section if necessary and the value as well, or overwrites the last existing value otherwise, even if
+    /// it is in an earlier section than the last one of that name.
     ///
     /// # Examples
     ///
@@ -859,7 +860,24 @@ impl File {
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Option<BString>> {
         let key = section::ValueName::try_from(value_name)?;
-        let mut section = self.section_mut_or_create_new_filter_inner(section_name, subsection_name, filter)?;
+        let mut filter = filter;
+        // Replace the value where it is, in the last section that has it, so that no stale value remains in an earlier section.
+        let section_with_key = self
+            .section_ids_by_name_and_subname(section_name, subsection_name)
+            .ok()
+            .and_then(|ids| {
+                ids.rev().find(|id| {
+                    self.sections.get(id).is_some_and(|section| {
+                        filter(&section.meta) && section.body.contains_value_name_in(&self.backing, value_name)
+                    })
+                })
+            });
+        let mut section = match section_with_key {
+            Some(id) => self
+                .section_mut_by_id(id)
+                .expect("BUG: Section did not have id from lookup"),
+            None => self.section_mut_or_create_new_filter_inner(section_name, subsection_name, filter)?,
+        };
         section.set_inner(key, new_value.as_bstr())
     }
 

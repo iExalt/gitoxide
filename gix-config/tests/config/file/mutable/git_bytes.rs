@@ -149,6 +149,12 @@ fn edits_leave_the_bytes_that_git_leaves() -> TestResult {
             gix: |f| set(f, "core.abbrev", "12"),
         },
         Case {
+            name: "replace a value that is in the first of two sections of the same name",
+            initial: "[core]\n\tabbrev = 7\n[user]\n\tname = n\n[core]\n\tfilemode = true\n",
+            git: &["core.abbrev", "12"],
+            gix: |f| set(f, "core.abbrev", "12"),
+        },
+        Case {
             name: "remove a section",
             initial: "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = x\n[user]\n\tname = n\n",
             git: &["--remove-section", "remote.origin"],
@@ -245,17 +251,83 @@ fn known_differences_to_git() -> TestResult {
         "[core]\n\tAbbrev = 12\n",
         "the spelling of an existing key is kept"
     );
+    Ok(())
+}
 
-    // Git replaces the value where it is. This crate sets it in the last section of that name, as documented, so a value in
-    // an earlier section is shadowed instead of replaced. The value that is read is the one that was set in both cases.
-    let initial = "[core]\n\tabbrev = 7\n[user]\n\tname = n\n[core]\n\tfilemode = true\n";
-    assert_eq!(
-        git(initial, &["core.abbrev", "12"])?,
-        "[core]\n\tabbrev = 12\n[user]\n\tname = n\n[core]\n\tfilemode = true\n"
+/// What `git config --file config --list` reads from `content`.
+fn git_list(content: &str) -> TestResult<String> {
+    let dir = gix_testtools::tempfile::tempdir()?;
+    std::fs::write(dir.path().join("config"), content)?;
+    let output = gix_testtools::git_command(dir.path())
+        .args(["config", "--file", "config", "--list"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "Git can't read what was written: {content:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        gix(initial, |f| set(f, "core.abbrev", "12"))?,
-        "[core]\n\tabbrev = 7\n[user]\n\tname = n\n[core]\n\tfilemode = true\n\tabbrev = 12\n"
-    );
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+/// The differences in formatting are harmless only if Git reads the same keys and values after an edit as it does after
+/// making the edit itself, and if nothing but the edited key is touched. Files with values that are awkward to edit
+/// make sure of it.
+#[test]
+fn git_reads_what_was_written_like_it_reads_what_it_wrote_itself() -> TestResult {
+    let files = [
+        ("a trailing comment", "[core]\n\tabbrev = 7 # note\n\tbare = false\n"),
+        (
+            "a continued value",
+            "[core]\n\tabbrev = 7 \\\n\t\tcontinued\n\tbare = false\n",
+        ),
+        ("a key on the header line", "[core] abbrev = 7\n[user]\n\tname = n\n"),
+        ("an include", "[include]\n\tpath = other\n[core]\n\tabbrev = 7\n"),
+        (
+            "a quoted value with a hash",
+            "[core]\n\tabbrev = \"quoted # not a comment\" ; real comment\n\tbare=false\n",
+        ),
+        (
+            "a comment line after the key",
+            "[core]\n\tabbrev = 7\n\t# keep me\n\tbare = false\n",
+        ),
+        ("no trailing newline", "[core]\n\tbare = false"),
+        (
+            "the key in the earlier of two sections",
+            "[core]\n\tabbrev = 7\n[user]\n\tname = n\n[core]\n\tbare = false\n",
+        ),
+        ("CRLF line endings", "[core]\r\n\tabbrev = 7\r\n\tbare = false\r\n"),
+    ];
+    let mut problems = Vec::new();
+    for (name, initial) in files {
+        for (what, git_args, edit) in [
+            (
+                "set",
+                &["core.abbrev", "12"][..],
+                (|f: &mut File| set(f, "core.abbrev", "12")) as Edit,
+            ),
+            ("delete_all", &["--unset", "core.abbrev"][..], |f| {
+                f.raw_values_mut("core.abbrev")?.delete_all();
+                Ok(())
+            }),
+        ] {
+            if git_args[0] == "--unset" && !initial.to_lowercase().contains("abbrev") {
+                continue;
+            }
+            let expected = git_list(&git(initial, git_args)?)?;
+            let written = gix(initial, edit)?;
+            let actual = git_list(&written)?;
+            if actual != expected {
+                problems.push(format!(
+                    "{what} with {name}: Git reads\n{actual}but after its own edit\n{expected}from {written:?}"
+                ));
+            }
+            if name == "a comment line after the key" && !written.contains("# keep me") {
+                problems.push(format!(
+                    "{what} with {name} dropped a comment of another key: {written:?}"
+                ));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
     Ok(())
 }
