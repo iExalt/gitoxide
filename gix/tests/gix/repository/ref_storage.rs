@@ -130,7 +130,11 @@ fn how_reftables_are_written_follows_the_configuration() -> Result {
     );
 
     // Like Git, which only reads these settings when it writes, invalid ones don't keep references from being read.
-    for invalid in ["reftable.lockTimeout=-2", "reftable.blockSize=99999999"] {
+    for invalid in [
+        "reftable.lockTimeout=-2",
+        "reftable.blockSize=99999999",
+        "reftable.restartInterval=65536",
+    ] {
         let repo = open_with("v1-reftable", &[invalid], false)?;
         assert!(
             repo.try_find_reference("HEAD")?.is_none(),

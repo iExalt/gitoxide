@@ -22,15 +22,15 @@ use gix_testtools::TestResult;
 
 use crate::{fixture_hash_kind, scripted_fixture_writable};
 
-struct Fixture {
-    dir: gix_testtools::tempfile::TempDir,
-    c1: gix_hash::ObjectId,
-    c2: gix_hash::ObjectId,
-    c3: gix_hash::ObjectId,
+pub(super) struct Fixture {
+    pub(super) dir: gix_testtools::tempfile::TempDir,
+    pub(super) c1: gix_hash::ObjectId,
+    pub(super) c2: gix_hash::ObjectId,
+    pub(super) c3: gix_hash::ObjectId,
 }
 
 impl Fixture {
-    fn new() -> TestResult<Self> {
+    pub(super) fn new() -> TestResult<Self> {
         let dir = scripted_fixture_writable("make_reftable_repo.sh")?;
         let rev = |spec: &str| -> TestResult<gix_hash::ObjectId> {
             Ok(gix_hash::ObjectId::from_hex(
@@ -54,11 +54,11 @@ impl Fixture {
         Ok(fixture)
     }
 
-    fn main(&self) -> Store {
+    pub(super) fn main(&self) -> Store {
         Store::at(self.dir.path().join("repo/.git"), fixture_hash_kind())
     }
 
-    fn worktree(&self) -> Store {
+    pub(super) fn worktree(&self) -> Store {
         Store::for_linked_worktree(
             self.dir.path().join("repo/.git/worktrees/w1"),
             self.dir.path().join("repo/.git"),
@@ -66,25 +66,25 @@ impl Fixture {
         )
     }
 
-    fn git(&self, sub_directory: &str, args: &str) -> TestResult<String> {
+    pub(super) fn git(&self, sub_directory: &str, args: &str) -> TestResult<String> {
         Ok(gix_testtools::git(self.dir.path().join(sub_directory), args)?)
     }
 
     /// The names of the tables in the stack at `dir`, relative to the repository.
-    fn tables(&self, dir: &str) -> TestResult<Vec<String>> {
+    pub(super) fn tables(&self, dir: &str) -> TestResult<Vec<String>> {
         let list = std::fs::read_to_string(self.dir.path().join(dir).join("tables.list"))?;
         Ok(list.lines().map(ToOwned::to_owned).collect())
     }
 
     /// Fail unless Git considers what is stored valid.
-    fn git_agrees_that_nothing_is_wrong(&self) -> TestResult {
+    pub(super) fn git_agrees_that_nothing_is_wrong(&self) -> TestResult {
         self.git("repo", "refs verify")?;
         self.git("repo", "fsck --no-dangling")?;
         Ok(())
     }
 }
 
-fn committer() -> gix_actor::Signature {
+pub(super) fn committer() -> gix_actor::Signature {
     gix_actor::Signature {
         name: "Committer".into(),
         email: "committer@example.com".into(),
@@ -92,15 +92,15 @@ fn committer() -> gix_actor::Signature {
     }
 }
 
-fn name(name: &str) -> FullName {
+pub(super) fn name(name: &str) -> FullName {
     FullName::try_from(name).expect("valid name")
 }
 
-fn lock() -> LockOptions {
+pub(super) fn lock() -> LockOptions {
     LockOptions::new(Fail::Immediately, Fail::Immediately)
 }
 
-fn commit(store: &Store, edits: Vec<RefEdit>) -> gix_error::Result<Outcome> {
+pub(super) fn commit(store: &Store, edits: Vec<RefEdit>) -> gix_error::Result<Outcome> {
     let store = gix_ref::Store::from(store.clone());
     store
         .as_ref()
@@ -109,7 +109,7 @@ fn commit(store: &Store, edits: Vec<RefEdit>) -> gix_error::Result<Outcome> {
         .commit(committer().to_ref(&mut TimeBuf::default()))
 }
 
-fn create(reference: &str, id: gix_hash::ObjectId, message: &str) -> RefEdit {
+pub(super) fn create(reference: &str, id: gix_hash::ObjectId, message: &str) -> RefEdit {
     RefEdit::update(
         name(reference),
         Target::Object(id),
@@ -118,16 +118,16 @@ fn create(reference: &str, id: gix_hash::ObjectId, message: &str) -> RefEdit {
     )
 }
 
-fn update(reference: &str, id: gix_hash::ObjectId, expected: PreviousValue, message: &str) -> RefEdit {
+pub(super) fn update(reference: &str, id: gix_hash::ObjectId, expected: PreviousValue, message: &str) -> RefEdit {
     RefEdit::update(name(reference), Target::Object(id), expected, message)
 }
 
-fn id_of(store: &Store, reference: &str) -> TestResult<gix_hash::ObjectId> {
+pub(super) fn id_of(store: &Store, reference: &str) -> TestResult<gix_hash::ObjectId> {
     Ok(store.find(reference)?.target.try_id().expect("direct").to_owned())
 }
 
 /// The messages of the reflog of `reference` as Git shows them, newest first.
-fn reflog_messages(fixture: &Fixture, sub_directory: &str, reference: &str) -> TestResult<Vec<String>> {
+pub(super) fn reflog_messages(fixture: &Fixture, sub_directory: &str, reference: &str) -> TestResult<Vec<String>> {
     let output = gix_testtools::git_command(fixture.dir.path().join(sub_directory))
         .args(["reflog", "show", "--format=%gs", reference, "--"])
         .output()?;
