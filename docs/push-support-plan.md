@@ -544,3 +544,6 @@ sequencing; the overseer proposes each as its dependencies finish.
     `mergetag` is untried; ambiguity extension of short ids was not compared with many objects; `core.abbrev=0` and `off` are accepted
     as "no abbreviation" where Git rejects `0`. Short ids count only packed objects for `auto`, where Git estimates loose ones too.
     `config`: formatting differences to `git config` are pinned in `git_bytes.rs`, none changes how Git reads the file.
+    The hook runs on the local side only, so a receiving process that wants Git's directory and `GIT_DIR` for it needs a variant
+    that takes the side; its events name references without a namespace, which is right for `update-ref`, while Git's receiving
+    side passes namespaced names; and a refusal carries the marker `Vetoed` but not Git's wording.
