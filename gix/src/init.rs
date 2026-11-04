@@ -95,8 +95,7 @@ impl ThreadSafeRepository {
             gix_validate::reference::branch_name(sym_ref.as_bstr())
                 .or_raise(|| validation("Invalid default branch name").with_input(configured_branch_name))?;
             let mut repo = repo.to_thread_local();
-            let prev_write_reflog = repo.refs.write_reflog;
-            repo.refs.write_reflog = WriteReflog::Disable;
+            let prev_write_reflog = repo.refs.set_write_reflog(WriteReflog::Disable);
             repo.edit_reference(RefEdit::update(
                 "HEAD".try_into().expect("valid"),
                 sym_ref,
@@ -104,7 +103,7 @@ impl ThreadSafeRepository {
                 "",
             ))
             .or_raise(|| message("Could not edit HEAD reference with new default name"))?;
-            repo.refs.write_reflog = prev_write_reflog;
+            repo.refs.set_write_reflog(prev_write_reflog);
         }
 
         Ok(repo)

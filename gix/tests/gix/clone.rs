@@ -542,12 +542,10 @@ mod blocking_io {
             &out.ref_map.extra_refspecs.len() - 1,
             "mappings don't refer to non-existing implicit refspecs"
         );
-        let packed_refs = repo
-            .refs
-            .cached_packed_buffer()?
-            .expect("packed refs should be present");
+        let files = repo.refs.as_file().expect("clones use the files store");
+        let packed_refs = files.cached_packed_buffer()?.expect("packed refs should be present");
         assert_eq!(
-            repo.refs.loose_iter()?.count(),
+            files.loose_iter()?.count(),
             2,
             "HEAD and the remote HEAD are loose symbolic refs; other born remote symrefs are stored peeled"
         );
@@ -563,8 +561,7 @@ mod blocking_io {
             .expect("present")
             .next()
             .expect("one line")?
-            .signature
-            .to_owned()?;
+            .signature;
         assert_eq!(sig.name, "no name configured");
         assert_eq!(sig.email, "noEmailAvailable@example.com");
 
@@ -698,7 +695,7 @@ mod blocking_io {
         Ok(())
     }
 
-    fn assert_reflog(log: std::io::Result<Option<gix_ref::file::log::iter::Forward<'_>>>) -> Result {
+    fn assert_reflog(log: gix::Result<Option<impl Iterator<Item = gix::Result<gix_ref::log::Line>>>>) -> Result {
         let lines = log?.expect("log present").collect::<std::result::Result<Vec<_>, _>>()?;
         assert_eq!(lines.len(), 1, "just created");
         let line = &lines[0];

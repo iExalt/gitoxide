@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use gix_date::SecondsSinceUnixEpoch;
 use gix_error::{ErrorExt, Result, ResultExt, message};
 use gix_negotiate::Flags;
-use gix_ref::file::ReferenceExt;
 
 use crate::fetch::{RefMap, Shallow, Tags, refmap};
 
@@ -101,7 +100,7 @@ pub struct Round {
 #[expect(clippy::too_many_arguments)]
 pub fn mark_complete_and_common_ref<Out, F>(
     objects: &(impl gix_object::Find + gix_object::FindHeader + gix_object::Exists),
-    refs: &gix_ref::file::Store,
+    refs: gix_ref::StoreRef<'_>,
     alternates: impl FnOnce() -> Result<Out>,
     negotiator: &mut dyn gix_negotiate::Negotiator,
     graph: &mut gix_negotiate::Graph<'_, '_>,
@@ -110,7 +109,7 @@ pub fn mark_complete_and_common_ref<Out, F>(
     mapping_is_ignored: impl Fn(&refmap::Mapping) -> bool,
 ) -> Result<Action>
 where
-    Out: Iterator<Item = (gix_ref::file::Store, F)>,
+    Out: Iterator<Item = (gix_ref::Store, F)>,
     F: gix_object::Find,
 {
     let _span = gix_trace::detail!("mark_complete_and_common_ref", mappings = ref_map.mappings.len());
@@ -191,7 +190,7 @@ where
             // Alternates are only a hint for what is complete, so skip those whose references we can't read.
             continue;
         }
-        mark_all_refs_in_repo(&alt_refs, &alt_objs, graph, &mut queue, Flags::COMPLETE)?;
+        mark_all_refs_in_repo(alt_refs.as_ref(), &alt_objs, graph, &mut queue, Flags::COMPLETE)?;
     }
     // Keep track of the tips, which happen to be on our queue right, before we traverse the graph with cutoff.
     let tips = if let Some(cutoff) = cutoff_date {
@@ -355,24 +354,21 @@ fn mark_recent_complete_commits(
 }
 
 fn mark_all_refs_in_repo(
-    store: &gix_ref::file::Store,
+    store: gix_ref::StoreRef<'_>,
     objects: &impl gix_object::Find,
     graph: &mut gix_negotiate::Graph<'_, '_>,
     queue: &mut Queue,
     mark: Flags,
 ) -> Result {
     let _span = gix_trace::detail!("mark_all_refs");
-    for local_ref in store
-        .iter()
-        .or_raise(|| message("Could not open packed refs"))?
+    let snapshot = store.snapshot().or_raise(|| message("Could not open packed refs"))?;
+    let platform = snapshot.iter();
+    for local_ref in platform
         .all()
         .or_raise(|| message("Could not initialize ref iterator"))?
     {
         let mut local_ref = local_ref.or_raise(|| message("Could not read reference"))?;
-        let packed = store
-            .cached_packed_buffer()
-            .or_raise(|| message("Could not open packed refs"))?;
-        let id = match local_ref.peel_to_id_packed(store, objects, packed.as_ref().map(|b| &***b)) {
+        let id = match snapshot.peel_to_id(&mut local_ref, objects) {
             Ok(id) => id,
             Err(err) if err.downcast_any_ref::<gix_ref::view::NotFound>().is_some() => continue,
             Err(err) => return Err(err.and_raise(message("Could not peel reference to ID"))),

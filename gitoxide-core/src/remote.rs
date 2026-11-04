@@ -112,7 +112,7 @@ fn write_refs(
 
     let start = Instant::now();
     let precompose_unicode = gix::fs::Capabilities::probe(&directory).precompose_unicode;
-    let store = gix::RefStore::at_opts(
+    let store = gix::refs::file::Store::at_opts(
         directory,
         object_hash,
         gix::refs::store::init::Options {

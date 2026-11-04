@@ -190,7 +190,7 @@ impl delegate::Revision for Delegate<'_> {
     fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<()> {
         self.unset_disambiguate_call();
         fn prior_checkouts_iter<'a>(
-            platform: &'a mut gix_ref::file::log::iter::Platform<'static, '_>,
+            platform: &'a mut gix_ref::view::ReflogPlatform<'static, '_>,
         ) -> Result<impl Iterator<Item = (BString, ObjectId)> + 'a> {
             match platform.rev().ok().flatten() {
                 Some(log) => Ok(log.filter_map(std::result::Result::ok).filter_map(|line| {

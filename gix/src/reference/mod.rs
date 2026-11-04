@@ -2,7 +2,6 @@
 #![allow(clippy::empty_docs)]
 
 use crate::ext::ObjectIdExt;
-use gix_ref::file::ReferenceExt;
 
 use crate::{Blob, Commit, Id, Object, Reference, Result, Tag, Tree};
 
@@ -76,12 +75,8 @@ impl<'repo> Reference<'repo> {
     /// the chain of symbolic refs and annotated tags.
     #[deprecated = "Use `peel_to_id()` instead"]
     pub fn peel_to_id_in_place(&mut self) -> Result<Id<'repo>> {
-        let oid = self
-            .repo
-            .ref_store()
-            .snapshot()?
-            .peel_to_id(&mut self.inner, &self.repo.objects)?;
-        Ok(Id::from_id(oid, self.repo))
+        let snapshot = self.repo.ref_store().snapshot()?;
+        self.peel_to_id_with(&snapshot)
     }
 
     /// Follow all symbolic targets this reference might point to and peel all annotated tags
@@ -109,39 +104,16 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn peel_to_id(&mut self) -> Result<Id<'repo>> {
-        let oid = self
-            .repo
-            .ref_store()
-            .snapshot()?
-            .peel_to_id(&mut self.inner, &self.repo.objects)?;
-        Ok(Id::from_id(oid, self.repo))
+        let snapshot = self.repo.ref_store().snapshot()?;
+        self.peel_to_id_with(&snapshot)
     }
 
-    /// Follow all symbolic targets this reference might point to and peel all annotated tags
-    /// to their first non-tag target, and return it, reusing the `packed` buffer if available.
+    /// Like [`peel_to_id()`](Self::peel_to_id()), but uses `snapshot` for all lookups of symbolic references, which is
+    /// the best choice when peeling many references as the state of the reference store isn't obtained for each of them.
     ///
-    /// This is useful to learn where this reference is ultimately pointing to after following
-    /// the chain of symbolic refs and annotated tags.
-    #[deprecated = "Use `peel_to_id_packed()` instead"]
-    pub fn peel_to_id_in_place_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
-        let oid = self
-            .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
-        Ok(Id::from_id(oid, self.repo))
-    }
-
-    /// Follow all symbolic targets this reference might point to and peel all annotated tags
-    /// to their first non-tag target, and return it, reusing the `packed` buffer if available.
-    ///
-    /// This is useful to learn where this reference is ultimately pointing to after following
-    /// the chain of symbolic refs and annotated tags.
-    ///
-    /// Note that this method mutates `self` in place if it does not already point to a
-    /// non-symbolic object.
-    pub fn peel_to_id_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
-        let oid = self
-            .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
+    /// Get the snapshot with `repo.ref_store().snapshot()`.
+    pub fn peel_to_id_with(&mut self, snapshot: &gix_ref::view::Snapshot<'_>) -> Result<Id<'repo>> {
+        let oid = snapshot.peel_to_id(&mut self.inner, &self.repo.objects)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -160,13 +132,8 @@ impl<'repo> Reference<'repo> {
     /// instead.
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>> {
-        let target = self
-            .repo
-            .ref_store()
-            .snapshot()?
-            .follow_to_object(&mut self.inner)?
-            .attach(self.repo);
-        target.object()?.peel_to_kind(kind)
+        let snapshot = self.repo.ref_store().snapshot()?;
+        self.peel_to_kind_with(kind, &snapshot)
     }
 
     /// Peel this ref until the first commit.
@@ -211,17 +178,14 @@ impl<'repo> Reference<'repo> {
         Ok(self.peel_to_kind(gix_object::Kind::Blob)?.into_blob())
     }
 
-    /// Like [`peel_to_kind()`](Self::peel_to_kind), but allows to provide `packed` for best possible performance
-    /// when peeling many refs.
-    pub fn peel_to_kind_packed(
+    /// Like [`peel_to_kind()`](Self::peel_to_kind), but uses `snapshot` for all lookups of symbolic references, which is
+    /// the best choice when peeling many references.
+    pub fn peel_to_kind_with(
         &mut self,
         kind: gix_object::Kind,
-        packed: Option<&gix_ref::packed::Buffer>,
+        snapshot: &gix_ref::view::Snapshot<'_>,
     ) -> Result<Object<'repo>> {
-        let target = self
-            .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
-            .attach(self.repo);
+        let target = snapshot.follow_to_object(&mut self.inner)?.attach(self.repo);
         target.object()?.peel_to_kind(kind)
     }
 
@@ -231,22 +195,15 @@ impl<'repo> Reference<'repo> {
     /// a symbolic target ref was looked up from packed-refs.
     #[doc(alias = "resolve", alias = "git2")]
     pub fn follow_to_object(&mut self) -> Result<Id<'repo>> {
-        Ok(self
-            .repo
-            .ref_store()
-            .snapshot()?
-            .follow_to_object(&mut self.inner)?
-            .attach(self.repo))
+        let snapshot = self.repo.ref_store().snapshot()?;
+        self.follow_to_object_with(&snapshot)
     }
 
-    /// Like [`follow_to_object`](Self::follow_to_object), but can be used for repeated calls as it won't
-    /// look up `packed` each time, but can reuse it instead.
+    /// Like [`follow_to_object`](Self::follow_to_object), but uses `snapshot` for all lookups of symbolic references,
+    /// which is the best choice for repeated calls.
     #[doc(alias = "resolve", alias = "git2")]
-    pub fn follow_to_object_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
-        Ok(self
-            .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
-            .attach(self.repo))
+    pub fn follow_to_object_with(&mut self, snapshot: &gix_ref::view::Snapshot<'_>) -> Result<Id<'repo>> {
+        Ok(snapshot.follow_to_object(&mut self.inner)?.attach(self.repo))
     }
 
     /// Follow this symbolic reference one level and return the ref it refers to.
