@@ -1,3 +1,4 @@
+use crate::edit::EditRefs as _;
 use gix::Result;
 use gix::error::ensure;
 use gix::error::{OptionExt as _, ResultExt as _, message};
@@ -498,7 +499,7 @@ impl Publication {
             before: undo::State::Object(reserved),
             after,
         })?);
-        repo.edit_references(edits)
+        repo.edit_refs(edits)
             .or_raise(|| gix::error::message("could not publish the rebase continuation and undo state"))?;
         Ok(())
     }
@@ -538,7 +539,7 @@ pub(crate) fn stop(repo: &gix::Repository) -> Result<Option<String>> {
         reference.name().to_owned(),
         gix::refs::transaction::PreviousValue::MustExistAndMatch(reference.target().into_owned()),
     ));
-    repo.edit_references(edits)
+    repo.edit_refs(edits)
         .or_raise(|| gix::error::message("could not stop the saved rebase"))?;
     Ok(warning)
 }

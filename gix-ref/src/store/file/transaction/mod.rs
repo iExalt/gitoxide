@@ -5,7 +5,7 @@ use gix_object::bstr::BString;
 
 use crate::{
     store_impl::{file, file::Transaction},
-    transaction::{RefEdit, observe::Observer},
+    transaction::{HeadLog, RefEdit, observe::Observer},
 };
 
 pub(in crate::store_impl::file) mod notifier;
@@ -42,6 +42,9 @@ pub(in crate::store_impl::file) struct Edit {
     /// For symbolic refs, this is the previous OID to put into the reflog instead of our own previous value. It's the
     /// peeled value of the leaf referent.
     leaf_referent_previous_oid: Option<ObjectId>,
+    /// Set if this is a log-only edit of `HEAD` that was added to the edit at this index, which changes the reference
+    /// `HEAD` points at. Its reflog entry has the previous value of that edit.
+    head_log_of: Option<usize>,
 }
 
 impl Edit {
@@ -77,6 +80,7 @@ impl file::Store {
             updates: None,
             packed_refs: PackedRefs::default(),
             observer: Notifier::default(),
+            head_log: HeadLog::default(),
         }
     }
 }
@@ -94,6 +98,12 @@ impl<'p> Transaction<'_, 'p> {
     /// the last one set.
     pub fn observer(mut self, observer: impl Observer + 'p) -> Self {
         self.observer.set(observer);
+        self
+    }
+
+    /// Decide how the reflog of `HEAD` follows the branch it points at, which is [what Git does](HeadLog::Git) by default.
+    pub fn head_log(mut self, head_log: HeadLog) -> Self {
+        self.head_log = head_log;
         self
     }
 }
