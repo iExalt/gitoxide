@@ -324,6 +324,7 @@ members = [
     "gix-validate",
     "gix-ref",
     "gix-command",
+    "gix-hook",
     "gix-config",
     "gix-config-value",
     "gix-discover",
