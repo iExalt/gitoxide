@@ -2487,6 +2487,7 @@ dependencies = [
  "gix-error",
  "gix-hash",
  "gix-testtools",
+ "gix-validate",
  "gix-zlib",
 ]
 

@@ -1071,6 +1071,9 @@ Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility
     * [ ] write and use the object index
 * [x] a merged view of several tables, with tombstones that can be hidden
 * [ ] read and write reftable stacks
+    * [x] read a stack from `tables.list`, reload it like Git does and share consistent snapshots of it
+    * [x] fail closed on missing, damaged or foreign tables instead of reading them as empty
+    * [ ] add tables under the `tables.list` lock
 * [ ] transactions and reflogs
 * [ ] compaction and table management
 * [ ] backend selection and migration between `files` and `reftable`
