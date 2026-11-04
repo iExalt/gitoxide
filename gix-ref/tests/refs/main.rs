@@ -105,4 +105,5 @@ mod partialname {
 mod namespace;
 mod packed;
 mod reference;
+mod reflog_edit;
 mod transaction;

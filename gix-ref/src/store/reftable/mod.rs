@@ -26,6 +26,7 @@ pub use gix_reftable::stack::Options as StackOptions;
 mod iter;
 pub use iter::{Iter, Platform};
 mod log;
+mod reflog_edit;
 mod stacks;
 mod transaction;
 pub(crate) use transaction::{Prepared, Transaction};

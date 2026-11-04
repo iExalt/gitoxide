@@ -629,7 +629,10 @@ impl Transaction<'_, '_> {
 /// * `worktrees/refs/refs/bisect/bad` -> `/repo/.git/worktrees/refs/refs`
 ///
 /// The store resolves namespaces and worktree aliases before selecting the boundary.
-fn reference_path_and_lock_boundary(store: &file::Store, name: &FullNameRef) -> Result<(PathBuf, PathBuf)> {
+pub(in crate::store_impl::file) fn reference_path_and_lock_boundary(
+    store: &file::Store,
+    name: &FullNameRef,
+) -> Result<(PathBuf, PathBuf)> {
     let (base, relative_path) = store.reference_path_with_base(name)?;
     let reference_path = base.join(relative_path.as_ref());
     let mut lock_boundary = base.into_owned();
