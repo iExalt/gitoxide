@@ -51,7 +51,8 @@ fn install_hook(repo: &gix::Repository, log: &Path, veto: &Path) -> TestResult {
 }
 
 fn id(repo: &gix::Repository, spec: &str) -> TestResult<gix::ObjectId> {
-    Ok(repo.rev_parse_single(spec)?.detach())
+    let hex = gix_testtools::git(repo.workdir().expect("non-bare"), &format!("rev-parse {spec}"))?;
+    Ok(gix::ObjectId::from_hex(hex.trim().as_bytes())?)
 }
 
 fn update(name: &str, new: gix::ObjectId, expected: PreviousValue, deref: bool) -> RefEdit {
@@ -85,6 +86,8 @@ struct Row {
     name: &'static str,
     /// What to give to `git update-ref --stdin`.
     git_stdin: &'static str,
+    /// The namespace to work in, as `GIT_NAMESPACE` would say.
+    namespace: Option<&'static str>,
     /// The state in which the hook fails, if any.
     veto: Option<&'static str>,
     edits: fn(&gix::Repository) -> TestResult<Vec<RefEdit>>,
@@ -97,18 +100,21 @@ fn rows() -> Vec<Row> {
             name: "create",
             git_stdin: "create refs/heads/new main\n",
             veto: None,
+            namespace: None,
             edits: |r| Ok(vec![update("refs/heads/new", id(r, "main")?, MustNotExist, false)]),
         },
         Row {
             name: "update without an expected value",
             git_stdin: "update refs/heads/old main\n",
             veto: None,
+            namespace: None,
             edits: |r| Ok(vec![update("refs/heads/old", id(r, "main")?, Any, false)]),
         },
         Row {
             name: "update with an expected value",
             git_stdin: "update refs/heads/old main main~1\n",
             veto: None,
+            namespace: None,
             edits: |r| {
                 Ok(vec![update(
                     "refs/heads/old",
@@ -122,24 +128,28 @@ fn rows() -> Vec<Row> {
             name: "delete a loose reference",
             git_stdin: "delete refs/heads/old\n",
             veto: None,
+            namespace: None,
             edits: |_| Ok(vec![delete("refs/heads/old", Any, false)]),
         },
         Row {
             name: "delete a reference that is only packed",
             git_stdin: "delete refs/heads/packed\n",
             veto: None,
+            namespace: None,
             edits: |_| Ok(vec![delete("refs/heads/packed", Any, false)]),
         },
         Row {
             name: "delete a reference that is packed and loose, with an expected value",
             git_stdin: "delete refs/heads/both main\n",
             veto: None,
+            namespace: None,
             edits: |r| Ok(vec![delete("refs/heads/both", exists(id(r, "main")?), false)]),
         },
         Row {
             name: "delete a loose and a packed reference, and update another",
             git_stdin: "delete refs/heads/old\ndelete refs/heads/packed\nupdate refs/heads/main main~1\n",
             veto: None,
+            namespace: None,
             edits: |r| {
                 Ok(vec![
                     delete("refs/heads/old", Any, false),
@@ -152,29 +162,48 @@ fn rows() -> Vec<Row> {
             name: "update through HEAD",
             git_stdin: "update HEAD main~1\n",
             veto: None,
+            namespace: None,
             edits: |r| Ok(vec![update("HEAD", id(r, "main~1")?, Any, true)]),
+        },
+        Row {
+            name: "no changes at all",
+            git_stdin: "",
+            namespace: None,
+            veto: None,
+            edits: |_| Ok(vec![]),
+        },
+        Row {
+            name: "update HEAD itself without following it",
+            git_stdin: "option no-deref\nupdate HEAD main~1\n",
+            namespace: None,
+            veto: None,
+            edits: |r| Ok(vec![update("HEAD", id(r, "main~1")?, Any, false)]),
         },
         Row {
             name: "refused while preparing",
             git_stdin: "update refs/heads/old main\n",
+            namespace: None,
             veto: Some("preparing"),
             edits: |r| Ok(vec![update("refs/heads/old", id(r, "main")?, Any, false)]),
         },
         Row {
             name: "refused once prepared",
             git_stdin: "update refs/heads/old main\n",
+            namespace: None,
             veto: Some("prepared"),
             edits: |r| Ok(vec![update("refs/heads/old", id(r, "main")?, Any, false)]),
         },
         Row {
             name: "a hook that fails after the commit changes nothing",
             git_stdin: "update refs/heads/old main\n",
+            namespace: None,
             veto: Some("committed"),
             edits: |r| Ok(vec![update("refs/heads/old", id(r, "main")?, Any, false)]),
         },
         Row {
             name: "refused when deleting a packed reference once prepared",
             git_stdin: "delete refs/heads/packed\n",
+            namespace: None,
             veto: Some("prepared"),
             edits: |_| Ok(vec![delete("refs/heads/packed", Any, false)]),
         },
@@ -182,6 +211,7 @@ fn rows() -> Vec<Row> {
             name: "an expected value that isn't there",
             git_stdin: "update refs/heads/old main main\n",
             veto: None,
+            namespace: None,
             edits: |r| {
                 Ok(vec![update(
                     "refs/heads/old",
@@ -235,11 +265,18 @@ fn the_hook_sees_what_git_shows_it(reftable: bool) -> TestResult {
             let succeeded = if who == "git" {
                 let mut cmd = gix_testtools::git_command(repo.workdir().expect("non-bare"));
                 cmd.args(["update-ref", "--stdin"]).stdin(std::process::Stdio::piped());
+                if let Some(namespace) = row.namespace {
+                    cmd.env("GIT_NAMESPACE", namespace);
+                }
                 let mut child = cmd.stderr(std::process::Stdio::null()).spawn()?;
                 std::io::Write::write_all(&mut child.stdin.take().expect("piped"), row.git_stdin.as_bytes())?;
                 child.wait()?.success()
             } else {
-                match repo.edit_references_with_hooks((row.edits)(repo)?, Some(committer)) {
+                let mut repo = repo.clone();
+                if let Some(namespace) = row.namespace {
+                    repo.set_namespace(namespace)?;
+                }
+                match repo.edit_references_with_hooks((row.edits)(&repo)?, Some(committer)) {
                     Ok(_) => true,
                     Err(err) => {
                         if row.veto == Some("preparing") || row.veto == Some("prepared") {
@@ -300,6 +337,8 @@ fn nothing_changes_inside_a_quarantine_environment_and_the_hook_isnt_called() ->
         )
         .expect_err("Git refuses as well");
     assert!(err.to_string().contains("quarantine"), "{err:?}");
+    repo.edit_references([update("refs/heads/new", id(&repo, "main")?, PreviousValue::Any, false)])
+        .expect_err("the other ways to edit references refuse as well, as Git refuses them all");
     assert!(!log.exists(), "the hook isn't even told, as with Git");
     assert_eq!(refs(&repo)?, before);
     Ok(())
