@@ -191,12 +191,17 @@ fn non_empty_reflog_directory_preserves_open_error_context() -> TestResult {
     std::fs::create_dir_all(&path)?;
     std::fs::write(path.join("keep"), b"not an empty directory")?;
 
+    let committer = Signature {
+        name: "committer".into(),
+        email: "committer@example.com".into(),
+        time: gix_date::parse_header("1234 +0800").expect("valid timestamp"),
+    };
     let err = store
         .reflog_create_or_append(
             name,
             None,
             &gix_testtools::object_hash().null(),
-            None,
+            committer.to_ref(&mut TimeBuf::default()).into(),
             b"update".as_bstr(),
             false,
         )

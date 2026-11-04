@@ -193,12 +193,13 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
     #[cfg(not(windows))]
     insta::assert_debug_snapshot!(error_snapshots, "reference with equally named empty or non empty directory already in place can potentially recover", @r#"
     [
-        Could not commit reference, reference="HEAD"
+        The transaction failed while committing, and may have been applied in part
         
         Caused by:
-            0: I/O error (Other)
+            0: Could not commit reference, reference="HEAD"
             1: I/O error (Other)
-            2: Directory not empty,
+            2: I/O error (Other)
+            3: Directory not empty,
     ]
     "#);
     Ok(())

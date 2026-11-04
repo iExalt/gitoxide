@@ -177,6 +177,11 @@ impl Transaction<'_, '_> {
                         Target::Symbolic(name) => writeln!(file, "ref: {}", name.0),
                     })
                     .or_raise(|| message("Could not write loose reference"))?;
+                    if matches!(new, Target::Object(_)) {
+                        // Git doesn't flush symbolic references, which it writes through a different path.
+                        lock.with_mut(|file| store.fsync.flush(file, gix_fs::fsync::Components::REFERENCE))
+                            .or_raise(|| message("Could not flush loose reference"))?;
+                    }
                     Some(lock.close().or_raise(|| message("Could not close reference lock"))?)
                 } else if keep_lock_for_loose_source_delete {
                     Some(lock.close().or_raise(|| message("Could not close reference lock"))?)
@@ -324,6 +329,7 @@ impl Transaction<'_, '_> {
                                     packed_refs_lock_fail_mode,
                                     self.store.precompose_unicode,
                                     self.store.namespace.clone(),
+                                    self.store.fsync,
                                 )
                             })
                             .transpose()?

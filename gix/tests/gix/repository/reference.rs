@@ -115,6 +115,59 @@ fn try_find_reference_with_existing_ref_as_path_prefix_returns_none() -> TestRes
     Ok(())
 }
 
+#[test]
+fn failed_edits_keep_the_marker_that_tells_what_they_did_to_the_repository() -> TestResult {
+    use gix::refs::transaction::{
+        Change, LogChange, PreviousValue, RefEdit,
+        commit_failure::{NothingApplied, Progress, Uncertain},
+    };
+    let (repo, _tmp) = crate::basic_rw_repo()?;
+    let id = repo.head_id()?.detach();
+    let create = |name: &str| RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                force_create_reflog: true,
+                ..Default::default()
+            },
+            expected: PreviousValue::MustNotExist,
+            new: gix::refs::Target::Object(id),
+        },
+        name: name.try_into().expect("valid name"),
+        deref: false,
+    };
+
+    let err = repo
+        .edit_references_as([create("refs/heads/x")], None)
+        .expect_err("a reflog entry can't be written without a committer");
+    assert!(
+        err.downcast_any_ref::<NothingApplied>().is_some() && err.downcast_any_ref::<Uncertain>().is_none(),
+        "retrying is known to be safe, and the porcelain doesn't hide it"
+    );
+    assert!(repo.try_find_reference("refs/heads/x")?.is_none());
+
+    // A directory with content where the reflog of the second reference goes, as in the plumbing tests.
+    let blocked = repo.git_dir().join("logs/refs/heads/y");
+    std::fs::create_dir_all(&blocked)?;
+    std::fs::write(blocked.join("content"), "makes this a directory that is not empty")?;
+    let committer = gix::actor::SignatureRef {
+        name: "committer".into(),
+        email: "committer@example.com".into(),
+        time: "0 +0000",
+    };
+    let err = repo
+        .edit_references_as([create("refs/heads/x"), create("refs/heads/y")], Some(committer))
+        .expect_err("the reflog of the second reference can't be written");
+    assert_eq!(
+        err.downcast_any_ref::<Uncertain>().expect("it changed something").edits,
+        [
+            ("refs/heads/x".try_into()?, Progress::Applied),
+            ("refs/heads/y".try_into()?, Progress::InDoubt)
+        ],
+        "the porcelain reports how far each edit got"
+    );
+    Ok(())
+}
+
 mod iter_references {
     use crate::util::hex_to_id;
     use gix_testtools::{Result, TestResult};

@@ -14,6 +14,8 @@
 //!   - errors when committing while leave the ref store in an inconsistent, but operational state.
 use gix_object::bstr::BString;
 
+pub mod commit_failure;
+
 use crate::{FullName, Target};
 
 /// A change to the reflog.

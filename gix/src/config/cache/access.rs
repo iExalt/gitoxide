@@ -270,6 +270,31 @@ impl Cache {
         res.with_leniency(self.lenient_config)
     }
 
+    /// The flush configuration, from `core.fsync`, `core.fsyncMethod` and `core.fsyncObjectFiles`.
+    ///
+    /// As in Git, the last `core.fsync` wins and unknown component names are ignored, while for `core.fsyncMethod`
+    /// the last *known* value wins. Missing values are ignored, which is lenient: Git reports them as an error.
+    pub(crate) fn fsync_options(&self) -> Result<gix_fs::fsync::Options> {
+        use gix_fs::fsync::{Components, Method, Options};
+
+        let mut options = Options::default();
+        if let Some(value) = self
+            .resolved
+            .string_filter(Core::FSYNC, &mut self.filter_config_section.clone())
+        {
+            options.components = Components::parse(value.as_ref()).0;
+        }
+        if let Some(values) = self
+            .resolved
+            .strings_filter(Core::FSYNC_METHOD, &mut self.filter_config_section.clone())
+            && let Some(method) = values.iter().rev().find_map(|value| Method::parse(value.as_ref()))
+        {
+            options.method = method;
+        }
+        options.fsync_object_files = boolean(self, "core.fsyncObjectFiles", &Core::FSYNC_OBJECT_FILES, false)?;
+        Ok(options)
+    }
+
     pub(crate) fn fs_capabilities(&self) -> Result<gix_fs::Capabilities> {
         Ok(gix_fs::Capabilities {
             precompose_unicode: boolean(self, "core.precomposeUnicode", &Core::PRECOMPOSE_UNICODE, false)?,

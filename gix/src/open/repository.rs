@@ -291,6 +291,7 @@ impl ThreadSafeRepository {
             let object_hash = repo_config.object_hash;
             let ref_store_init_opts = gix_ref::store::init::Options {
                 write_reflog: reflog,
+                fsync: Default::default(),
                 precompose_unicode: repo_config.precompose_unicode,
                 prohibit_windows_device_names: repo_config.protect_windows,
             };
@@ -527,6 +528,7 @@ impl ThreadSafeRepository {
         }
 
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
+        refs.fsync = config.fsync_options()?;
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
