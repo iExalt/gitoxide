@@ -124,6 +124,36 @@ impl crate::Repository {
         self.merge_bases_many_with_graph(one, others, &mut graph)
     }
 
+    /// Return `true` if `ancestor` is reachable from `descendant`, which is also the case if they are the same commit,
+    /// like `git merge-base --is-ancestor <ancestor> <descendant>` tells it.
+    /// Graph setup and traversal failures, and objects that aren't commits, are returned as errors.
+    ///
+    /// # Performance
+    /// For repeated calls, prefer [`is_ancestor_with_graph()`](Self::is_ancestor_with_graph()).
+    #[cfg(feature = "revision")]
+    pub fn is_ancestor(
+        &self,
+        ancestor: impl Into<gix_hash::ObjectId>,
+        descendant: impl Into<gix_hash::ObjectId>,
+    ) -> Result<bool> {
+        let cache = self.commit_graph_if_enabled()?;
+        let mut graph = self.revision_graph(cache.as_ref());
+        self.is_ancestor_with_graph(ancestor, descendant, &mut graph)
+    }
+
+    /// Like [`is_ancestor()`](Self::is_ancestor()), but with a commit-graph `graph` that speeds up repeated calls.
+    #[cfg(feature = "revision")]
+    pub fn is_ancestor_with_graph(
+        &self,
+        ancestor: impl Into<gix_hash::ObjectId>,
+        descendant: impl Into<gix_hash::ObjectId>,
+        graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
+    ) -> Result<bool> {
+        let ancestor = ancestor.into();
+        let bases = gix_revision::merge_base(descendant.into(), &[ancestor], graph)?;
+        Ok(bases.is_some_and(|bases| bases.contains(&ancestor)))
+    }
+
     /// Return the best merge-base among all `commits`, or `None` if `commits` yields no commit or no merge-base was found.
     ///
     /// Use `graph` to speed up repeated calls. Traversal failures are returned as errors.

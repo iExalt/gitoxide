@@ -211,3 +211,43 @@ fn date() -> TestResult {
     );
     Ok(())
 }
+
+/// `git merge-base --is-ancestor` for every pair of commits of a history with merges, a criss-cross and an unrelated root.
+#[test]
+fn is_ancestor_matches_git_for_every_pair_of_commits() -> TestResult {
+    let repo = crate::named_repo("make_ancestry_repo.sh")?;
+    let dir = repo.workdir().expect("non-bare fixture");
+    let tags = gix_testtools::git(dir, "tag --list")?;
+    let tags: Vec<_> = tags.lines().collect();
+    assert!(
+        tags.len() >= 10,
+        "the fixture has enough commits to make this meaningful"
+    );
+
+    let mut ancestors = 0;
+    for ancestor in &tags {
+        for descendant in &tags {
+            let expected = gix_testtools::git_command(dir)
+                .args(["merge-base", "--is-ancestor", ancestor, descendant])
+                .status()?
+                .success();
+            let ancestor_id = repo.rev_parse_single(*ancestor)?.detach();
+            let descendant_id = repo.rev_parse_single(*descendant)?.detach();
+            assert_eq!(
+                repo.is_ancestor(ancestor_id, descendant_id)?,
+                expected,
+                "is {ancestor} an ancestor of {descendant}?"
+            );
+            ancestors += usize::from(expected);
+        }
+    }
+    assert!(
+        ancestors > tags.len() && ancestors < tags.len() * tags.len(),
+        "both answers occur, and commits are ancestors of themselves"
+    );
+
+    let tree_id = repo.head_tree_id()?.detach();
+    repo.is_ancestor(tree_id, repo.head_id()?)
+        .expect_err("a tree is not a commit");
+    Ok(())
+}
