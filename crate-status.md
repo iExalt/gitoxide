@@ -575,6 +575,24 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
   interval; whether Git agrees with a server that streams them is not verified, as the test peer relays the output at the end.
   A consumer that stops reading for a few seconds doesn't end a transfer on either backend.
 
+#### Local Git dispatch
+
+Fetching and pushing as a client runs no `git` and none of its credential helpers: a test puts programs named like them in front of
+`PATH` and runs authenticated fetches and pushes with each HTTP backend and over `ssh`, and none of them is run. What still does:
+
+* A `file://` URL or a plain path runs `git-upload-pack` or `git-receive-pack` as a program, and `git <subcommand>` if neither is
+  in `PATH` or in the exec-path. `protocol.file.allow=never` and `protocol.allow=never` refuse it before anything is run, which is tested.
+* `gix_credentials::builtin` runs `git credential`. Two commands that have no repository, and so no configuration to build a
+  native cascade from, keep it on purpose: `gix free remote refs` and `gix free pack receive`. Everything else uses the native
+  cascade: `get`, `store` and `erase`, chaining and reset, the `store` helper without running a program, and named helpers that are found
+  without running `git`.
+* `gix_path::env::core_dir()` runs `git --exec-path` once per process, to find programs in the exec-path of Git, as the file
+  transport does, and `installation_config()` may run `git config` once to find the configuration of the installation when
+  configuration isn't loaded in isolation. Neither is part of the network code.
+* `gix attributes validate-baseline` and `gix-tix` run Git because they compare with it or work on top of it.
+* Programs that the configuration names run as configured: credential helpers other than `store`, `ssh` and `core.sshCommand`,
+  `core.askpass` and hooks.
+
 ### gix-protocol
 * _abstract over protocol versions to allow delegates to deal only with a single way of doing things_
 * [x] **credentials**
