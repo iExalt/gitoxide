@@ -66,6 +66,16 @@ impl<'auth, T> Connection<'_, 'auth, '_, T>
 where
     T: Transport,
 {
+    /// Return a handle that ends what this connection blocks on from another thread, if the transport has one.
+    ///
+    /// The `should_interrupt` flags of operations are looked at between reads, which a peer that stopped responding never
+    /// lets end. Use [`InterruptHandle::watch()`](gix_protocol::transport::client::InterruptHandle::watch()) with the flag
+    /// around the operation to make a flag that is set elsewhere end it promptly, or call the handle from the code that cancels.
+    /// Get it before the operation, as it consumes the connection.
+    pub fn interrupt_handle(&self) -> Option<gix_protocol::transport::client::InterruptHandle> {
+        gix_protocol::transport::client::TransportWithoutIO::interrupt_handle(&self.transport.inner)
+    }
+
     /// Like [`with_credentials()`](Self::with_credentials()), but without consuming the connection.
     pub fn set_credentials(
         &mut self,

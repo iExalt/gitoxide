@@ -125,6 +125,14 @@ impl<'cb, T> Prepare<'cb, '_, T>
 where
     T: Transport,
 {
+    /// Return a handle that ends what the push blocks on from another thread, if the transport has one.
+    ///
+    /// [`send()`](Self::send()) uses it itself to end the push when its `should_interrupt` flag is set, so this is for
+    /// code that wants to cancel on its own terms.
+    pub fn interrupt_handle(&self) -> Option<gix_protocol::transport::client::InterruptHandle> {
+        gix_protocol::transport::client::TransportWithoutIO::interrupt_handle(&self.transport.inner)
+    }
+
     /// What is going to happen to each update.
     pub fn plan(&self) -> &Plan {
         &self.plan
@@ -165,6 +173,12 @@ where
         let to_send: Vec<&Entry> = self.plan.to_send().collect();
         if to_send.is_empty() {
             return Ok(self.finish(None, false));
+        }
+        if should_interrupt.load(std::sync::atomic::Ordering::SeqCst) {
+            // Nothing was sent, so this is a plain failure rather than an outcome that has to be reconciled.
+            bail!(gix_error::cancelled(
+                "The push was interrupted before anything was sent"
+            ));
         }
 
         let null = repo.object_hash().null();
@@ -267,23 +281,41 @@ where
 
         let mut pack_failed = false;
         let mut on_message = self.on_remote_message.take();
-        let result = gix_protocol::push::push(
-            &mut self.transport.inner,
-            &request,
-            |out| match pack.map(|(db, counts, options)| {
-                gix_pack::data::output::missing::write_pack(db, counts, out, repo.object_hash(), options)
-            }) {
-                Some(Err(err)) => {
-                    pack_failed = true;
-                    Err(err)
-                }
-                _ => Ok(()),
-            },
-            on_message
-                .as_mut()
-                .map(|callback| &mut **callback as &mut dyn FnMut(bool, &[u8])),
-            self.trace,
-        );
+        // A peer that stopped responding blocks writes and reads that don't look at the flag, so the transport is ended
+        // from a thread of its own if the flag is set. An interrupted push is still reported as one that failed or whose
+        // outcome is uncertain, depending on how far it got.
+        let interrupt = self.interrupt_handle();
+        let trace = self.trace;
+        let transport = &mut self.transport.inner;
+        let push = || {
+            gix_protocol::push::push(
+                transport,
+                &request,
+                |out| match pack.map(|(db, counts, options)| {
+                    gix_pack::data::output::missing::write_pack(db, counts, out, repo.object_hash(), options)
+                }) {
+                    Some(Err(err)) => {
+                        pack_failed = true;
+                        Err(err)
+                    }
+                    _ => Ok(()),
+                },
+                on_message
+                    .as_mut()
+                    .map(|callback| &mut **callback as &mut dyn FnMut(bool, &[u8])),
+                trace,
+            )
+        };
+        // The hook and the counting may have taken a while, and nothing was sent so far.
+        if should_interrupt.load(std::sync::atomic::Ordering::SeqCst) {
+            bail!(gix_error::cancelled(
+                "The push was interrupted before anything was sent"
+            ));
+        }
+        let result = match &interrupt {
+            Some(handle) => handle.watch(should_interrupt, push),
+            None => push(),
+        };
         // The server may still run hooks, or be waiting for what we didn't send. Either way, we let it finish so we don't
         // interrupt whatever it does, which also is a prerequisite for looking at its state afterwards.
         let server_finished = self
