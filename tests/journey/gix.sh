@@ -523,6 +523,9 @@ title "gix commit-graph"
     (with "the 'receive' sub-command"
       snapshot="$snapshot/receive"
       (small-repo-in-sandbox
+        # Pack and index hashes cover the deflated bytes, which differ between zlib implementations in Git.
+        # Stored blocks do not, so the snapshots hold for any Git build.
+        git config core.compression 0
         if [[ "$kind" != 'small' ]]; then
 
         if [[ "$kind" != 'async' ]]; then

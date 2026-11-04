@@ -6,7 +6,7 @@ use crate::{hex_to_id_for_hash, leaked_fixture_bytes, object_hash};
 /// Load a multi-index fixture into memory and instantiate a memory-backed multi-index file from it.
 fn multi_index_from_memory(object_hash: gix_hash::Kind) -> gix_pack::multi_index::File<&'static [u8]> {
     let (data, path) = leaked_fixture_bytes(
-        crate::scripted_fixture_read_only("make_pack_gen_repo_multi_index.sh")
+        crate::scripted_fixture_read_only_needs_archive("make_pack_gen_repo_multi_index.sh")
             .expect("test fixture exists")
             .join(".git/objects/pack/multi-pack-index"),
     );
