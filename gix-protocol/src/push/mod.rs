@@ -41,7 +41,7 @@ pub use request::{Options, Request, StatusFormat};
 #[cfg(feature = "blocking-client")]
 mod function;
 #[cfg(feature = "blocking-client")]
-pub use function::push;
+pub use function::{PackProducerFailedAfterCompletion, push};
 
 ///
 pub mod report;
