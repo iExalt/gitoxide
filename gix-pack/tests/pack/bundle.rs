@@ -188,6 +188,7 @@ mod write_to_directory {
                             index_version: pack::index::Version::V2,
                             alloc_limit_bytes: None,
                             compression: gix_zlib::Compression::BEST_SPEED,
+                            ..Default::default()
                         },
                     )?;
                     assert_eq!(
@@ -274,6 +275,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
+                ..Default::default()
             },
         )
         .expect_err("a ref-delta without an in-pack or external base cannot be indexed");
@@ -302,6 +304,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: prevent_allocation,
                 compression: gix_zlib::Compression::BEST_SPEED,
+                ..Default::default()
             },
         )
         .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
@@ -331,6 +334,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
+                ..Default::default()
             },
         )?)
     }
