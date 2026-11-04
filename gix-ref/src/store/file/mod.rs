@@ -169,6 +169,7 @@ pub mod transaction;
 ///
 pub mod packed;
 
+mod reflog_edit;
 mod unsupported;
 
 mod raw_ext;

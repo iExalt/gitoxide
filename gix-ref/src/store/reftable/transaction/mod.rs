@@ -611,7 +611,7 @@ fn identity(committer: gix_actor::SignatureRef<'_>) -> Result<Identity> {
 }
 
 /// Merge tables like Git does after a transaction, ignoring whatever goes wrong, as the transaction succeeded.
-fn compact(store: &Store, options: &StackOptions, id: &StackId) {
+pub(super) fn compact(store: &Store, options: &StackOptions, id: &StackId) {
     let Ok(cell) = store.stacks.cell(id) else { return };
     let Ok(snapshot) = store.stack_snapshot(id, true) else {
         return;
