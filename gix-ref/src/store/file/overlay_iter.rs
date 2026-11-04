@@ -203,6 +203,11 @@ impl<'repo> Platform<'repo> {
 }
 
 impl file::Store {
+    /// Return a platform that iterates with the given `packed` snapshot instead of looking for the most recent one.
+    pub(crate) fn platform_with_snapshot(&self, packed: Option<file::packed::SharedBufferSnapshot>) -> Platform<'_> {
+        Platform { store: self, packed }
+    }
+
     /// Return a platform to obtain iterator over all references, or prefixed ones, loose or packed, sorted by their name.
     ///
     /// Errors are returned similarly to what would happen when loose and packed refs were iterated by themselves.

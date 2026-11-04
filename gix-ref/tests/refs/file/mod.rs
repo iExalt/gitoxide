@@ -28,7 +28,7 @@ pub fn store_at_with_args(name: &str, args: impl IntoIterator<Item = impl Into<S
     Ok(Store::at(path.join(".git"), crate::fixture_hash_kind()))
 }
 
-fn store_writable(name: &str) -> Result<(gix_testtools::tempfile::TempDir, Store)> {
+pub fn store_writable(name: &str) -> Result<(gix_testtools::tempfile::TempDir, Store)> {
     let dir = crate::scripted_fixture_writable(name)?;
     let git_dir = dir.path().join(".git");
     Ok((dir, Store::at(git_dir, crate::fixture_hash_kind())))

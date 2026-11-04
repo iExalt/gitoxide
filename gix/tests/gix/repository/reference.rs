@@ -1,5 +1,27 @@
 use gix_testtools::TestResult;
 
+#[test]
+fn ref_store_is_a_view_of_the_repository_references_that_follows_its_namespace() -> TestResult {
+    let (mut repo, _keep) = crate::repo_rw("make_references_repo.sh")?;
+    let via_view = repo.ref_store().iter()?.all()?.filter_map(Result::ok).count();
+    assert_eq!(
+        via_view,
+        repo.references()?.all()?.filter_map(Result::ok).count(),
+        "the view sees what the repository sees"
+    );
+    assert!(via_view > 0, "the fixture has references");
+
+    repo.set_namespace("foo")?;
+    let view = repo.ref_store();
+    assert_eq!(
+        view.namespace().map(|ns| ns.as_bstr().to_owned()),
+        Some("refs/namespaces/foo/".into()),
+        "a view borrows the repository and thus its namespace"
+    );
+    assert_eq!(view.iter()?.all()?.filter_map(Result::ok).count(), 0);
+    Ok(())
+}
+
 mod set_namespace {
     use gix::refs::transaction::PreviousValue;
     use gix_testtools::tempfile;

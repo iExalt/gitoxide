@@ -67,6 +67,7 @@ mod equality;
 mod error;
 mod file;
 mod fullname;
+mod view;
 mod partialname {
     use gix_ref::PartialName;
 
