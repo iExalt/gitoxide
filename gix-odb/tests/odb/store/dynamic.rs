@@ -718,6 +718,110 @@ fn exists_without_refresh() {
     );
 }
 
+/// Git skips writing an object it already has only after setting its modification time to now, so that pruning by
+/// age keeps what a writer is about to rely on. The same holds for the object's pack, but not for a cruft pack,
+/// where each object expires by a time that is stored separately.
+#[test]
+fn freshen_without_refresh() -> gix_testtools::TestResult {
+    use filetime::{FileTime, set_file_mtime};
+
+    let objects_dir = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::copy_recursively_into_existing_dir(fixture_path("objects"), &objects_dir)?;
+    let handle = gix_odb::at(objects_dir.path(), gix_hash::Kind::Sha1)?;
+    let long_ago = FileTime::from_unix_time(1_000_000_000, 0);
+    let mtime = |path: &std::path::Path| -> std::io::Result<FileTime> {
+        Ok(FileTime::from_last_modification_time(&std::fs::metadata(path)?))
+    };
+
+    let loose_id = hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980");
+    let loose_path = objects_dir.path().join("37/d4e6c5c48ba0d245164c4e10d5f41140cab980");
+    let packs: Vec<_> = std::fs::read_dir(objects_dir.path().join("pack"))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<_>>()?;
+    let packs: Vec<_> = packs
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "pack"))
+        .collect();
+    for path in packs.iter().chain([&loose_path]) {
+        set_file_mtime(path, long_ago)?;
+    }
+
+    assert!(
+        handle.freshen_without_refresh(&loose_id),
+        "a loose object is touched, so the writer can rely on it"
+    );
+    assert!(
+        mtime(&loose_path)? > long_ago,
+        "its modification time moved to now, which keeps pruning from removing it"
+    );
+
+    let packed_id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
+    assert!(handle.freshen_without_refresh(&packed_id));
+    let touched: Vec<_> = packs
+        .iter()
+        .filter(|path| mtime(path).expect("pack exists") > long_ago)
+        .collect();
+    assert_eq!(touched.len(), 1, "only the pack that has the object is touched");
+    let pack_with_object = touched[0].clone();
+
+    set_file_mtime(&pack_with_object, long_ago)?;
+    std::fs::write(pack_with_object.with_extension("mtimes"), b"")?;
+    assert!(
+        !handle.freshen_without_refresh(&packed_id),
+        "an object whose only pack is a cruft pack must be written again as it expires by its own time"
+    );
+    assert_eq!(
+        mtime(&pack_with_object)?,
+        long_ago,
+        "touching the cruft pack would not change when the object expires"
+    );
+
+    assert!(
+        !handle.freshen_without_refresh(&missing_id(&handle)),
+        "an object that doesn't exist can't be relied upon, and has to be written"
+    );
+    Ok(())
+}
+
+/// An object that a multi-pack index names is found through it, and the pack it belongs to is the one to touch.
+#[test]
+fn freshen_without_refresh_touches_the_pack_that_a_multi_pack_index_names() -> gix_testtools::TestResult {
+    use filetime::{FileTime, set_file_mtime};
+
+    let (handle, objects_dir) = db_with_all_object_sources()?;
+    let long_ago = FileTime::from_unix_time(1_000_000_000, 0);
+    let pack_dir = objects_dir.path().join("pack");
+    let in_midx = [
+        "pack-a2bf8e71d8c18879e499335762dd95119d93d9f1.pack",
+        "pack-c0438c19fb16422b6bbcce24387b3264416d485b.pack",
+    ];
+    let other = pack_dir.join("pack-11fdfa9e156ab73caae3b6da867192221f2089c2.pack");
+    for name in in_midx.iter().map(|name| pack_dir.join(name)).chain([other.clone()]) {
+        set_file_mtime(name, long_ago)?;
+    }
+
+    let id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
+    assert!(handle.freshen_without_refresh(&id));
+    let touched: Vec<_> = in_midx
+        .iter()
+        .filter(|name| {
+            FileTime::from_last_modification_time(&std::fs::metadata(pack_dir.join(name)).expect("pack exists"))
+                > long_ago
+        })
+        .collect();
+    assert_eq!(
+        touched.len(),
+        1,
+        "exactly one of the packs that the multi-pack index names is touched, the one with the object"
+    );
+    assert_eq!(
+        FileTime::from_last_modification_time(&std::fs::metadata(other)?),
+        long_ago,
+        "a pack that doesn't have the object stays as it was"
+    );
+    Ok(())
+}
+
 fn assert_all_indices_loaded(handle: &gix_odb::Handle, num_refreshes: usize, open_reachable_indices: usize) {
     assert_eq!(
         handle.store_ref().metrics(),

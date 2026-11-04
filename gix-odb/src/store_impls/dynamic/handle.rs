@@ -119,6 +119,23 @@ pub(crate) mod index_lookup {
             })
         }
 
+        /// Return the path of the `.pack` file that contains `object_id` according to this index, or `None` if no pack here
+        /// contains it.
+        pub(crate) fn pack_path_of(&self, object_id: &oid) -> Option<std::path::PathBuf> {
+            match &self.file {
+                handle::SingleOrMultiIndex::Single { index, .. } => {
+                    index.lookup(object_id)?;
+                    Some(index.path().with_extension("pack"))
+                }
+                handle::SingleOrMultiIndex::Multi { index, .. } => {
+                    let entry = index.lookup(object_id)?;
+                    let (pack_index, _) = index.pack_id_and_pack_offset_at_index(entry).ok()?;
+                    let name = index.index_names().get(pack_index as usize)?;
+                    Some(index.path().parent()?.join(name.with_extension("pack")))
+                }
+            }
+        }
+
         /// Return true if the given object id exists in this index
         pub(crate) fn contains(&self, object_id: &oid) -> bool {
             match &self.file {
