@@ -272,6 +272,50 @@ fn updating_the_branch_head_points_to_logs_it_for_head_as_well_even_if_nothing_c
     Ok(())
 }
 
+/// What Git refuses, an atomic change of a branch and of the `HEAD` that points at it, is allowed if the caller decides what
+/// `HEAD` logs, like it is for the files store.
+#[test]
+fn the_caller_can_edit_head_and_its_branch_in_one_transaction() -> TestResult {
+    let f = Fixture::new()?;
+    let store = f.main();
+    let head_log_before = reflog_messages(&f, "repo", "HEAD")?.len();
+    let main_log_before = reflog_messages(&f, "repo", "refs/heads/main")?.len();
+
+    gix_ref::Store::from(store.clone())
+        .as_ref()
+        .transaction()
+        .head_log(gix_ref::transaction::HeadLog::CallerDecides)
+        .prepare(
+            vec![
+                update("refs/heads/main", f.c2, PreviousValue::Any, "moved"),
+                RefEdit::update(
+                    name("HEAD"),
+                    Target::Symbolic(name("refs/heads/side")),
+                    PreviousValue::Any,
+                    "attached",
+                ),
+            ],
+            lock(),
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    assert_eq!(
+        reflog_messages(&f, "repo", "HEAD")?[0],
+        "attached",
+        "HEAD logs what its own edit asks for, which reftables write for symbolic references as well"
+    );
+    assert_eq!(
+        reflog_messages(&f, "repo", "HEAD")?.len(),
+        head_log_before + 1,
+        "and the change of the branch isn't another entry"
+    );
+    assert_eq!(
+        reflog_messages(&f, "repo", "refs/heads/main")?.len(),
+        main_log_before + 1
+    );
+    f.git_agrees_that_nothing_is_wrong()?;
+    Ok(())
+}
+
 #[test]
 fn a_reference_that_was_deleted_can_be_created_with_a_log_that_starts_afresh() -> TestResult {
     let f = Fixture::new()?;
