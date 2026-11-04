@@ -63,6 +63,9 @@ jobs:
     env:
       QA_PLAN: ${{ needs.plan.outputs.plan }}
       QA_JOB: ${{ matrix.id }}
+      # The tests that compare flushes with Git's under `strace` must run here, so a runner that can't trace fails
+      # them instead of skipping them.
+      GIX_TEST_REQUIRE_STRACE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,6 +83,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends liblzma-dev
+      - name: Install strace
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends strace
       - name: Run the lane
         run: mise run ci:job
       # Planning doesn't depend on workflow lint, so it runs here, off the plan job's critical
