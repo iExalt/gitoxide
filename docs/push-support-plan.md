@@ -250,7 +250,7 @@ beyond existing subscriptions is approved.
 | Thread | Scope | Depends on | Human | State |
 | --- | --- | --- | --- | --- |
 | 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | done: [assessment](push-architecture-assessment.md) delivered; owner decisions pending |
-| 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | ready |
+| 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | done |
 | 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks; Git 2.56 config-defined hooks, parallel jobs and per-hook stdin producers | None | None known | done |
 
 Later threads (reftable, durability, local backend, network, receiver, maintenance,
@@ -271,3 +271,29 @@ cutover) wait for the owner to accept thread 1 and agree their scope.
   Callers still own `GIT_PREFIX`, `GIT_INDEX_FILE` and receive-side environment, and the `Side` for events such as
   `reference-transaction` that run both locally and while receiving. Not covered: the Windows `.exe` suffix lookup,
   warnings for invalid `hook.*` values, and byte-exact names and commands of configured hooks.
+- 2026-11-05: thread 2 (client protocol and bounded packs) is done as `gix_protocol::push` and `gix_pack::data::output::missing`.
+  `push()` is blocking only, and needs a `Request` that was validated against what the server advertised. Its pack
+  producer is a callback, and `missing::write_pack()` is the one to use. Tests run against real `git receive-pack` for SHA-1
+  and SHA-256, with Git 2.43, 2.55 and 2.56. The limits are decisions for later threads:
+  - Bounded memory means the object list and the metadata of every object, plus about three chunks of
+    `missing::Options::chunk_size` objects with the default of one thread. A large blob is held whole, whereas Git streams
+    blobs above `core.bigFileThreshold`, and streaming deflate is deferred. Memory isn't bounded with more than one thread,
+    as the order of chunks is restored with an unbounded buffer and chunk sizes are chosen to distribute work. This isn't
+    meant to match Git's memory use.
+  - A shallow source isn't refused up front. Its missing history surfaces as a `NotFound` error naming the object. The
+    repository push thread has to add the typed refusal.
+  - Receivers without `ofs-delta` get whole objects instead of copied deltas, so their packs are bigger.
+    Re-encoding deltas is a parking-lot item.
+  - Tree diffs compare by path, so an object that moved to another path is sent again, which Git avoids by excluding
+    everything reachable from the boundary trees. Pushes of renamed large files are bigger. Parking lot.
+  - Without commit-graph generation numbers, clock skew can add commits the receiver has. The pack is bigger but valid.
+  - Rejections are classified from Git's reason strings. `failed to update refs` and `transaction failed to start`
+    for a non-atomic push can hide a deletion that was committed, so they are `Status::Uncertain`.
+  - Not done: an async driver, signed pushes, thin packs, and a typed record of what the server redirected.
+  - `Options::progress` is off by default, as the driver can't read while it writes the pack. A server that fills its
+    output pipe could stall it. That can't be provoked with a pack that fits a test, which finished with and
+    without progress.
+  - A real peer found that push options were sent with a `push-option ` prefix that only signed pushes use.
+  - `mise run check` takes about 12 minutes when a change reaches `gix-pack`, as the whole workspace depends on it.
+  - Parking lot: bounded reordering for a multi-threaded `write_pack()`, an atomic push that fails part-way
+    through finishing on the files backend, and the failure strings of `proc-receive` hooks.
