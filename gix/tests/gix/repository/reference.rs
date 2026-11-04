@@ -280,6 +280,52 @@ mod iter_references {
     }
 
     /// What Git lists is what resolves: it skips broken references and symbolic references that dangle or loop, with a
+    /// The same names are matched by whole components in reftables, which keep references in tables instead of files.
+    #[test]
+    #[cfg(feature = "reftable")]
+    fn under_matches_git_in_reftables() -> TestResult {
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let dir = tmp.path();
+        gix_testtools::git(dir, "init -q -b main --ref-format=reftable .")?;
+        gix_testtools::git(dir, "commit -q --allow-empty -m c1")?;
+        for branch in ["mine", "m/x", "m/y/z", "main2"] {
+            gix_testtools::git(dir, &format!("update-ref refs/heads/{branch} HEAD"))?;
+        }
+        gix_testtools::git(dir, "tag light")?;
+        gix_testtools::git(dir, "tag -a -m annotated annotated")?;
+        gix_testtools::git(dir, "pack-refs --all")?;
+        gix_testtools::git(dir, "update-ref refs/heads/loose HEAD")?;
+        let repo = gix::open_opts(dir, crate::util::restricted())?;
+        for pattern in [
+            "refs/heads/m",
+            "refs/heads/m/",
+            "refs/heads/main",
+            "refs/heads/main/",
+            "refs/heads/",
+            "refs/tags",
+            "refs/heads/m/y",
+        ] {
+            let git: Vec<String> = gix_testtools::git(dir, &format!("for-each-ref --format=%(refname) {pattern}"))?
+                .lines()
+                .map(ToOwned::to_owned)
+                .collect();
+            let ours: Vec<String> = repo
+                .references()?
+                .under(pattern)?
+                .map(|reference| Ok(reference?.name().as_bstr().to_string()))
+                .collect::<gix_testtools::Result<_>>()?;
+            assert_eq!(
+                ours, git,
+                "{pattern} lists the same references in the same order as Git"
+            );
+            assert!(
+                !git.is_empty() || pattern == "refs/heads/main/",
+                "{pattern} compares something"
+            );
+        }
+        Ok(())
+    }
+
     /// warning. Here these are returned or fail to peel, so a caller that wants Git's list keeps what resolves.
     #[test]
     fn what_resolves_is_what_git_lists_and_the_rest_can_be_told_apart() -> TestResult {
