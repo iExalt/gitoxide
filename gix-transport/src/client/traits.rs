@@ -3,6 +3,7 @@ use std::{
     any::Any,
     borrow::Cow,
     ops::{Deref, DerefMut},
+    time::Duration,
 };
 
 use bstr::BStr;
@@ -50,6 +51,22 @@ pub trait TransportWithoutIO {
     ///
     /// The caller must know how that `config` data looks like for the intended implementation.
     fn configure(&mut self, config: &dyn Any) -> Result;
+
+    /// Wait for the server side of this connection to finish what it is doing and exit, for at most `deadline`, and return
+    /// `true` if it did so. If the server is still running at the deadline, `false` is returned and it is left alone, which
+    /// means that dropping the transport may interrupt it.
+    ///
+    /// This lets a caller who is done with the transport, because it received a reply or failed to send a request, avoid
+    /// cutting off the server's work, which would otherwise happen when a transport that spawned the server drops it.
+    /// Think of hooks that a server runs after it replied, or a ref update it is in the middle of. Git's own client
+    /// also waits for the server it started.
+    ///
+    /// Transports without a server process of their own, which is the default implementation, have nothing to wait for.
+    /// The ones that do close their input, so servers waiting for more of it end, and wait for them. The transport
+    /// can't be used for further requests afterwards.
+    fn wait_for_server(&mut self, _deadline: Duration) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 // Would be nice if the box implementation could auto-forward to all implemented traits.
@@ -73,6 +90,10 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
     fn configure(&mut self, config: &dyn Any) -> Result {
         self.deref_mut().configure(config)
     }
+
+    fn wait_for_server(&mut self, deadline: Duration) -> Result<bool> {
+        self.deref_mut().wait_for_server(deadline)
+    }
 }
 
 impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
@@ -94,5 +115,9 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
 
     fn configure(&mut self, config: &dyn Any) -> Result {
         self.deref_mut().configure(config)
+    }
+
+    fn wait_for_server(&mut self, deadline: Duration) -> Result<bool> {
+        self.deref_mut().wait_for_server(deadline)
     }
 }

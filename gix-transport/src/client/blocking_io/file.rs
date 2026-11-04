@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, ResultExt, message};
 use std::{
     any::Any,
     borrow::Cow,
@@ -180,6 +180,52 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
     fn configure(&mut self, _config: &dyn Any) -> Result {
         Ok(())
     }
+
+    fn wait_for_server(&mut self, deadline: std::time::Duration) -> Result<bool> {
+        let Some(child) = self.child.as_mut() else {
+            return Ok(true);
+        };
+        // Closing the input ends servers that wait for more of it, like one that received an incomplete request. The output
+        // stays open until the server is done, as it would get a signal if it wrote to it after we closed it, and it is read
+        // to its end, as a server with more to say than a pipe holds would block and never finish otherwise.
+        // The thread ends when the server does, which closes its output, and nobody needs to wait for it.
+        if let Some((mut server_output, _input)) = self.connection.take().map(Connection::into_inner) {
+            std::thread::Builder::new()
+                .name("drain server output".into())
+                .stack_size(128 * 1024)
+                .spawn(gix_trace::in_thread(move || {
+                    std::io::copy(&mut server_output, &mut std::io::sink()).ok();
+                }))
+                .or_raise(|| message("Could not start a thread to read what the server still has to say"))?;
+        }
+        let exited = wait_for_exit(child, deadline).or_raise(|| {
+            message!(
+                "Could not wait for the server process of {} to finish",
+                self.url.to_bstring()
+            )
+        })?;
+        if exited {
+            self.child = None;
+        }
+        Ok(exited)
+    }
+}
+
+/// Wait for `child` to exit for at most `deadline` and return `true` if it did, which also reaps it.
+fn wait_for_exit(child: &mut process::Child, deadline: std::time::Duration) -> std::io::Result<bool> {
+    let start = std::time::Instant::now();
+    let mut pause = std::time::Duration::from_millis(1);
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(true);
+        }
+        let remaining = deadline.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        std::thread::sleep(pause.min(remaining));
+        pause = (pause * 2).min(std::time::Duration::from_millis(25));
+    }
 }
 
 impl Drop for SpawnProcessOnDemand {
@@ -357,6 +403,46 @@ pub fn connect(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    mod wait_for_exit {
+        use std::{process::Command, time::Duration};
+
+        use super::super::wait_for_exit;
+
+        #[test]
+        fn a_process_that_exits_in_time_is_reaped() {
+            let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().expect("sh exists");
+            assert!(
+                wait_for_exit(&mut child, Duration::from_secs(30)).expect("polling works"),
+                "the process finished well before the deadline"
+            );
+            assert!(
+                child
+                    .try_wait()
+                    .expect("reaped processes can be polled again")
+                    .is_some(),
+                "an exit status that was observed once stays available"
+            );
+        }
+
+        #[test]
+        fn a_process_that_runs_on_is_left_alone_at_the_deadline() {
+            let mut child = Command::new("sh").args(["-c", "sleep 30"]).spawn().expect("sh exists");
+            let start = std::time::Instant::now();
+            assert!(
+                !wait_for_exit(&mut child, Duration::from_millis(100)).expect("polling works"),
+                "the process is still sleeping"
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the deadline is honored instead of waiting for the process"
+            );
+            assert!(child.try_wait().expect("polling works").is_none(), "it wasn't killed");
+            child.kill().expect("it is still running");
+            child.wait().expect("reaped after the kill");
+        }
+    }
+
     mod local {
         use crate::{Protocol, Service, client::blocking_io::file::SpawnProcessOnDemand};
 
