@@ -102,11 +102,20 @@ enum Progress {
 pub(in crate::store_impl::file) struct Notifier<'p> {
     observer: Option<Box<dyn Observer + 'p>>,
     progress: Progress,
+    /// Updates of edits that were rejected, with their positions among all updates, which are part of what is reported.
+    rejected: Vec<(usize, Update)>,
+    /// Set once the observer was told that the transaction is being prepared, which happens once even if edits are
+    /// rejected and prepared again.
+    announced: bool,
 }
 
 impl<'p> Notifier<'p> {
     pub(in crate::store_impl::file) fn set(&mut self, observer: impl Observer + 'p) {
         self.observer = Some(Box::new(observer));
+    }
+
+    pub(super) fn set_rejected(&mut self, rejected: Vec<(usize, Update)>) {
+        self.rejected = rejected;
     }
 
     pub(super) fn is_observing(&self) -> bool {
@@ -125,6 +134,10 @@ impl<'p> Notifier<'p> {
 
     /// Report that nothing is locked yet. On a veto, the transaction is aborted.
     pub(super) fn preparing(&mut self, updates: &[Update]) -> Result<(), Vetoed> {
+        if std::mem::replace(&mut self.announced, true) {
+            return Ok(());
+        }
+        let updates = &crate::transaction::splice(updates, &self.rejected);
         self.notify(Scope::Transaction, State::Preparing, updates)
             .inspect_err(|_| {
                 self.notify(Scope::Transaction, State::Aborted, updates).ok();
@@ -144,6 +157,7 @@ impl<'p> Notifier<'p> {
         if !self.is_observing() {
             return Ok(());
         }
+        let updates = crate::transaction::splice(&updates, &self.rejected);
         self.progress = Progress::Idle;
         let packed = match packed {
             Some(packed_updates) if packed_is_needed => {

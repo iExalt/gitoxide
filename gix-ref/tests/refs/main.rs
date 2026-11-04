@@ -63,6 +63,7 @@ fn translate_sha1_to_fixture_sha256(hex: &str) -> String {
 
 pub use gix_testtools::Result;
 
+mod batch_updates;
 mod equality;
 mod error;
 mod file;

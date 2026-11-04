@@ -117,6 +117,14 @@ impl ExistingRefs for Existing<'_> {
     }
 }
 
+/// What to do while locking a reference, besides what its edit says.
+#[derive(Clone, Copy)]
+struct Behavior {
+    direct_to_packed_refs: bool,
+    /// Make references durable as configured, which is pointless for a pass that only finds out what fails.
+    flush: bool,
+}
+
 impl Transaction<'_, '_> {
     /// Read the current value of a reference from loose storage, falling back to packed refs.
     ///
@@ -149,7 +157,7 @@ impl Transaction<'_, '_> {
         lock_fail_mode: gix_lock::acquire::Fail,
         packed: Option<&packed::Buffer>,
         change: &mut Edit,
-        direct_to_packed_refs: bool,
+        behavior: Behavior,
         names_in_transaction: &[BString],
         existing: &Existing<'_>,
     ) -> Result {
@@ -297,6 +305,10 @@ impl Transaction<'_, '_> {
                     (true, matches!(new, Target::Symbolic(_)))
                 };
 
+                let Behavior {
+                    direct_to_packed_refs,
+                    flush,
+                } = behavior;
                 let keep_lock_for_loose_source_delete = direct_to_packed_refs && matches!(new, Target::Object(_));
                 if (is_effective && !direct_to_packed_refs) || is_symbolic {
                     lock.with_mut(|file| match new {
@@ -304,7 +316,7 @@ impl Transaction<'_, '_> {
                         Target::Symbolic(name) => writeln!(file, "ref: {}", name.0),
                     })
                     .or_raise(|| message("Could not write loose reference"))?;
-                    if matches!(new, Target::Object(_)) {
+                    if flush && matches!(new, Target::Object(_)) {
                         // Git doesn't flush symbolic references, which it writes through a different path.
                         lock.with_mut(|file| store.fsync.flush(file, gix_fs::fsync::Components::REFERENCE))
                             .or_raise(|| message("Could not flush loose reference"))?;
@@ -338,21 +350,105 @@ impl Transaction<'_, '_> {
         ref_files_lock_fail_mode: gix_lock::acquire::Fail,
         packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
     ) -> Result<Self> {
-        self.prepare_inner(
-            &mut edits.into_iter(),
+        let mut this = self;
+        if this.batch_updates {
+            let edits: Vec<_> = edits.into_iter().collect();
+            this.prepare_batch(edits, ref_files_lock_fail_mode, packed_refs_lock_fail_mode)?;
+        } else {
+            this.prepare_inner(
+                &mut edits.into_iter(),
+                ref_files_lock_fail_mode,
+                packed_refs_lock_fail_mode,
+            )?;
+        }
+        Ok(this)
+    }
+
+    /// Prepare `edits`, and set aside those that fail on their own, as `rejected()` tells.
+    ///
+    /// The first attempt is the real one, like in Git, which prepares each reference once. Only if it fails on an
+    /// edit, passes follow that try again without it, as every failed attempt rolls back perfectly. The observer is told
+    /// once about what was requested, and about the final attempt together with the rejected edits, like in Git.
+    fn prepare_batch(
+        &mut self,
+        edits: Vec<RefEdit>,
+        ref_files_lock_fail_mode: gix_lock::acquire::Fail,
+        packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
+    ) -> Result {
+        let err = match self.prepare_inner(
+            &mut edits.iter().cloned(),
             ref_files_lock_fail_mode,
             packed_refs_lock_fail_mode,
-        )
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => err,
+        };
+        let names: Vec<_> = edits.iter().map(|edit| edit.name.as_bstr()).collect();
+        if crate::transaction::find_offender(&err, &names, false).is_none() {
+            return Err(err);
+        }
+        let observed: Vec<Option<Update>> = edits.iter().map(crate::transaction::observed).collect();
+        let mut remaining: Vec<(usize, RefEdit)> = edits.into_iter().enumerate().collect();
+        let mut rejected: Vec<crate::transaction::Rejected> = Vec::new();
+        // Git checks what an edit expects before it checks if its name conflicts with an earlier edit, and edits that are rejected
+        // can't conflict with others. Find the former first, with names of edits not conflicting, and the latter after.
+        // The first round only finds out what fails, and the last pass of the second one is the one that counts.
+        for skip_conflicts in [true, false] {
+            self.skip_transaction_conflicts = skip_conflicts;
+            self.dry_pass = skip_conflicts;
+            loop {
+                self.packed_transaction = None;
+                self.updates = None;
+                self.observer.disarm();
+                // Edits that only change a reflog aren't reported, so positions count the others.
+                let mut positions: Vec<_> = rejected
+                    .iter()
+                    .filter_map(|rejected: &crate::transaction::Rejected| {
+                        let position = observed[..rejected.index].iter().flatten().count();
+                        observed[rejected.index]
+                            .clone()
+                            .map(|update| (rejected.index, position, update))
+                    })
+                    .collect();
+                positions.sort_by_key(|(index, ..)| *index);
+                self.observer.set_rejected(
+                    positions
+                        .into_iter()
+                        .map(|(_, position, update)| (position, update))
+                        .collect(),
+                );
+                let attempt = self.prepare_inner(
+                    &mut remaining.iter().map(|(_, edit)| edit.clone()),
+                    ref_files_lock_fail_mode,
+                    packed_refs_lock_fail_mode,
+                );
+                let Err(err) = attempt else { break };
+                let names: Vec<_> = remaining.iter().map(|(_, edit)| edit.name.as_bstr()).collect();
+                let Some((position, reason)) = crate::transaction::find_offender(&err, &names, false) else {
+                    return Err(err);
+                };
+                let (index, edit) = remaining.remove(position);
+                rejected.push(crate::transaction::Rejected {
+                    index,
+                    edit,
+                    reason,
+                    error: err.into(),
+                });
+            }
+        }
+        rejected.sort_by_key(|rejected| rejected.index);
+        self.rejected = rejected;
+        Ok(())
     }
 
     /// Failed edits include [metadata](gix_error::Error::metadata()) `reference` (requested name bytes) and `referent`
     /// (resolved name bytes).
     fn prepare_inner(
-        mut self,
+        &mut self,
         edits: &mut dyn Iterator<Item = RefEdit>,
         ref_files_lock_fail_mode: gix_lock::acquire::Fail,
         packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
-    ) -> Result<Self> {
+    ) -> Result {
         assert!(self.updates.is_none(), "BUG: Must not call prepare(…) multiple times");
         self.store.assure_backend_supported()?;
         let store = self.store;
@@ -609,11 +705,18 @@ impl Transaction<'_, '_> {
                 ref_files_lock_fail_mode,
                 self.packed_transaction.as_ref().and_then(packed::Transaction::buffer),
                 change,
-                matches!(
-                    self.packed_refs,
-                    PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_)
-                ),
-                &names_in_transaction,
+                Behavior {
+                    direct_to_packed_refs: matches!(
+                        self.packed_refs,
+                        PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_)
+                    ),
+                    flush: !self.dry_pass,
+                },
+                if self.skip_transaction_conflicts {
+                    &[]
+                } else {
+                    &names_in_transaction
+                },
                 &existing,
             ) {
                 let referent = change.name();
@@ -646,7 +749,7 @@ impl Transaction<'_, '_> {
                 }
             }
         }
-        if self.observer.is_observing() {
+        if self.observer.is_observing() && !self.dry_pass {
             let observed = notifier::updates(&updates, &previous);
             // As in Git, deletions need a transaction on `packed-refs`, which has work to do if it has them.
             let packed_mode = !matches!(self.packed_refs, PackedRefs::DeletionsOnly);
@@ -674,7 +777,7 @@ impl Transaction<'_, '_> {
             }
         }
         self.updates = Some(updates);
-        Ok(self)
+        Ok(())
     }
 
     /// Rollback all intermediate state and return the `RefEdits` as we know them thus far.

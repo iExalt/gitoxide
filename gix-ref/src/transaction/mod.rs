@@ -23,7 +23,10 @@ pub(crate) use head_log::{head_log_update, is_noop_update, is_verification};
 pub mod commit_failure;
 pub mod observe;
 mod reflog_message;
+mod rejection;
 pub(crate) use reflog_message::normalize_reflog_message;
+pub use rejection::{Rejected, RejectionReason};
+pub(crate) use rejection::{find_offender, observed, splice};
 
 use crate::{FullName, Target};
 
