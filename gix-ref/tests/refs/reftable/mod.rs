@@ -6,6 +6,7 @@ use gix_testtools::TestResult;
 use crate::{fixture_hash_kind, scripted_fixture_read_only};
 
 mod read;
+mod write;
 
 /// Return the root of the fixture, which has the repository `repo`, its linked worktree `w1` and what Git says in `expected/`.
 fn fixture() -> TestResult<PathBuf> {

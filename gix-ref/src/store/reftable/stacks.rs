@@ -28,6 +28,11 @@ pub(crate) struct Cell {
 }
 
 impl Cell {
+    /// The directory of the stack.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     fn new(dir: std::path::PathBuf, hash: gix_hash::Kind) -> Self {
         Cell {
             dir,
