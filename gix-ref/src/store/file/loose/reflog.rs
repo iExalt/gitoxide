@@ -190,12 +190,14 @@ pub mod create_or_update {
 
                     if let Some(mut file) = file_for_appending {
                         let committer = committer.ok_or_raise(|| MissingCommitter)?;
+                        // A reflog has one line per entry, so the message is cleaned like Git does.
+                        let message = crate::transaction::normalize_reflog_message(message);
                         write!(file, "{} {} ", previous_oid.unwrap_or_else(|| new.kind().null()), new)
                             .and_then(|_| committer.trim().write_to(&mut file))
                             .and_then(|_| {
                                 if !message.is_empty() {
                                     file.write_all(b"\t")?;
-                                    file.write_all(message)?;
+                                    file.write_all(&message)?;
                                     file.write_all(b"\n")
                                 } else {
                                     writeln!(file)
