@@ -18,6 +18,8 @@ pub(super) struct Hook {
     pub(super) decline_ref: Option<&'static str>,
     /// Seconds to wait before doing anything.
     pub(super) sleep: f32,
+    /// The file in the remote that it records to.
+    log: &'static str,
 }
 
 impl Hook {
@@ -27,6 +29,15 @@ impl Hook {
             exit: 0,
             decline_ref: None,
             sleep: 0.0,
+            log: "hook.log",
+        }
+    }
+    /// A `reference-transaction` hook that records everything it sees to a file of its own, and says yes. The recording is
+    /// compared in all pushes, so that the transactions of all scenarios are compared with those of Git.
+    pub(super) fn recorder() -> Self {
+        Hook {
+            log: "reftx.log",
+            ..Hook::new("reference-transaction")
         }
     }
     pub(super) fn exiting(mut self, code: i32) -> Self {
@@ -46,7 +57,7 @@ impl Hook {
     #[cfg(unix)]
     fn install(&self, remote: &Path) -> TestResult {
         use std::os::unix::fs::PermissionsExt;
-        let log = remote.join("hook.log");
+        let log = remote.join(self.log);
         let name = self.name;
         let decline = match self.decline_ref {
             Some(reference) => format!("[ \"$1\" = {reference} ] && exit {}\nexit 0", self.exit),
@@ -255,6 +266,10 @@ impl World {
         for hook in &push.hooks {
             hook.install(&dest)?;
         }
+        #[cfg(unix)]
+        if !push.hooks.iter().any(|hook| hook.name == "reference-transaction") {
+            Hook::recorder().install(&dest)?;
+        }
         if let Some(prepare) = push.prepare {
             prepare(&dest, &self.client(format))?;
         }
@@ -277,6 +292,10 @@ pub(super) struct Result_ {
     pub(super) keepalives: usize,
     /// What the hooks recorded about how they were run, with what they differ in made the same.
     pub(super) hooks: String,
+    /// What the `reference-transaction` hook recorded in all pushes that didn't install one, which are the transactions.
+    pub(super) reftx: String,
+    /// `true` if the receiver didn't get to report, which is what a refusal by the `reference-transaction` hook causes.
+    pub(super) died: bool,
 }
 
 /// The number of packets on the side band that are empty, which is how a client is told to keep waiting.
@@ -381,10 +400,10 @@ pub(super) fn git_receive(remote: &Path, request: &[u8], side_band: bool) -> Tes
         .spawn()?;
     let _ = child.stdin.take().expect("piped").write_all(request);
     let output = child.wait_with_output()?;
-    finish(remote, &output.stdout, side_band)
+    finish(remote, &output.stdout, side_band, !output.status.success())
 }
 
-fn finish(remote: &Path, stdout: &[u8], side_band: bool) -> TestResult<Result_> {
+fn finish(remote: &Path, stdout: &[u8], side_band: bool, died: bool) -> TestResult<Result_> {
     // The advertisement ends with the first flush packet.
     let mut rest = stdout;
     loop {
@@ -401,12 +420,17 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool) -> TestResult<Result_> 
     };
     let (refs, objects, leftovers) = state(remote)?;
     let remote_path = std::fs::canonicalize(remote)?.display().to_string();
-    let hooks = std::fs::read_to_string(remote.join("hook.log"))
-        .unwrap_or_default()
-        .replace(&remote_path, "<REMOTE>")
-        // Git passes `.` where the fork passes the absolute path, and the quarantine's name is random.
-        .replace("GIT_DIR=.\n", "GIT_DIR=<REMOTE>\n");
+    let recording = |file: &str| {
+        std::fs::read_to_string(remote.join(file))
+            .unwrap_or_default()
+            .replace(&remote_path, "<REMOTE>")
+            // Git passes `.` where the fork passes the absolute path, and the quarantine's name is random.
+            .replace("GIT_DIR=.\n", "GIT_DIR=<REMOTE>\n")
+    };
+    let (hooks, reftx) = (recording("hook.log"), recording("reftx.log"));
     Ok(Result_ {
+        died,
+        reftx,
         keepalives: if side_band { count_keepalives(rest) } else { 0 },
         hooks,
         report,
@@ -436,13 +460,13 @@ pub(super) fn fork_receive_as(
     let receiver = repo.receive()?;
     let mut input = request;
     let mut output = Vec::new();
-    receiver.serve(
+    let served = receiver.serve(
         &mut input,
         &mut output,
         gix_protocol::transport::Protocol::V0,
         &AtomicBool::new(false),
-    )?;
-    finish(remote, &output, side_band)
+    );
+    finish(remote, &output, side_band, served.is_err())
 }
 
 pub(super) fn assert_same(world: &World, label: &str, push: &Push) -> TestResult {
@@ -532,8 +556,13 @@ pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&st
             fork.hooks, git.hooks,
             "{format}/{label}: hooks are called with the same arguments, input and environment"
         );
+        assert_eq!(
+            fork.reftx, git.reftx,
+            "{format}/{label}: the transactions that the `reference-transaction` hook sees are the same, in the same order"
+        );
+        assert_eq!(fork.died, git.died, "{format}/{label}: both die or neither does");
         assert!(
-            !git.report.is_empty(),
+            !git.report.is_empty() || git.died,
             "{format}/{label}: Git reported, so the comparison isn't vacuous"
         );
         results.push(git);
@@ -1479,7 +1508,7 @@ fn receiver_with_fault(world: &World, label: &str, push: &Push, fault: gix::rece
         gix_protocol::transport::Protocol::V0,
         &AtomicBool::new(false),
     )?;
-    finish(&remote, &output, true)
+    finish(&remote, &output, true, false)
 }
 
 #[test]

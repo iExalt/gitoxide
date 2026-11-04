@@ -77,6 +77,133 @@ fn all_hooks_see_what_they_see_in_git() -> TestResult {
 }
 
 #[test]
+fn reference_transaction_sees_the_transactions_of_the_receiver_like_in_git() -> TestResult {
+    let world = World::new()?;
+    let mut hooks = all_hooks();
+    hooks.push(Hook::new("reference-transaction"));
+    let commands = [
+        Cmd("0", "next", "refs/heads/next"),
+        Cmd("main", "next", "refs/heads/main"),
+        Cmd("side", "0", "refs/heads/side"),
+    ];
+    let pushed = with_hooks(
+        with_setup(push(&commands), &["config receive.denyCurrentBranch ignore"]),
+        hooks,
+    );
+    let log = git_log(&world, "reftx-non-atomic", &pushed, &["files", "reftable"])?;
+    let phases: Vec<_> = log
+        .lines()
+        .filter(|line| line.starts_with("== reference-transaction "))
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            // Deleting a reference makes the files backend look at `packed-refs` first, which it does in a transaction of its own
+            // that is aborted when there is nothing to delete there.
+            "== reference-transaction preparing",
+            "== reference-transaction aborted",
+            "== reference-transaction prepared",
+            "== reference-transaction committed",
+            "== reference-transaction preparing",
+            "== reference-transaction prepared",
+            "== reference-transaction committed",
+        ],
+        "without atomicity deletions are a transaction before all other updates, and the hook hears of each state:\n{log}"
+    );
+    assert!(
+        at(&log, "== update refs/heads/side") < at(&log, "== reference-transaction preparing")
+            && at(&log, "== reference-transaction committed") < at(&log, "== update refs/heads/next"),
+        "the update hooks of each transaction decide before it touches references, and the deletions are done first:\n{log}"
+    );
+    assert!(
+        at(&log, "== reference-transaction committed") < at(&log, "== post-receive"),
+        "the hooks that follow are run after the references changed:\n{log}"
+    );
+    git_log(
+        &world,
+        "reftx-atomic",
+        &Push { atomic: true, ..pushed },
+        &["files", "reftable"],
+    )?;
+    Ok(())
+}
+
+#[test]
+fn reference_transaction_sees_a_packed_reference_being_deleted() -> TestResult {
+    let world = World::new()?;
+    let pushed = with_hooks(
+        with_setup(
+            push(&[Cmd("side", "0", "refs/heads/side")]),
+            &["config receive.denyDeletes false", "pack-refs --all"],
+        ),
+        vec![Hook::new("reference-transaction")],
+    );
+    // The files backend adds a transaction for `packed-refs`, which is compared as well as the one of the reference.
+    let log = git_log(&world, "reftx-packed", &pushed, &["files", "reftable"])?;
+    assert!(
+        log.contains("== reference-transaction prepared"),
+        "Git ran the hook, so the comparison isn't vacuous:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_reference_transaction_hook_that_refuses_ends_the_push_without_a_report() -> TestResult {
+    let world = World::new()?;
+    let commands = [Cmd("0", "next", "refs/heads/next"), Cmd("side", "0", "refs/heads/side")];
+    for state in ["preparing", "prepared"] {
+        for atomic in [false, true] {
+            let mut hooks = all_hooks();
+            hooks.push(Hook::new("reference-transaction").declining(state));
+            let pushed = Push {
+                atomic,
+                ..with_hooks(
+                    with_setup(push(&commands), &["config receive.denyDeletes false"]),
+                    hooks,
+                )
+            };
+            let label = format!("reftx-refuses-{state}-{atomic}");
+            let results = compare_on(&world, &label, &pushed, &["files", "reftable"])?;
+            for result in &results {
+                assert!(
+                    result.died && result.report.is_empty(),
+                    "{label}: Git exits instead of reporting if the hook refuses in '{state}':\n{}",
+                    result.hooks
+                );
+                assert!(
+                    result.hooks.contains("== update refs/heads/side") && !result.hooks.contains("== post-"),
+                    "{label}: the update hooks ran, and nothing follows:\n{}",
+                    result.hooks
+                );
+                assert!(
+                    result.messages.contains("update says hi"),
+                    "{label}: what hooks said before the refusal is told to the client: {:?}",
+                    result.messages
+                );
+            }
+        }
+    }
+    // What isn't a state that can be refused is a message only.
+    let mut hooks = all_hooks();
+    hooks.push(Hook::new("reference-transaction").declining("committed"));
+    let results = compare_on(
+        &world,
+        "reftx-refuses-committed",
+        &with_hooks(
+            with_setup(push(&commands), &["config receive.denyDeletes false"]),
+            hooks,
+        ),
+        &["files", "reftable"],
+    )?;
+    assert!(
+        !results[0].died && results[0].hooks.contains("== post-update"),
+        "a failure after the commit changes nothing:\n{}",
+        results[0].hooks
+    );
+    Ok(())
+}
+
+#[test]
 fn the_objects_of_the_push_are_found_in_a_repository_that_has_a_colon_in_its_path() -> TestResult {
     let world = World::new()?;
     let pushed = with_hooks(

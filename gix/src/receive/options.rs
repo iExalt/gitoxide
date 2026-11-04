@@ -209,12 +209,10 @@ fn reject_hooks(repo: &Repository) -> Result<()> {
     let dir = repo
         .hooks_dir(gix_hook::Side::Receive)
         .or_raise(|| message("Could not find out where hooks are"))?;
-    for event in ["push-to-checkout", "reference-transaction"] {
-        if !gix_hook::Hooks::resolve(event, &dir, Some(&settings)).is_empty() {
-            bail!(unsupported(format!(
-                "a '{event}' hook is defined, and hooks aren't supported yet"
-            )));
-        }
+    if !gix_hook::Hooks::resolve("push-to-checkout", &dir, Some(&settings)).is_empty() {
+        bail!(unsupported(
+            "a 'push-to-checkout' hook is defined, and hooks aren't supported yet"
+        ));
     }
     Ok(())
 }
