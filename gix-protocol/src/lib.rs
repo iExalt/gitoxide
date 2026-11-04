@@ -37,6 +37,8 @@ pub enum Command {
 }
 pub mod command;
 
+pub mod push;
+
 /// Attribute macros and mode flags for sharing async-shaped implementations between client modes.
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub mod bisync {
