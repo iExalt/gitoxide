@@ -40,9 +40,10 @@ pub(crate) struct Transaction {
     num_written_lines: i32,
     buffer: Option<file::packed::SharedBufferSnapshot>,
     edits: Option<Vec<Edit>>,
-    lock: Option<gix_lock::File>,
-    // It just has to be kept alive, hence no reads
-    closed_lock: Option<gix_lock::Marker>,
+    /// The lock on `packed-refs`, which is taken first and stays held until the caller is done with the loose references.
+    lock: Option<gix_lock::Marker>,
+    /// The new content of `packed-refs`, which is written next to it and moved over it when committing.
+    new_file: Option<gix_tempfile::Handle<gix_tempfile::handle::Writable>>,
     precompose_unicode: bool,
     /// The namespace to use when preparing or writing refs
     namespace: Option<Namespace>,

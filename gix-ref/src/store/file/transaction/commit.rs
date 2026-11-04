@@ -292,6 +292,9 @@ fn write(
         }
     }
 
+    // Git keeps `packed-refs` locked until the loose references are deleted, so that nobody packs what is about to
+    // be deleted, or has just been written to `packed-refs` and still exists as an older value in a loose file.
+    let _packed_refs_lock;
     if let Some(t) = packed_transaction {
         // From here on, `packed-refs` may or may not have changed.
         for (idx, change) in updates.iter().enumerate() {
@@ -306,7 +309,8 @@ fn write(
                 progress[idx] = Progress::InDoubt;
             }
         }
-        t.commit()
+        _packed_refs_lock = t
+            .commit_keeping_lock()
             .or_raise(|| message("Could not commit packed-ref transaction"))?;
         observer.packed_committed();
         // Always refresh ourselves right away to avoid races. We ignore errors as there may be many reasons this fails, and it's not

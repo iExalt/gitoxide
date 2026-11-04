@@ -526,7 +526,13 @@ impl Transaction<'_, '_> {
             | PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_) => Some(0_usize),
             PackedRefs::DeletionsOnly => None,
         };
+        // Deleting references locks `packed-refs` like Git does, even if there is none yet, as somebody packing the references
+        // at the same time would otherwise bring back the ones that are deleted.
+        let has_deletions = updates
+            .iter()
+            .any(|edit| matches!(edit.update.change, Change::Delete { log, .. } if log != RefLog::Only));
         if maybe_updates_for_packed_refs.is_some()
+            || has_deletions
             || self.store.packed_refs_path().is_file()
             || self.store.packed_refs_lock_path().is_file()
         {
@@ -580,26 +586,28 @@ impl Transaction<'_, '_> {
                 // What follows means that we will only create a transaction if we have to access packed refs for looking
                 // up current ref values, or that we definitely have a transaction if we need to make updates. Otherwise
                 // we may have no transaction at all which isn't required if we had none and would only try making deletions.
-                let packed_transaction: Option<_> =
-                    if maybe_updates_for_packed_refs.unwrap_or(0) > 0 || self.store.packed_refs_lock_path().is_file() {
-                        // We have to create a packed-ref even if it doesn't exist
-                        self.store.packed_transaction(packed_refs_lock_fail_mode)?.into()
-                    } else {
-                        // A packed transaction is optional - we only have deletions that can't be made if
-                        // no packed-ref file exists anyway
-                        self.store
-                            .assure_packed_refs_uptodate()?
-                            .map(|p| {
-                                buffer_into_transaction(
-                                    p,
-                                    packed_refs_lock_fail_mode,
-                                    self.store.precompose_unicode,
-                                    self.store.namespace.clone(),
-                                    self.store.fsync,
-                                )
-                            })
-                            .transpose()?
-                    };
+                let packed_transaction: Option<_> = if maybe_updates_for_packed_refs.unwrap_or(0) > 0
+                    || has_deletions
+                    || self.store.packed_refs_lock_path().is_file()
+                {
+                    // We have to create a packed-ref even if it doesn't exist
+                    self.store.packed_transaction(packed_refs_lock_fail_mode)?.into()
+                } else {
+                    // A packed transaction is optional - we only have deletions that can't be made if
+                    // no packed-ref file exists anyway
+                    self.store
+                        .assure_packed_refs_uptodate()?
+                        .map(|p| {
+                            buffer_into_transaction(
+                                p,
+                                packed_refs_lock_fail_mode,
+                                self.store.precompose_unicode,
+                                self.store.namespace.clone(),
+                                self.store.fsync,
+                            )
+                        })
+                        .transpose()?
+                };
                 if let Some(transaction) = packed_transaction {
                     self.packed_transaction = Some(match &mut self.packed_refs {
                         PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(f)
