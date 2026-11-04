@@ -58,7 +58,21 @@ unless noted:
 | Veto at `preparing` or `prepared` | `aborted` follows, with `prepared` in between for a veto at `prepared` |
 | Exit status of `committed` | ignored |
 | Updating through `HEAD` | `preparing` names `HEAD`, `prepared` and `committed` name the branch |
+| Updating `HEAD` and a branch `a` in one transaction | `preparing` lists `HEAD`, then `a`. `prepared` and `committed` list `a` first and then the branch `HEAD` points to, as Git appends the split-off update at the end |
+| A deletion is locked, then a later edit fails to lock | `preparing`, then `aborted` for the deletions locked so far. With the failing edit first, only `preparing` |
+| `packed-refs.lock` is held by somebody else | `preparing`, then `aborted` for all deletions, as `packed-refs` is locked after the loose references |
+| A name is also the target of a symbolic reference that is edited | `preparing` lists the edits as requested, then the transaction fails, with `aborted` for the deletions before the symbolic reference |
+| Deleting `HEAD` | `preparing` names `HEAD`, `aborted` and the later states name the branch |
+| Veto while the transaction on `packed-refs` is prepared | that transaction's `aborted`, and Git exits without an `aborted` of the outer transaction |
+| The same reference edited twice | rejected without any event |
 | Reftable | one set of events, without nested ones |
+
+The files store reports all of these through `gix_ref::transaction::observe`. The tests in
+`gix-ref/tests/refs/file/transaction/prepare_and_commit/observe.rs` run 27 rows with Git, with a hook that logs its
+arguments and input, and with an observer of the files store on a copy of the repository, and compare the events. The
+transaction Git opens on `packed-refs` appears in them, indistinguishable from the others as in a hook. Only the files
+store with Git's default of deleting from `packed-refs` is compared. Updates that pack references have no Git
+counterpart.
 
 A push through `receive-pack` runs one transaction for all deletions first and a second for the other commands,
 unless `--atomic` is used, in which case one transaction holds all commands in order. Rejecting every command still

@@ -7,7 +7,7 @@ use crate::{
         file,
         file::{
             Transaction,
-            transaction::{Edit, PackedRefs},
+            transaction::{Edit, Notifier, PackedRefs},
         },
     },
     transaction::{
@@ -110,6 +110,7 @@ impl Transaction<'_, '_> {
             packed_transaction,
             updates,
             packed_refs,
+            mut observer,
         } = self;
         let mut updates = updates.expect("BUG: must call prepare before commit");
         let delete_loose_refs = matches!(
@@ -117,7 +118,12 @@ impl Transaction<'_, '_> {
             PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_)
         );
 
-        check_before_writing(store, &updates, committer).map_err(|err| err.and_raise(NothingApplied))?;
+        if let Err(err) = check_before_writing(store, &updates, committer) {
+            // Let go of the locks before the observer is told that nothing happened, as Git does.
+            drop(updates);
+            drop(packed_transaction);
+            return Err(err.and_raise(NothingApplied));
+        }
 
         // Whatever happens from here on, `progress` is the one place that knows what became of each edit.
         let mut progress = vec![Progress::NotAttempted; updates.len()];
@@ -128,15 +134,23 @@ impl Transaction<'_, '_> {
             delete_loose_refs,
             committer,
             &mut progress,
+            &mut observer,
         ) {
-            Ok(()) => Ok(updates.into_iter().map(|edit| edit.update).collect()),
-            Err(err) => Err(err.and_raise(Uncertain::new(
-                updates
-                    .iter()
-                    .zip(progress)
-                    .map(|(edit, progress)| (edit.update.name.clone(), progress))
-                    .collect(),
-            ))),
+            Ok(()) => {
+                observer.committed();
+                Ok(updates.into_iter().map(|edit| edit.update).collect())
+            }
+            Err(err) => {
+                // Git doesn't tell anybody after failing to commit, and neither do we.
+                observer.disarm();
+                Err(err.and_raise(Uncertain::new(
+                    updates
+                        .iter()
+                        .zip(progress)
+                        .map(|(edit, progress)| (edit.update.name.clone(), progress))
+                        .collect(),
+                )))
+            }
         }
     }
 }
@@ -173,6 +187,7 @@ fn write(
     delete_loose_refs: bool,
     committer: Option<gix_actor::SignatureRef<'_>>,
     progress: &mut [Progress],
+    observer: &mut Notifier<'_>,
 ) -> Result<()> {
     // Perform updates first so live commits remain referenced
     for (idx, change) in updates.iter_mut().enumerate() {
@@ -281,6 +296,7 @@ fn write(
         }
         t.commit()
             .or_raise(|| message("Could not commit packed-ref transaction"))?;
+        observer.packed_committed();
         // Always refresh ourselves right away to avoid races. We ignore errors as there may be many reasons this fails, and it's not
         // critical to be done here. In other words, the pack may be refreshed at a later time and then it might work.
         store.force_refresh_packed_buffer().ok();
