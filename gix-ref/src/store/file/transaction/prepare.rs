@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use gix_error::{ClassificationMarker, ErrorExt, Message, Result, ResultExt, bail, message, not_found};
+use gix_error::{ClassificationMarker, ErrorExt, Message, Result, ResultExt, bail, message, not_found, validation};
+use gix_object::bstr::{BStr, BString, ByteSlice};
 
 use crate::{
     FullName, FullNameRef, Reference, Target, packed,
@@ -12,8 +13,108 @@ use crate::{
             transaction::{Edit, PackedRefs},
         },
     },
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
+    transaction::{
+        Change, ExistingRefs, LogChange, NameConflict, PreviousValue, RefEdit, RefEditsExt, RefLog, verify_available,
+    },
 };
+
+/// The references of a files store that exist, loose or packed, for checking that names are available.
+///
+/// Parent directories are shared by many references, so what is known about them is kept for the transaction. It can't
+/// change while it is being prepared, as nothing is created until it is committed.
+struct Existing<'a> {
+    store: &'a file::Store,
+    packed: Option<&'a packed::Buffer>,
+    known: std::cell::RefCell<std::collections::BTreeMap<BString, bool>>,
+}
+
+impl Existing<'_> {
+    /// Look for the reference named `name` in loose and packed storage.
+    fn find(&self, name: &BStr) -> Result<bool> {
+        let full_name = FullNameRef::new_unchecked(name);
+        match self.store.ref_contents(full_name) {
+            Ok(Some(_)) => return Ok(true),
+            Ok(None) => {}
+            // A file is in the way of this name, which means the name isn't a reference of its own.
+            Err(err) if err.kind() == std::io::ErrorKind::NotADirectory => return Ok(false),
+            Err(err) => return Err(err.and_raise(message!("Could not look for reference '{name}'"))),
+        }
+        let (Some(packed), Some(packed_name)) = (self.packed, self.packed_name(name)) else {
+            return Ok(false);
+        };
+        Ok(packed
+            .try_find_full_name(FullNameRef::new_unchecked(packed_name.as_bstr()))?
+            .is_some())
+    }
+
+    /// The name as it is stored in `packed-refs`, or `None` if such a name isn't stored there.
+    fn packed_name(&self, name: &BStr) -> Option<BString> {
+        let name = packed::find::transform_full_name_for_lookup(FullNameRef::new_unchecked(name))?;
+        Some(match &self.store.namespace {
+            Some(namespace) => namespace.to_owned().into_namespaced_name(name).0,
+            None => name.as_bstr().to_owned(),
+        })
+    }
+}
+
+impl ExistingRefs for Existing<'_> {
+    fn exists(&self, name: &BStr) -> Result<bool> {
+        if let Some(exists) = self.known.borrow().get(name) {
+            return Ok(*exists);
+        }
+        let exists = self.find(name)?;
+        self.known.borrow_mut().insert(name.to_owned(), exists);
+        Ok(exists)
+    }
+
+    fn any_below(&self, directory: &BStr) -> Result<Option<BString>> {
+        let directory_name = FullNameRef::new_unchecked(directory[..directory.len() - 1].as_bstr());
+        let (base, relative_path) = self.store.reference_path_with_base(directory_name)?;
+        let directory_path = base.join(relative_path.as_ref());
+        if directory_path.is_dir() {
+            for entry in gix_fs::walkdir_sorted_new(&directory_path, usize::MAX, self.store.precompose_unicode) {
+                let entry = entry.map_err(|err| {
+                    err.into_io_error()
+                        .expect("no symlink related errors")
+                        .and_raise(message!("Could not look for references in '{directory}'"))
+                })?;
+                // Lock files belong to references that are being edited, and are accounted for by the edits.
+                if !entry.file_type().is_ok_and(|ft| ft.is_file())
+                    || entry.file_name().as_encoded_bytes().ends_with(b".lock")
+                {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(&directory_path)
+                    .expect("entries are located below their directory")
+                    .to_owned();
+                let mut name = directory_name.as_bstr().to_owned();
+                name.push(b'/');
+                name.extend_from_slice(&gix_path::to_unix_separators_on_windows(gix_path::into_bstr(relative)?));
+                return Ok(Some(name));
+            }
+        }
+        let Some(packed) = self.packed else {
+            return Ok(None);
+        };
+        let Some(packed_directory) = self.packed_name(directory_name.as_bstr()) else {
+            return Ok(None);
+        };
+        let mut prefix = packed_directory;
+        prefix.push(b'/');
+        match packed.iter_prefixed(prefix)?.next().transpose()? {
+            Some(reference) => {
+                let mut name = reference.name.as_bstr().to_owned();
+                if let Some(namespace) = &self.store.namespace {
+                    name = name[namespace.as_bstr().len()..].into();
+                }
+                Ok(Some(name))
+            }
+            None => Ok(None),
+        }
+    }
+}
 
 impl Transaction<'_, '_> {
     /// Read the current value of a reference from loose storage, falling back to packed refs.
@@ -43,6 +144,8 @@ impl Transaction<'_, '_> {
         packed: Option<&packed::Buffer>,
         change: &mut Edit,
         direct_to_packed_refs: bool,
+        names_in_transaction: &[BString],
+        existing: &Existing<'_>,
     ) -> Result {
         use std::io::Write;
         assert!(
@@ -104,17 +207,35 @@ impl Transaction<'_, '_> {
                 Some(lock)
             }
             Change::Update { expected, new, .. } => {
-                let obtain_lock = || {
-                    gix_lock::File::acquire_to_update_resource(
-                        &reference_path,
-                        lock_fail_mode,
-                        Some(lock_boundary.clone()),
-                        0,
-                    )
+                let may_create = matches!(
+                    expected,
+                    PreviousValue::Any | PreviousValue::MustNotExist | PreviousValue::ExistingMustMatch(_)
+                );
+                let mut lock = match gix_lock::File::acquire_to_update_resource(
+                    &reference_path,
+                    lock_fail_mode,
+                    Some(lock_boundary.clone()),
+                    0,
+                ) {
+                    Ok(lock) => lock,
+                    Err(err) => {
+                        // A reference that is a file can't be a directory, which shows as a failure to lock.
+                        // Only a conflict is a better explanation than the lock, and finding out may fail itself.
+                        if may_create
+                            && let Err(conflict) =
+                                verify_available(change.update.name.as_bstr(), names_in_transaction, existing)
+                            && conflict.downcast_any_ref::<NameConflict>().is_some()
+                        {
+                            return Err(conflict);
+                        }
+                        return Err(err);
+                    }
                 };
-                let mut lock = obtain_lock()?;
 
                 let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
+                if existing_ref.is_none() && may_create {
+                    verify_available(change.update.name.as_bstr(), names_in_transaction, existing)?;
+                }
 
                 match (&expected, &existing_ref) {
                     (PreviousValue::Any, _)
@@ -253,7 +374,10 @@ impl Transaction<'_, '_> {
                     leaf_referent_previous_oid: None,
                 },
             )
-            .or_raise(|| message("Could not preprocess reference edits"))?;
+            .map_err(|err| match err.kind() {
+                std::io::ErrorKind::AlreadyExists => validation(err.to_string()).raise(),
+                _ => err.and_raise(message("Could not preprocess reference edits")),
+            })?;
 
         let mut maybe_updates_for_packed_refs = match self.packed_refs {
             PackedRefs::DeletionsAndNonSymbolicUpdates(_)
@@ -347,6 +471,16 @@ impl Transaction<'_, '_> {
             }
         }
 
+        let mut names_in_transaction: Vec<BString> = updates
+            .iter()
+            .map(|edit| edit.update.name.as_bstr().to_owned())
+            .collect();
+        names_in_transaction.sort();
+        let existing = Existing {
+            store,
+            packed: self.packed_transaction.as_ref().and_then(packed::Transaction::buffer),
+            known: Default::default(),
+        };
         for cid in 0..updates.len() {
             let change = &mut updates[cid];
             if let Err(err) = Self::lock_ref_and_apply_change(
@@ -358,6 +492,8 @@ impl Transaction<'_, '_> {
                     self.packed_refs,
                     PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_)
                 ),
+                &names_in_transaction,
+                &existing,
             ) {
                 let referent = change.name();
                 let mut ref_name = referent.clone();
