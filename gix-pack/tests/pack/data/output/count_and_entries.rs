@@ -480,6 +480,45 @@ fn traversals() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn a_single_thread_writes_chunks_of_the_requested_size() -> gix_testtools::TestResult {
+    let object_hash = object_hash();
+    let db = db(DbKind::DeterministicGeneratedContent, object_hash)?;
+    let head = hex_to_id_for_hash(
+        object_hash,
+        "dfcb5e39ac6eb30179808bbab721e8a28ce1b52e",
+        "ad454f92f046c2873aebac2686d30d5b100ee10fae1a28e2994df52a0c097cae",
+    );
+    let counts = gix_traverse::commit::Simple::new(Some(head), db.clone())
+        .take(7)
+        .map(|commit| Ok::<_, gix_error::Error>(output::Count::from_data(commit?.id, None)))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        counts.len(),
+        7,
+        "the history has enough commits to need more than two chunks"
+    );
+
+    let chunk_sizes: Vec<_> = output::entry::iter_from_counts(
+        counts,
+        db,
+        Box::new(progress::Discard),
+        output::entry::iter_from_counts::Options {
+            thread_limit: Some(1),
+            chunk_size: 2,
+            ..Default::default()
+        },
+    )?
+    .map(|chunk| chunk.map(|(_, entries)| entries.len()))
+    .collect::<std::result::Result<_, gix_error::Error>>()?;
+    assert_eq!(
+        chunk_sizes,
+        [2, 2, 2, 1],
+        "with a single thread, chunks are not sized to distribute work, so memory is bounded by the caller's choice even with the `parallel` feature"
+    );
+    Ok(())
+}
+
+#[test]
 fn tree_additions_from_each_merge_parent_are_kept() -> gix_testtools::TestResult {
     use gix_object::Write;
 
