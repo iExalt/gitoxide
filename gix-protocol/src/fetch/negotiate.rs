@@ -142,6 +142,8 @@ where
     for (mapping_idx, mapping) in ref_map.mappings.iter().enumerate() {
         let want_id = mapping.remote.as_id();
         let have_id = mapping.local.as_ref().and_then(|name| {
+            // Failing here is fine even for unsupported reference storage, as that fails when iterating references below,
+            // or when updating them, before objects are received.
             // this is the only time git uses the peer-id.
             let r = refs.find(name).ok()?;
             r.target.try_id().map(ToOwned::to_owned)
@@ -185,6 +187,10 @@ where
     let mut queue = Queue::new();
     mark_all_refs_in_repo(refs, objects, graph, &mut queue, Flags::COMPLETE)?;
     for (alt_refs, alt_objs) in alternates().or_raise(|| message("Could not obtain alternate refs and objects"))? {
+        if alt_refs.unsupported_backend().is_some() {
+            // Alternates are only a hint for what is complete, so skip those whose references we can't read.
+            continue;
+        }
         mark_all_refs_in_repo(&alt_refs, &alt_objs, graph, &mut queue, Flags::COMPLETE)?;
     }
     // Keep track of the tips, which happen to be on our queue right, before we traverse the graph with cutoff.

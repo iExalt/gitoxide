@@ -149,6 +149,7 @@ impl file::Store {
         packed: Option<&packed::Buffer>,
         mut accept: impl FnMut(&Reference) -> bool,
     ) -> Result<Option<Reference>> {
+        self.assure_backend_supported()?;
         let mut buf = BString::default();
         let mut precomposed_partial_name_storage = packed
             .filter(|_| self.precompose_unicode)
@@ -391,6 +392,7 @@ impl file::Store {
 
     /// Read the file contents with a verified full reference path and return it in the given vector if possible.
     pub(crate) fn ref_contents(&self, name: &FullNameRef) -> io::Result<Option<Vec<u8>>> {
+        self.assure_backend_supported_io()?;
         self.check_windows_device_name(name)?;
         let (base, relative_path) = self
             .reference_path_with_base(name)

@@ -542,7 +542,12 @@ pub mod status {
             )
                 -> crate::status::Platform<'a, gix_utils::progress::Discard>,
         ) -> Result<Self> {
-            self.checked_out_head_id = repo.head_id().ok().map(crate::Id::detach);
+            self.checked_out_head_id = match repo.head_id() {
+                Ok(id) => Some(id.detach()),
+                // An unborn HEAD is no checked-out commit, but unsupported storage hides it.
+                Err(err) if err.is_unsupported() => return Err(err),
+                Err(_) => None,
+            };
             if ignore == config::Ignore::Dirty || check_dirty && self.is_dirty() == Some(true) {
                 return Ok(self);
             }

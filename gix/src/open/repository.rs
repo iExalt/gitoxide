@@ -285,6 +285,7 @@ impl ThreadSafeRepository {
             current_dir_ref.as_path()
         };
 
+        let unsupported_ref_storage = unsupported_ref_storage(env, repo_config.unsupported_ref_storage.clone())?;
         let mut refs = {
             let reflog = repo_config.reflog.unwrap_or(gix_ref::store::WriteReflog::Disable);
             let object_hash = repo_config.object_hash;
@@ -303,6 +304,7 @@ impl ThreadSafeRepository {
                 None => crate::RefStore::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
             }
         };
+        refs.set_unsupported_backend(unsupported_ref_storage);
         let head = refs.find("HEAD").ok();
         let git_install_dir = crate::path::install_dir().ok();
         let home = gix_path::env::home_dir().and_then(|home| env.home.check_opt(home));
@@ -770,4 +772,29 @@ fn check_safe_directories(
         )
         .permission_denied_error())
     }
+}
+
+/// Combine the unsupported reference storage of the configuration with `GIT_REFERENCE_BACKEND`, which Git lets override
+/// `extensions.refStorage`.
+///
+/// We don't follow an override towards `files`, as the configured backend may truly be in use, and refusing is safe.
+fn unsupported_ref_storage(
+    env: &crate::open::permissions::Environment,
+    from_config: Option<String>,
+) -> Result<Option<String>> {
+    use crate::config::tree::{Extensions, Key};
+    let key = &Extensions::REF_STORAGE;
+    let Some(value) = env
+        .git_prefix
+        .check_opt(key.the_environment_override())
+        .and_then(std::env::var_os)
+    else {
+        return Ok(from_config);
+    };
+    let value = value.into_string().map_err(|value| {
+        message("GIT_REFERENCE_BACKEND is not valid unicode")
+            .with("value", value.to_string_lossy().into_owned())
+            .validation_error()
+    })?;
+    Ok(key.try_into_unsupported_backend(value.as_str())?.or(from_config))
 }

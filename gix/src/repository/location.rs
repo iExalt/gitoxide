@@ -60,6 +60,7 @@ impl crate::Repository {
                 None => crate::RefStore::at_opts(git_dir, self.object_hash(), options),
             };
             refs.namespace.clone_from(&self.refs.namespace);
+            refs.set_unsupported_backend(self.refs.unsupported_backend().map(ToOwned::to_owned));
             let threshold = self.refs.clone().set_packed_buffer_mmap_threshold(0);
             refs.set_packed_buffer_mmap_threshold(threshold);
             Some(refs)

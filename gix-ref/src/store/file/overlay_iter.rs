@@ -421,6 +421,7 @@ impl file::Store {
         common_dir_info: Option<IterInfo<'_>>,
         packed: Option<&'p packed::Buffer>,
     ) -> std::io::Result<LooseThenPacked<'p, 's>> {
+        self.assure_backend_supported_io()?;
         Ok(LooseThenPacked {
             git_dir: self.git_dir(),
             common_dir: self.common_dir(),

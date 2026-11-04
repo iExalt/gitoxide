@@ -222,6 +222,7 @@ impl Transaction<'_, '_> {
         packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
     ) -> Result<Self> {
         assert!(self.updates.is_none(), "BUG: Must not call prepare(…) multiple times");
+        self.store.assure_backend_supported()?;
         let store = self.store;
         let mut updates: Vec<_> = edits
             .map(|update| Edit {
