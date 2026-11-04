@@ -1,3 +1,5 @@
+// The blocking variants of tests that are shared with the async ones keep what only the async variants need.
+#![allow(clippy::while_let_on_iterator, clippy::drop_non_drop)]
 pub mod bisync {
     pub use gix_macros::{discard as only_async, keep as only_sync, sync as bisync};
 }
