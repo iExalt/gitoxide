@@ -90,10 +90,35 @@ impl ProxyCredentials {
     }
 }
 
+/// `reqwest` has no crypto provider of its own with this feature, so name one unless the application chose another.
+#[cfg(all(
+    feature = "http-client-reqwest-rust-tls-ring",
+    not(any(
+        feature = "http-client-reqwest-rust-tls",
+        feature = "http-client-reqwest-rust-tls-trust-dns"
+    ))
+))]
+fn install_default_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        // Failing means that another thread installed one in the meantime, which is just as good.
+        rustls::crypto::ring::default_provider().install_default().ok();
+    }
+}
+
+#[cfg(not(all(
+    feature = "http-client-reqwest-rust-tls-ring",
+    not(any(
+        feature = "http-client-reqwest-rust-tls",
+        feature = "http-client-reqwest-rust-tls-trust-dns"
+    ))
+)))]
+fn install_default_crypto_provider() {}
+
 /// Apply the CA bundle, the verification and the protocol versions that were configured, which `curl` takes in the same way:
 /// a CA bundle replaces the certificates that are trusted otherwise, and no verification also accepts any host name.
 #[cfg(any(
     feature = "http-client-reqwest-rust-tls",
+    feature = "http-client-reqwest-rust-tls-ring",
     feature = "http-client-reqwest-rust-tls-trust-dns",
     feature = "http-client-reqwest-native-tls"
 ))]
@@ -141,6 +166,7 @@ fn configure_tls(mut builder: reqwest::ClientBuilder, config: &http::Options) ->
 /// Without a TLS implementation there are no `https://` connections to configure.
 #[cfg(not(any(
     feature = "http-client-reqwest-rust-tls",
+    feature = "http-client-reqwest-rust-tls-ring",
     feature = "http-client-reqwest-rust-tls-trust-dns",
     feature = "http-client-reqwest-native-tls"
 )))]
@@ -163,6 +189,7 @@ fn build_client(
     if config.http_version == Some(http::options::HttpVersion::V1_1) {
         builder = builder.http1_only();
     }
+    install_default_crypto_provider();
     builder = configure_tls(builder, config)?;
     let mut proxy_credentials = None;
     // `reqwest` reads the proxy variables of the environment unless told not to, which would bypass the configuration:
