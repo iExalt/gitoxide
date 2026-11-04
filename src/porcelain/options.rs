@@ -27,6 +27,13 @@ pub enum Subcommands {
         ///
         /// Defaults to the current working directory.
         directory: Option<PathBuf>,
+
+        /// The storage for references of the new repository, which can only be `files`.
+        ///
+        /// It takes precedence over the `GIT_DEFAULT_REF_FORMAT` environment variable and `init.defaultRefFormat`.
+        /// Asking for `reftable` is an error, as it is not supported yet.
+        #[clap(long, value_name = "FORMAT")]
+        ref_format: Option<String>,
     },
     /// A selection of useful tools.
     #[cfg(feature = "gitoxide-core-tools")]
