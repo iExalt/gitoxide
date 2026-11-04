@@ -23,6 +23,8 @@ pub struct Options {
     /// Defaults to [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED), which is
     /// also what `git` uses unless configured otherwise with `core.looseCompression` or `core.compression`.
     pub loose_compression: gix_zlib::Compression,
+    /// What to flush when writing loose objects, which is nothing by default like in Git, except for loose objects on Windows.
+    pub fsync: gix_fs::fsync::Options,
 }
 
 impl Default for Options {
@@ -33,6 +35,7 @@ impl Default for Options {
             alloc_limit_bytes: None,
             current_dir: None,
             loose_compression: gix_zlib::Compression::BEST_SPEED,
+            fsync: Default::default(),
         }
     }
 }
@@ -85,6 +88,7 @@ impl Store {
             alloc_limit_bytes,
             current_dir,
             loose_compression,
+            fsync,
         }: Options,
     ) -> std::io::Result<Self> {
         let _span = gix_trace::detail!("gix_odb::Store::at()");
@@ -144,6 +148,7 @@ impl Store {
             object_hash,
             alloc_limit_bytes,
             loose_compression,
+            fsync,
             num_handles_stable: Default::default(),
             num_handles_unstable: Default::default(),
             num_disk_state_consolidation: Default::default(),
