@@ -231,3 +231,10 @@ pub fn assert_healthy(repo: &Path, what: &str) {
     );
     git(repo, &["fsck"]).unwrap_or_else(|err| panic!("{what}: fsck: {err}"));
 }
+
+/// Where the log blocks start according to the footer of `table`, which is also where the blocks of references end.
+pub fn log_section_offset(table: &[u8]) -> usize {
+    let (header_len, footer_len) = if table[4] == 2 { (28, 72) } else { (24, 68) };
+    let at = table.len() - footer_len + header_len + 3 * 8;
+    usize::try_from(u64::from_be_bytes(table[at..at + 8].try_into().expect("8 bytes"))).expect("fits")
+}
