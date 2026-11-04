@@ -1,7 +1,7 @@
 use std::{cell::RefCell, io::Write, ops::ControlFlow};
 
 use bstr::{BString, ByteSlice};
-use gix_error::{Result, ResultExt, bail, corruption, message};
+use gix_error::{ErrorExt, Result, ResultExt, bail, corruption, message};
 use gix_transport::{
     client::{
         MessageKind, WriteMode,
@@ -94,7 +94,20 @@ pub fn push(
     let (mut raw_writer, mut reader) = writer.into_parts();
     if request.expects_pack() {
         let mut verifier = PackVerifier::new(&mut raw_writer, request.hash_kind());
-        write_pack(&mut verifier)?;
+        if let Err(producer_error) = write_pack(&mut verifier) {
+            // A pack that is complete is acted on by the server, even if its producer fails afterwards, as it can for instance when
+            // it finds out that something went missing only after it wrote the last object. Only an incomplete pack is known to
+            // be ignored, as the server keeps waiting for the rest and applies nothing.
+            return Err(match verifier.finish() {
+                Err(incomplete) if incomplete.classify().is_validation() => producer_error,
+                _ => PackProducerFailedAfterCompletion {
+                    reason: format!("{producer_error:#}"),
+                }
+                .and_raise(corruption(
+                    "The producer of the pack failed after it wrote a complete pack, so the outcome of the push is unknown",
+                )),
+            });
+        }
         verifier.finish()?;
     }
     raw_writer.flush().or_raise(unknown)?;
@@ -114,6 +127,29 @@ pub fn push(
     let lines = add_remote_error(lines, &remote_error)?;
     add_remote_error(request.parse_report(lines.iter().map(Vec::as_slice)), &remote_error)
 }
+
+/// The error that [`push()`] returns if the producer of the pack failed after it had written a complete pack.
+///
+/// The server may have acted on that pack, so the outcome of the push is unknown, and the error is classified as
+/// [corruption](gix_error::Class::Corruption). Errors of a producer that failed before it completed the pack are returned as they are,
+/// as the server applies nothing then.
+#[derive(Debug)]
+pub struct PackProducerFailedAfterCompletion {
+    /// What the producer of the pack said.
+    pub reason: String,
+}
+
+impl std::fmt::Display for PackProducerFailedAfterCompletion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The pack producer failed after writing a complete pack: {}",
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for PackProducerFailedAfterCompletion {}
 
 /// Forwards a pack to a writer while checking that it is complete, which is the case if its last bytes are the hash of everything
 /// before them. As the connection stays open after a pack, the server would wait forever for the rest of a truncated one.

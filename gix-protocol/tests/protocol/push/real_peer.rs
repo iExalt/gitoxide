@@ -231,6 +231,52 @@ fn without_side_band_the_server_finishes_its_hooks_before_push_returns() -> Test
 }
 
 #[test]
+fn a_producer_that_fails_after_a_complete_pack_leaves_the_outcome_unknown() -> TestResult {
+    use gix_transport::client::TransportWithoutIO;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for f in fixtures()?.into_iter().take(1) {
+        let kind = f.kind;
+        let (one, two) = (rev(&f.source, "victim")?, rev(&f.source, "main")?);
+        let pack = empty_pack(&f.remote)?;
+        let (mut transport, handshake) = connect(&f.remote)?;
+        let request = Request::new(
+            vec![Command::new("refs/heads/main", two, one)?],
+            kind,
+            &ServerCapabilities::from_capabilities(&handshake.capabilities),
+            Options::default(),
+        )?;
+        let err = push(
+            &mut transport,
+            &request,
+            move |out| {
+                out.write_all(&pack).map_err(gix_error::Error::from_error)?;
+                Err(gix_error::ErrorExt::raise(gix_error::message(
+                    "something went missing after the last object",
+                )))
+            },
+            None,
+            false,
+        )
+        .expect_err("the producer failed");
+        assert_eq!(classes(&err), [Class::Corruption], "{kind}: {err:#}");
+        assert!(
+            err.downcast_any_ref::<gix_protocol::push::PackProducerFailedAfterCompletion>()
+                .is_some_and(|e| e.reason.contains("went missing")),
+            "{kind}: the failure can be told apart, and keeps the producer's words: {err:#}"
+        );
+        assert!(transport.wait_for_server(std::time::Duration::from_secs(60))?);
+        assert_eq!(
+            rev(&f.remote, "refs/heads/main")?,
+            one,
+            "{kind}: the server acted on the complete pack, which is why this isn't a plain failure"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_server_that_was_sent_an_incomplete_pack_ends_when_it_is_waited_for() -> TestResult {
     use gix_transport::client::TransportWithoutIO;
     if gix_testtools::run_in_isolated_process()? {
