@@ -583,6 +583,10 @@ pub mod status;
 pub mod shallow;
 
 ///
+#[cfg(feature = "maintenance")]
+pub mod maintenance;
+
+///
 pub mod discover;
 
 pub mod env;
