@@ -41,7 +41,8 @@ fn from_paths() -> gix_testtools::TestResult {
 #[test]
 fn from_a_hash_parameterized_pack() -> gix_testtools::TestResult {
     let object_hash = crate::object_hash();
-    let pack_dir = crate::scripted_fixture_read_only("make_pack_gen_repo_multi_index.sh")?.join(".git/objects/pack");
+    let pack_dir =
+        crate::scripted_fixture_read_only_needs_archive("make_pack_gen_repo_multi_index.sh")?.join(".git/objects/pack");
     let written = write_multi_index_from_pack_dir(&pack_dir, object_hash)?;
     assert_eq!(written.input_indices.len(), 1, "the aggressive gc leaves a single pack");
 
