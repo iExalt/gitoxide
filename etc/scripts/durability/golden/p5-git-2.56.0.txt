@@ -1,0 +1,1232 @@
+git version 2.56.0
+strace -- version 6.8
+fs=ext4
+
+################ files backend, update-ref create, config: <defaults>
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u1/repo>, "u1/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u1/repo/.git/refs/heads/new.lock>
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->40
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->1
+p1 openat(AT_FDCWD<u1/repo>, ".git/logs/refs/heads/new", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3<u1/repo/.git/logs/refs/heads/new>
+p1 write(3<u1/repo/.git/logs/refs/heads/new> ->117
+p1 rename("u1/repo/.git/refs/heads/new.lock", "u1/repo/.git/refs/heads/new") = 0
+
+################ files backend, update-ref create, config: core.fsync=reference
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u1/repo>, "u1/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u1/repo/.git/refs/heads/new.lock>
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->40
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->1
+p1 fsync(3<u1/repo/.git/refs/heads/new.lock>) = 0
+p1 openat(AT_FDCWD<u1/repo>, ".git/logs/refs/heads/new", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3<u1/repo/.git/logs/refs/heads/new>
+p1 write(3<u1/repo/.git/logs/refs/heads/new> ->117
+p1 rename("u1/repo/.git/refs/heads/new.lock", "u1/repo/.git/refs/heads/new") = 0
+
+################ files backend, update-ref create, config: core.fsync=all
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u1/repo>, "u1/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u1/repo/.git/refs/heads/new.lock>
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->40
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->1
+p1 fsync(3<u1/repo/.git/refs/heads/new.lock>) = 0
+p1 openat(AT_FDCWD<u1/repo>, ".git/logs/refs/heads/new", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3<u1/repo/.git/logs/refs/heads/new>
+p1 write(3<u1/repo/.git/logs/refs/heads/new> ->117
+p1 rename("u1/repo/.git/refs/heads/new.lock", "u1/repo/.git/refs/heads/new") = 0
+
+################ files backend, update-ref create, config: core.fsync=none
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u1/repo>, "u1/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u1/repo/.git/refs/heads/new.lock>
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->40
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->1
+p1 openat(AT_FDCWD<u1/repo>, ".git/logs/refs/heads/new", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3<u1/repo/.git/logs/refs/heads/new>
+p1 write(3<u1/repo/.git/logs/refs/heads/new> ->117
+p1 rename("u1/repo/.git/refs/heads/new.lock", "u1/repo/.git/refs/heads/new") = 0
+
+################ files backend, update-ref create, config: core.fsync=all core.fsyncMethod=writeout-only
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u1/repo>, "u1/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u1/repo/.git/refs/heads/new.lock>
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->40
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->1
+p1 sync_file_range(3<u1/repo/.git/refs/heads/new.lock>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p1 openat(AT_FDCWD<u1/repo>, ".git/logs/refs/heads/new", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3<u1/repo/.git/logs/refs/heads/new>
+p1 write(3<u1/repo/.git/logs/refs/heads/new> ->117
+p1 rename("u1/repo/.git/refs/heads/new.lock", "u1/repo/.git/refs/heads/new") = 0
+
+################ files backend, update-ref create, config: core.fsync=all core.fsyncMethod=batch
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u1/repo>, "u1/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u1/repo/.git/refs/heads/new.lock>
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->40
+p1 write(3<u1/repo/.git/refs/heads/new.lock> ->1
+p1 fsync(3<u1/repo/.git/refs/heads/new.lock>) = 0
+p1 openat(AT_FDCWD<u1/repo>, ".git/logs/refs/heads/new", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3<u1/repo/.git/logs/refs/heads/new>
+p1 write(3<u1/repo/.git/logs/refs/heads/new> ->117
+p1 rename("u1/repo/.git/refs/heads/new.lock", "u1/repo/.git/refs/heads/new") = 0
+
+################ files backend, pack-refs --all, config: <defaults>
+--- pack-refs --all (rc=0)
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.new", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.new>
+p1 fcntl(3<u2/repo/.git/packed-refs.new>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE)
+p1 write(3<u2/repo/.git/packed-refs.new> ->159
+p1 rename("u2/repo/.git/packed-refs.new", "u2/repo/.git/packed-refs") = 0
+p1 unlink("u2/repo/.git/packed-refs.lock") = 0
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/new.lock>
+p1 unlink("u2/repo/.git/refs/heads/new.lock") = 0
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/main.lock>
+p1 unlink("u2/repo/.git/refs/heads/main.lock") = 0
+################ files backend, delete (packed), config: <defaults>
+--- update-ref -d refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/new.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.new", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.new>
+p1 fcntl(3<u2/repo/.git/packed-refs.new>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE)
+p1 write(3<u2/repo/.git/packed-refs.new> ->103
+p1 rename("u2/repo/.git/packed-refs.new", "u2/repo/.git/packed-refs") = 0
+p1 unlink("u2/repo/.git/refs/heads/new.lock") = 0
+p1 unlink("u2/repo/.git/packed-refs.lock") = 0
+
+################ files backend, pack-refs --all, config: core.fsync=reference
+--- pack-refs --all (rc=0)
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.new", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.new>
+p1 fcntl(3<u2/repo/.git/packed-refs.new>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE)
+p1 write(3<u2/repo/.git/packed-refs.new> ->159
+p1 fsync(3<u2/repo/.git/packed-refs.new>) = 0
+p1 rename("u2/repo/.git/packed-refs.new", "u2/repo/.git/packed-refs") = 0
+p1 unlink("u2/repo/.git/packed-refs.lock") = 0
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/new.lock>
+p1 unlink("u2/repo/.git/refs/heads/new.lock") = 0
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/main.lock>
+p1 unlink("u2/repo/.git/refs/heads/main.lock") = 0
+################ files backend, delete (packed), config: core.fsync=reference
+--- update-ref -d refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/new.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.new", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.new>
+p1 fcntl(3<u2/repo/.git/packed-refs.new>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE)
+p1 write(3<u2/repo/.git/packed-refs.new> ->103
+p1 fsync(3<u2/repo/.git/packed-refs.new>) = 0
+p1 rename("u2/repo/.git/packed-refs.new", "u2/repo/.git/packed-refs") = 0
+p1 unlink("u2/repo/.git/refs/heads/new.lock") = 0
+p1 unlink("u2/repo/.git/packed-refs.lock") = 0
+
+################ files backend, pack-refs --all, config: core.fsync=all
+--- pack-refs --all (rc=0)
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.new", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.new>
+p1 fcntl(3<u2/repo/.git/packed-refs.new>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE)
+p1 write(3<u2/repo/.git/packed-refs.new> ->159
+p1 fsync(3<u2/repo/.git/packed-refs.new>) = 0
+p1 rename("u2/repo/.git/packed-refs.new", "u2/repo/.git/packed-refs") = 0
+p1 unlink("u2/repo/.git/packed-refs.lock") = 0
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/new.lock>
+p1 unlink("u2/repo/.git/refs/heads/new.lock") = 0
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/main.lock>
+p1 unlink("u2/repo/.git/refs/heads/main.lock") = 0
+################ files backend, delete (packed), config: core.fsync=all
+--- update-ref -d refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/refs/heads/new.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/refs/heads/new.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.lock>
+p1 openat(AT_FDCWD<u2/repo>, "u2/repo/.git/packed-refs.new", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u2/repo/.git/packed-refs.new>
+p1 fcntl(3<u2/repo/.git/packed-refs.new>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE)
+p1 write(3<u2/repo/.git/packed-refs.new> ->103
+p1 fsync(3<u2/repo/.git/packed-refs.new>) = 0
+p1 rename("u2/repo/.git/packed-refs.new", "u2/repo/.git/packed-refs") = 0
+p1 unlink("u2/repo/.git/refs/heads/new.lock") = 0
+p1 unlink("u2/repo/.git/packed-refs.lock") = 0
+
+################ reftable backend, update-ref create + delete, config: <defaults>
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 4<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X>
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->70
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->87
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->68
+p1 rename("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X", "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = 0
+p1 write(4<u3/repo/.git/reftable/tables.list.lock> ->86
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 5<u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock>
+p1 unlink("u3/repo/.git/reftable/tables.list.lock") = 0
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X>
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->123
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->132
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->68
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u3/repo/.git/reftable/tables.list.lock>
+p1 rename("u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X", "u3/repo/.git/reftable/0x000000000001-0x000000000003-H.ref") = 0
+p1 write(3<u3/repo/.git/reftable/tables.list.lock> ->43
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = -1 ENOENT (No such file or directory)
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref") = -1 ENOENT (No such file or directory)
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock") = 0
+--- update-ref -d refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 4<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X>
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->50
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->38
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->68
+p1 rename("u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X", "u3/repo/.git/reftable/0x000000000004-0x000000000004-H.ref") = 0
+p1 write(4<u3/repo/.git/reftable/tables.list.lock> ->86
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+
+################ reftable backend, update-ref create + delete, config: core.fsync=reference
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 4<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X>
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->70
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->87
+p1 fsync(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X>) = 0
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->68
+p1 rename("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X", "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = 0
+p1 write(4<u3/repo/.git/reftable/tables.list.lock> ->86
+p1 fsync(4<u3/repo/.git/reftable/tables.list.lock>) = 0
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 5<u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock>
+p1 unlink("u3/repo/.git/reftable/tables.list.lock") = 0
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X>
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->123
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->132
+p1 fsync(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X>) = 0
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->68
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u3/repo/.git/reftable/tables.list.lock>
+p1 rename("u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X", "u3/repo/.git/reftable/0x000000000001-0x000000000003-H.ref") = 0
+p1 write(3<u3/repo/.git/reftable/tables.list.lock> ->43
+p1 fsync(3<u3/repo/.git/reftable/tables.list.lock>) = 0
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = -1 ENOENT (No such file or directory)
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref") = -1 ENOENT (No such file or directory)
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock") = 0
+--- update-ref -d refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 4<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X>
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->50
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->38
+p1 fsync(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X>) = 0
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->68
+p1 rename("u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X", "u3/repo/.git/reftable/0x000000000004-0x000000000004-H.ref") = 0
+p1 write(4<u3/repo/.git/reftable/tables.list.lock> ->86
+p1 fsync(4<u3/repo/.git/reftable/tables.list.lock>) = 0
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+
+################ reftable backend, update-ref create + delete, config: core.fsync=all
+--- update-ref create refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 4<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X>
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->70
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->87
+p1 fsync(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X>) = 0
+p1 write(5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X> ->68
+p1 rename("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.temp.X", "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = 0
+p1 write(4<u3/repo/.git/reftable/tables.list.lock> ->86
+p1 fsync(4<u3/repo/.git/reftable/tables.list.lock>) = 0
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 5<u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 5<u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock>
+p1 unlink("u3/repo/.git/reftable/tables.list.lock") = 0
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X>
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->123
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->132
+p1 fsync(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X>) = 0
+p1 write(3<u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X> ->68
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<u3/repo/.git/reftable/tables.list.lock>
+p1 rename("u3/repo/.git/reftable/0x000000000001-0x000000000003-H.temp.X", "u3/repo/.git/reftable/0x000000000001-0x000000000003-H.ref") = 0
+p1 write(3<u3/repo/.git/reftable/tables.list.lock> ->43
+p1 fsync(3<u3/repo/.git/reftable/tables.list.lock>) = 0
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref") = -1 ENOENT (No such file or directory)
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref") = -1 ENOENT (No such file or directory)
+p1 unlink("u3/repo/.git/reftable/0x000000000003-0x000000000003-H.ref.lock") = 0
+p1 unlink("u3/repo/.git/reftable/0x000000000001-0x000000000002-H.ref.lock") = 0
+--- update-ref -d refs/heads/new (rc=0)
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/tables.list.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 4<u3/repo/.git/reftable/tables.list.lock>
+p1 openat(AT_FDCWD<u3/repo>, "u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X", O_RDWR|O_CREAT|O_EXCL, 0600) = 5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X>
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->50
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->38
+p1 fsync(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X>) = 0
+p1 write(5<u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X> ->68
+p1 rename("u3/repo/.git/reftable/0x000000000004-0x000000000004-H.temp.X", "u3/repo/.git/reftable/0x000000000004-0x000000000004-H.ref") = 0
+p1 write(4<u3/repo/.git/reftable/tables.list.lock> ->86
+p1 fsync(4<u3/repo/.git/reftable/tables.list.lock>) = 0
+p1 rename("u3/repo/.git/reftable/tables.list.lock", "u3/repo/.git/reftable/tables.list") = 0
+
+################ hash-object -w x1 loose object, config: <defaults>
+--- hash-object -w (rc=0)
+p1 openat(AT_FDCWD<u4/repo>, ".git/objects/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<u4/repo/.git/objects/xx/tmp_obj>
+p1 write(4<u4/repo/.git/objects/xx/tmp_obj> ->18
+p1 write(1<last.out> ->41
+
+################ hash-object -w x1 loose object, config: core.fsync=loose-object
+--- hash-object -w (rc=0)
+p1 openat(AT_FDCWD<u4/repo>, ".git/objects/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<u4/repo/.git/objects/xx/tmp_obj>
+p1 write(4<u4/repo/.git/objects/xx/tmp_obj> ->18
+p1 fsync(4<u4/repo/.git/objects/xx/tmp_obj>) = 0
+p1 write(1<last.out> ->41
+
+################ hash-object -w x1 loose object, config: core.fsync=all
+--- hash-object -w (rc=0)
+p1 openat(AT_FDCWD<u4/repo>, ".git/objects/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<u4/repo/.git/objects/xx/tmp_obj>
+p1 write(4<u4/repo/.git/objects/xx/tmp_obj> ->18
+p1 fsync(4<u4/repo/.git/objects/xx/tmp_obj>) = 0
+p1 write(1<last.out> ->41
+
+################ hash-object -w x1 loose object, config: core.fsync=none
+--- hash-object -w (rc=0)
+p1 openat(AT_FDCWD<u4/repo>, ".git/objects/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<u4/repo/.git/objects/xx/tmp_obj>
+p1 write(4<u4/repo/.git/objects/xx/tmp_obj> ->18
+p1 write(1<last.out> ->41
+
+################ hash-object -w x1 loose object, config: core.fsync=all core.fsyncMethod=batch
+--- hash-object -w (rc=0)
+p1 openat(AT_FDCWD<u4/repo>, ".git/objects/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<u4/repo/.git/objects/xx/tmp_obj>
+p1 write(4<u4/repo/.git/objects/xx/tmp_obj> ->18
+p1 fsync(4<u4/repo/.git/objects/xx/tmp_obj>) = 0
+p1 write(1<last.out> ->41
+
+################ hash-object -w x1 loose object, config: core.fsync=all core.fsyncMethod=writeout-only
+--- hash-object -w (rc=0)
+p1 openat(AT_FDCWD<u4/repo>, ".git/objects/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<u4/repo/.git/objects/xx/tmp_obj>
+p1 write(4<u4/repo/.git/objects/xx/tmp_obj> ->18
+p1 sync_file_range(4<u4/repo/.git/objects/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p1 write(1<last.out> ->41
+
+################ receive-pack via push (unpack-objects path), files backend, config: <defaults>
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: <defaults>
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=all
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 fsync(3<recv-unpack.git/refs/heads/main.lock>) = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=all
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 fsync(3<recv-index.git/refs/heads/main.lock>) = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=none
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=none
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=reference
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 fsync(3<recv-unpack.git/refs/heads/main.lock>) = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=reference
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 fsync(3<recv-index.git/refs/heads/main.lock>) = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=loose-object
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=loose-object
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsyncObjectFiles=true
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 write(2<last.out> ->69
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 fsync(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsyncObjectFiles=true
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 write(2<last.out> ->69
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=all core.fsyncMethod=batch
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK", 0700) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/36/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/BULK/36/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/BULK/36/tmp_obj> ->70
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/BULK/36/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/36/tmp_obj", "recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/36/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/78/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/BULK/78/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/BULK/78/tmp_obj> ->17
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/BULK/78/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/78/tmp_obj", "recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/78/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/61/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/BULK/61/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/BULK/61/tmp_obj> ->17
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/BULK/61/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/61/tmp_obj", "recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/61/tmp_obj") = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/BULK/bulk_fsync_X>
+p2 fsync(3<recv-unpack.git/objects/INCOMING/BULK/bulk_fsync_X>) = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/bulk_fsync_X") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/xx/OID", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/xx/OID", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/xx/OID", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 fsync(3<recv-unpack.git/refs/heads/main.lock>) = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=all core.fsyncMethod=batch
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 fsync(3<recv-index.git/refs/heads/main.lock>) = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=loose-object core.fsyncMethod=batch
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK", 0700) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/36/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/BULK/36/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/BULK/36/tmp_obj> ->70
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/BULK/36/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/36/tmp_obj", "recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/36/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/78/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/BULK/78/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/BULK/78/tmp_obj> ->17
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/BULK/78/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/78/tmp_obj", "recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/78/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/BULK/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/61/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/BULK/61/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/BULK/61/tmp_obj> ->17
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/BULK/61/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/61/tmp_obj", "recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/61/tmp_obj") = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/BULK/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/BULK/bulk_fsync_X>
+p2 fsync(3<recv-unpack.git/objects/INCOMING/BULK/bulk_fsync_X>) = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/bulk_fsync_X") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/xx/OID", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/xx/OID", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/BULK/xx/OID", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/BULK/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=loose-object core.fsyncMethod=batch
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_idx>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 fsync(4<recv-index.git/objects/INCOMING/pack/tmp_rev>) = 0
+p2 fsync(3<recv-index.git/objects/INCOMING/pack/tmp_pack>) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 fsync(3<recv-index.git/objects/INCOMING/bulk_fsync_X>) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (unpack-objects path), files backend, config: core.fsync=all core.fsyncMethod=writeout-only
+--- receive-pack (unpack) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/6e", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->109
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/36", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->70
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/78", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p2 mkdir("recv-unpack.git/./objects/INCOMING/61", 0777) = 0
+p2 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/xx/tmp_obj", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>
+p2 write(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj> ->17
+p2 sync_file_range(3<recv-unpack.git/objects/INCOMING/xx/tmp_obj>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 link("recv-unpack.git/./objects/INCOMING/xx/tmp_obj", "recv-unpack.git/./objects/INCOMING/xx/OID") = 0
+p2 unlink("recv-unpack.git/./objects/INCOMING/xx/tmp_obj") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>
+p1 sync_file_range(3<recv-unpack.git/objects/INCOMING/bulk_fsync_X>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p1 unlink("recv-unpack.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 mkdir("./objects/78", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/36", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/61", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 mkdir("./objects/6e", 0777) = 0
+p1 link("./objects/INCOMING/xx/OID", "./objects/xx/OID") = 0
+p1 unlink("./objects/INCOMING/xx/OID") = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/refs/heads/main.lock>
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->40
+p1 write(3<recv-unpack.git/refs/heads/main.lock> ->1
+p1 sync_file_range(3<recv-unpack.git/refs/heads/main.lock>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p1 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/HEAD.lock>
+p1 rename("recv-unpack.git/./refs/heads/main.lock", "recv-unpack.git/./refs/heads/main") = 0
+p1 unlink("recv-unpack.git/./HEAD.lock") = 0
+p5 openat(AT_FDCWD<recv-unpack.git>, "recv-unpack.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-unpack.git/objects/maintenance.lock>
+p6 unlink("recv-unpack.git/./objects/maintenance.lock") = 0
+
+################ receive-pack via push (index-objects path), files backend, config: core.fsync=all core.fsyncMethod=writeout-only
+--- receive-pack (index) push rc=0
+  (receive-side strace, all pids)
+p1 mkdir("./objects/INCOMING", 0700) = 0
+p1 mkdir("./objects/INCOMING/pack", 0777) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_pack", O_RDWR|O_CREAT|O_EXCL, 0444) = 3<recv-index.git/objects/INCOMING/pack/tmp_pack>
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->12
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->192
+p2 write(3<recv-index.git/objects/INCOMING/pack/tmp_pack> ->20
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_idx", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_idx>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->1164
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_idx> ->20
+p2 sync_file_range(4<recv-index.git/objects/INCOMING/pack/tmp_idx>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/tmp_rev", O_RDWR|O_CREAT|O_EXCL, 0444) = 4<recv-index.git/objects/INCOMING/pack/tmp_rev>
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->48
+p2 write(4<recv-index.git/objects/INCOMING/pack/tmp_rev> ->20
+p2 sync_file_range(4<recv-index.git/objects/INCOMING/pack/tmp_rev>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 sync_file_range(3<recv-index.git/objects/INCOMING/pack/tmp_pack>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p2 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/pack/pack-H.keep", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/pack/pack-H.keep>
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 write(3<recv-index.git/objects/INCOMING/pack/pack-H.keep> ->N
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_pack", "recv-index.git/./objects/INCOMING/pack/pack-H.pack") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_pack") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_rev", "recv-index.git/./objects/INCOMING/pack/pack-H.rev") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_rev") = 0
+p2 link("recv-index.git/./objects/INCOMING/pack/tmp_idx", "recv-index.git/./objects/INCOMING/pack/pack-H.idx") = 0
+p2 unlink("recv-index.git/./objects/INCOMING/pack/tmp_idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/INCOMING/bulk_fsync_X", O_RDWR|O_CREAT|O_EXCL, 0600) = 3<recv-index.git/objects/INCOMING/bulk_fsync_X>
+p1 sync_file_range(3<recv-index.git/objects/INCOMING/bulk_fsync_X>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p1 unlink("recv-index.git/./objects/INCOMING/bulk_fsync_X") = 0
+p1 link("./objects/INCOMING/pack/pack-H.keep", "./objects/pack/pack-H.keep") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.keep") = 0
+p1 link("./objects/INCOMING/pack/pack-H.pack", "./objects/pack/pack-H.pack") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.pack") = 0
+p1 link("./objects/INCOMING/pack/pack-H.rev", "./objects/pack/pack-H.rev") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.rev") = 0
+p1 link("./objects/INCOMING/pack/pack-H.idx", "./objects/pack/pack-H.idx") = 0
+p1 unlink("./objects/INCOMING/pack/pack-H.idx") = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./refs/heads/main.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/refs/heads/main.lock>
+p1 write(3<recv-index.git/refs/heads/main.lock> ->40
+p1 write(3<recv-index.git/refs/heads/main.lock> ->1
+p1 sync_file_range(3<recv-index.git/refs/heads/main.lock>, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER) = 0
+p1 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./HEAD.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/HEAD.lock>
+p1 rename("recv-index.git/./refs/heads/main.lock", "recv-index.git/./refs/heads/main") = 0
+p1 unlink("recv-index.git/./HEAD.lock") = 0
+p1 unlink("recv-index.git/./objects/pack/pack-H.keep") = 0
+p5 openat(AT_FDCWD<recv-index.git>, "recv-index.git/./objects/maintenance.lock", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0666) = 3<recv-index.git/objects/maintenance.lock>
+p6 unlink("recv-index.git/./objects/maintenance.lock") = 0
