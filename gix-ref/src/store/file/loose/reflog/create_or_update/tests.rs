@@ -60,16 +60,40 @@ fn reflog_lines(store: &file::Store, name: &str, buf: &mut Vec<u8>) -> Result<Ve
         .map_err(Into::into)
 }
 
-const WRITE_MODES: &[WriteReflog] = &[WriteReflog::Normal, WriteReflog::Disable, WriteReflog::Always];
+const WRITE_MODES: &[WriteReflog] = &[
+    WriteReflog::Normal,
+    WriteReflog::Existing,
+    WriteReflog::Disable,
+    WriteReflog::Always,
+];
 
 #[test]
-fn should_autocreate_is_unaffected_by_writemode() -> TestResult {
-    let (_keep, store) = empty_store(WriteReflog::Disable)?;
+fn only_the_normal_mode_creates_the_reflogs_of_the_standard_references_on_its_own() -> TestResult {
+    let (_keep, store) = empty_store(WriteReflog::Normal)?;
     for should_create_name in &["HEAD", "refs/heads/main", "refs/remotes/any", "refs/notes/any"] {
-        assert!(store.should_autocreate_reflog(Path::new(should_create_name)));
+        assert!(
+            store.autocreates_reflog(Path::new(should_create_name)),
+            "{should_create_name}"
+        );
     }
-    for should_not_create_name in &["FETCH_HEAD", "SOMETHING", "refs/special/this", "refs/tags/0.1.0"] {
-        assert!(!store.should_autocreate_reflog(Path::new(should_not_create_name)));
+    for should_not_create_name in &[
+        "FETCH_HEAD",
+        "SOMETHING",
+        "refs/special/this",
+        "refs/tags/0.1.0",
+        "refs/worktree/private",
+    ] {
+        assert!(
+            !store.autocreates_reflog(Path::new(should_not_create_name)),
+            "{should_not_create_name}: Git doesn't create reflogs for it"
+        );
+    }
+    for mode in [WriteReflog::Existing, WriteReflog::Disable] {
+        let (_keep, store) = empty_store(mode)?;
+        assert!(
+            !store.autocreates_reflog(Path::new("refs/heads/main")),
+            "{mode:?} creates nothing unless forced"
+        );
     }
     Ok(())
 }
@@ -130,7 +154,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
                     }
                 );
             }
-            WriteReflog::Disable => {
+            WriteReflog::Disable | WriteReflog::Existing => {
                 assert!(
                     store.reflog_iter(full_name, &mut buf)?.is_none(),
                     "there is no logs in disabled mode"
@@ -167,7 +191,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
                     "the empty directory was replaced with the reflog file"
                 );
             }
-            WriteReflog::Disable => {
+            WriteReflog::Disable | WriteReflog::Existing => {
                 assert!(
                     store.reflog_iter(full_name_str, &mut buf)?.is_none(),
                     "reflog still doesn't exist"

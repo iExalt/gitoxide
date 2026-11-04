@@ -137,6 +137,7 @@ fn should_write_log(mode: WriteReflog, name: &BStr, lookup: &impl Lookup) -> Res
     Ok(match mode {
         WriteReflog::Disable => false,
         WriteReflog::Always => true,
+        WriteReflog::Existing => lookup.reflog_exists(name)?,
         WriteReflog::Normal => {
             name.starts_with(b"refs/heads/")
                 || name.starts_with(b"refs/remotes/")
@@ -460,6 +461,7 @@ mod tests {
         for (mode, forced, expected_entry) in [
             (WriteReflog::Normal, false, true),
             (WriteReflog::Always, false, true),
+            (WriteReflog::Existing, false, true),
             (WriteReflog::Disable, false, false),
             (WriteReflog::Disable, true, false),
         ] {

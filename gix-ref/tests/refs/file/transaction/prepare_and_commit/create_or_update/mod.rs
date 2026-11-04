@@ -884,6 +884,7 @@ fn symbolic_head_missing_referent_then_update_referent() -> TestResult {
                         "nothing is ever written if its disabled"
                     );
                 }
+                other => panic!("{other:?} isn't a mode of this test"),
             }
         }
     }

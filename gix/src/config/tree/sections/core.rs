@@ -474,7 +474,7 @@ mod log_all_ref_updates {
                 Ok(Some(bool)) => Ok(Some(if bool {
                     gix_ref::store::WriteReflog::Normal
                 } else {
-                    gix_ref::store::WriteReflog::Disable
+                    gix_ref::store::WriteReflog::Existing
                 })),
                 Err(err) => {
                     let Some(MetadataValue::Bytes(value)) = err.metadata().find_map(|metadata| metadata.get("input"))

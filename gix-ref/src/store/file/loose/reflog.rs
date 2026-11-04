@@ -157,7 +157,7 @@ pub mod create_or_update {
             }
             let (reflog_base, full_name) = self.reflog_base_and_relative_path(name)?;
             match self.write_reflog {
-                WriteReflog::Normal | WriteReflog::Always => {
+                WriteReflog::Normal | WriteReflog::Always | WriteReflog::Existing => {
                     if self.write_reflog == WriteReflog::Always {
                         force_create_reflog = true;
                     }
@@ -165,7 +165,8 @@ pub mod create_or_update {
                     options.append(true).read(false);
                     let log_path = reflog_base.join(&full_name);
 
-                    if force_create_reflog || self.should_autocreate_reflog(&full_name) {
+                    let creating = force_create_reflog || self.autocreates_reflog(&full_name);
+                    if creating {
                         let parent_dir = log_path.parent().expect("always with parent directory");
                         gix_fs::dir::create::all(parent_dir, Default::default(), 0)
                             .or_raise(|| Message::new("Could not create reflog directory").with("path", parent_dir))?;
@@ -177,7 +178,10 @@ pub mod create_or_update {
                         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
                         Err(err) => {
                             // TODO: when Kind::IsADirectory becomes stable, use that.
-                            if log_path.is_dir() {
+                            if !creating && log_path.is_dir() {
+                                // There is no reflog, only something in its place that nobody asked to be replaced.
+                                None
+                            } else if log_path.is_dir() {
                                 gix_fs::dir::remove::empty_depth_first(log_path.clone())
                                     .and_then(|_| options.open(&log_path))
                                     .map(Some)
@@ -219,21 +223,21 @@ pub mod create_or_update {
             let (reflog_base, full_name) = self.reflog_base_and_relative_path(name)?;
             Ok(match self.write_reflog {
                 WriteReflog::Disable => false,
-                WriteReflog::Normal | WriteReflog::Always => {
+                WriteReflog::Normal | WriteReflog::Always | WriteReflog::Existing => {
                     force_create_reflog |= self.write_reflog == WriteReflog::Always;
-                    force_create_reflog
-                        || self.should_autocreate_reflog(&full_name)
-                        || reflog_base.join(&full_name).is_file()
+                    force_create_reflog || self.autocreates_reflog(&full_name) || reflog_base.join(&full_name).is_file()
                 }
             })
         }
 
-        fn should_autocreate_reflog(&self, full_name: &Path) -> bool {
-            full_name.starts_with("refs/heads/")
-                || full_name.starts_with("refs/remotes/")
-                || full_name.starts_with("refs/notes/")
-                || full_name.starts_with("refs/worktree/") // NOTE: git does not write reflogs for worktree private refs
-                || full_name == Path::new("HEAD")
+        /// Return `true` if the reflog of `full_name` is created if it doesn't exist, without anybody forcing it, which is
+        /// what Git's `should_autocreate_reflog()` says, and happens for no reference with `WriteReflog::Existing`.
+        fn autocreates_reflog(&self, full_name: &Path) -> bool {
+            self.write_reflog == WriteReflog::Normal
+                && (full_name.starts_with("refs/heads/")
+                    || full_name.starts_with("refs/remotes/")
+                    || full_name.starts_with("refs/notes/")
+                    || full_name == Path::new("HEAD"))
         }
 
         /// Returns the base paths for all reflogs
