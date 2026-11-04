@@ -3,12 +3,50 @@ use std::{
     any::Any,
     borrow::Cow,
     ops::{Deref, DerefMut},
+    sync::Arc,
     time::Duration,
 };
 
 use bstr::BStr;
 
 use crate::{Protocol, client::Error};
+
+/// A way to end what a transport is blocked on from another thread, which is obtained with
+/// [`TransportWithoutIO::interrupt_handle()`] and can be cloned and sent to the thread that watches for cancellation.
+///
+/// Interrupting makes the operation that blocks fail, as promptly as the transport can notice, with an error that says so
+/// if the transport can tell, and every later operation fail as well. The transport can't be used afterwards.
+/// Calling it more than once, or after the transport was dropped, is fine.
+#[derive(Clone)]
+pub struct InterruptHandle(Arc<dyn Fn() + Send + Sync>);
+
+impl InterruptHandle {
+    /// Create a handle that runs `interrupt` when it is used.
+    pub fn new(interrupt: impl Fn() + Send + Sync + 'static) -> Self {
+        InterruptHandle(Arc::new(interrupt))
+    }
+
+    /// End what the transport is blocked on, and make it fail from now on.
+    pub fn interrupt(&self) {
+        (self.0)();
+    }
+}
+
+/// The error of an operation that was ended by an [`InterruptHandle`], which is [cancelled](gix_error::Class::Cancelled).
+///
+/// Its kind isn't [`std::io::ErrorKind::Interrupted`], as readers retry on that.
+#[cfg(feature = "blocking-client")]
+pub(crate) fn interrupted_error() -> std::io::Error {
+    std::io::Error::other(gix_error::ErrorExt::raise(gix_error::cancelled(
+        "The transport was interrupted",
+    )))
+}
+
+impl std::fmt::Debug for InterruptHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InterruptHandle")
+    }
+}
 
 /// This trait represents all transport related functions that don't require any input/output to be done which helps
 /// implementation to share more code across blocking and async programs.
@@ -67,6 +105,15 @@ pub trait TransportWithoutIO {
     fn wait_for_server(&mut self, _deadline: Duration) -> Result<bool> {
         Ok(true)
     }
+
+    /// Return a handle that ends what this transport blocks on from another thread, or `None` if it can't, in which case a
+    /// blocked read or write only ends when the peer acts or the transport drops.
+    ///
+    /// Get it before the first request, as the handshake can block too. This is how cancellation reaches I/O that would
+    /// otherwise not look at a flag until it returns, such as a connection to a server that stopped responding.
+    fn interrupt_handle(&self) -> Option<InterruptHandle> {
+        None
+    }
 }
 
 // Would be nice if the box implementation could auto-forward to all implemented traits.
@@ -94,6 +141,10 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
     fn wait_for_server(&mut self, deadline: Duration) -> Result<bool> {
         self.deref_mut().wait_for_server(deadline)
     }
+
+    fn interrupt_handle(&self) -> Option<InterruptHandle> {
+        self.deref().interrupt_handle()
+    }
 }
 
 impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
@@ -119,5 +170,9 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
 
     fn wait_for_server(&mut self, deadline: Duration) -> Result<bool> {
         self.deref_mut().wait_for_server(deadline)
+    }
+
+    fn interrupt_handle(&self) -> Option<InterruptHandle> {
+        self.deref().interrupt_handle()
     }
 }
