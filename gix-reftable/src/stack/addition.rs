@@ -47,12 +47,40 @@ impl std::error::Error for UncertainAfterPublish {}
 /// Tables that were added are removed again when the addition is dropped without having been committed.
 #[derive(Debug)]
 pub struct Addition<'a> {
-    stack: &'a mut Stack,
+    stack: Handle<'a>,
     lock: Option<gix_lock::File>,
     next_update_index: u64,
     created: Vec<Created>,
     /// Whether the new list is, or may be, in place, so that the tables must be left alone.
     published: bool,
+}
+
+/// The stack of an [`Addition`], which either borrows it or, if the addition has to outlive the code that created it,
+/// owns it.
+#[derive(Debug)]
+enum Handle<'a> {
+    Borrowed(&'a mut Stack),
+    Owned(Stack),
+}
+
+impl std::ops::Deref for Handle<'_> {
+    type Target = Stack;
+
+    fn deref(&self) -> &Stack {
+        match self {
+            Handle::Borrowed(stack) => stack,
+            Handle::Owned(stack) => stack,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Handle<'_> {
+    fn deref_mut(&mut self) -> &mut Stack {
+        match self {
+            Handle::Borrowed(stack) => stack,
+            Handle::Owned(stack) => stack,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -70,17 +98,16 @@ impl Stack {
     /// concluded from an older view, like the expected old value of a reference, needs to be checked against the one
     /// of the addition.
     pub fn addition(&mut self) -> Result<Addition<'_>> {
-        let lock = self.lock_list()?;
-        // Nobody else can replace the list now, so this is what the new tables are added to.
-        self.reload()?;
-        let next_update_index = self.snapshot.next_update_index();
-        Ok(Addition {
-            stack: self,
-            lock: Some(lock),
-            next_update_index,
-            created: Vec::new(),
-            published: false,
-        })
+        Addition::new(Handle::Borrowed(self))
+    }
+
+    /// Like [`addition()`](Self::addition()), but the addition owns the stack, so it can be kept for as long as needed,
+    /// for example between preparing and committing a transaction.
+    ///
+    /// The stack is lost along with the addition, which is why this takes it by value: use
+    /// [`from_snapshot()`](Self::from_snapshot()) to get one without reading anything.
+    pub fn into_addition(self) -> Result<Addition<'static>> {
+        Addition::new(Handle::Owned(self))
     }
 
     /// Take the lock of `tables.list`, waiting as long as the options say.
@@ -95,6 +122,22 @@ impl Stack {
             None,
             self.options.shared_repository_permissions,
         )
+    }
+}
+
+impl<'a> Addition<'a> {
+    fn new(mut stack: Handle<'a>) -> Result<Self> {
+        let lock = stack.lock_list()?;
+        // Nobody else can replace the list now, so this is what the new tables are added to.
+        stack.reload()?;
+        let next_update_index = stack.snapshot.next_update_index();
+        Ok(Addition {
+            stack,
+            lock: Some(lock),
+            next_update_index,
+            created: Vec::new(),
+            published: false,
+        })
     }
 }
 
@@ -161,11 +204,13 @@ impl Addition<'_> {
             .chain(created.iter().cloned())
             .collect();
 
+        #[cfg(test)]
+        let inject = self.stack.inject.take();
         let result = files::publish_list(
             &self.stack.dir,
             &self.stack.options,
             #[cfg(test)]
-            self.stack.inject.take(),
+            inject,
             lock,
             &names,
             &created,
@@ -199,10 +244,11 @@ impl Drop for Addition<'_> {
 mod tests {
     use gix_hash::Kind;
 
-    use super::UncertainAfterPublish;
+    use super::{Addition, UncertainAfterPublish};
     use crate::{
         Stack,
         record::{RefRecord, RefValue},
+        stack::Options,
         stack::files::Inject,
     };
 
@@ -290,5 +336,77 @@ mod tests {
             dir.path().join(&uncertain.tables[0]).is_file(),
             "tables that might be listed are never deleted"
         );
+    }
+
+    fn add_one(addition: &mut Addition<'_>, name: &str) -> gix_error::Result<bool> {
+        addition.add_table(|writer| {
+            writer.add_ref(RefRecord {
+                refname: name.into(),
+                update_index: writer.limits().0,
+                value: RefValue::Val1(Kind::Sha1.null()),
+            })
+        })
+    }
+
+    #[test]
+    fn an_addition_that_owns_its_stack_can_be_kept_and_moved_to_other_threads() {
+        fn assert_send<T: Send + 'static>(_: &T) {}
+        let dir = gix_testtools::tempfile::tempdir().expect("tempdir");
+        let snapshot = Stack::open(dir.path(), Kind::Sha1).expect("empty").snapshot().clone();
+        let mut addition = Stack::from_snapshot(dir.path(), Kind::Sha1, Options::default(), snapshot)
+            .into_addition()
+            .expect("lock");
+        assert_send(&addition);
+        assert!(add_one(&mut addition, "refs/heads/main").expect("table"));
+        assert!(addition.commit().expect("published"));
+        assert_eq!(
+            Stack::open(dir.path(), Kind::Sha1)
+                .expect("reopen")
+                .snapshot()
+                .tables()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_stale_snapshot_is_replaced_under_the_lock_so_that_no_concurrent_table_gets_lost() {
+        let dir = gix_testtools::tempfile::tempdir().expect("tempdir");
+        let mut other = Stack::open(dir.path(), Kind::Sha1).expect("empty stack");
+        let stale = other.snapshot().clone();
+        assert!(publish_one(&mut other).expect("concurrent writer"));
+
+        let mut addition = Stack::from_snapshot(dir.path(), Kind::Sha1, Options::default(), stale)
+            .into_addition()
+            .expect("lock");
+        assert_eq!(
+            addition.snapshot().tables().len(),
+            1,
+            "the addition sees what the concurrent writer published"
+        );
+        assert_eq!(addition.next_update_index(), 2, "the new table follows it");
+        assert!(add_one(&mut addition, "refs/heads/other").expect("table"));
+        assert!(addition.commit().expect("published"));
+
+        let stack = Stack::open(dir.path(), Kind::Sha1).expect("reopen");
+        let indices: Vec<_> = stack
+            .snapshot()
+            .tables()
+            .iter()
+            .map(crate::table::Table::min_update_index)
+            .collect();
+        assert_eq!(indices, [1, 2], "both tables are listed, in order");
+    }
+
+    #[test]
+    fn dropping_an_owned_addition_removes_its_tables_and_releases_the_lock() {
+        let dir = gix_testtools::tempfile::tempdir().expect("tempdir");
+        let snapshot = Stack::open(dir.path(), Kind::Sha1).expect("empty").snapshot().clone();
+        let mut addition = Stack::from_snapshot(dir.path(), Kind::Sha1, Options::default(), snapshot)
+            .into_addition()
+            .expect("lock");
+        assert!(add_one(&mut addition, "refs/heads/main").expect("table"));
+        drop(addition);
+        assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
     }
 }
