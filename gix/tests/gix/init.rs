@@ -691,3 +691,77 @@ mod ref_format {
         }
     }
 }
+
+mod init_or_open {
+    use gix_testtools::{TestResult, tempfile};
+
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_or_empty_directory_gets_a_repository_and_an_existing_one_is_left_alone() -> TestResult {
+        let _environment = gix_testtools::isolate_git_environment()?;
+        let tmp = tempfile::tempdir()?;
+        let directory = tmp.path().join("new");
+
+        let created = gix::init_or_open(&directory)?;
+        assert_eq!(
+            created.workdir(),
+            Some(directory.as_path()),
+            "a missing directory is created"
+        );
+        assert!(created.head()?.is_unborn(), "the new repository is empty");
+
+        gix_testtools::git(&directory, "commit --allow-empty -m first")?;
+        gix_testtools::git(&directory, "config custom.setting kept")?;
+        let config_before = std::fs::read(directory.join(".git/config"))?;
+        let head_before = std::fs::read(directory.join(".git/HEAD"))?;
+
+        let reopened = gix::init_or_open(&directory)?;
+        assert_eq!(
+            reopened.head_id()?.to_string().len(),
+            reopened.object_hash().len_in_hex()
+        );
+        assert_eq!(
+            std::fs::read(directory.join(".git/config"))?,
+            config_before,
+            "the configuration is not rewritten"
+        );
+        assert_eq!(
+            std::fs::read(directory.join(".git/HEAD"))?,
+            head_before,
+            "HEAD stays where it was, unlike what initializing again would risk"
+        );
+
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty)?;
+        gix::init_or_open(&empty)?;
+        assert!(empty.join(".git").is_dir(), "an empty directory is initialized");
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_directory_inside_a_repository_gets_its_own_and_a_broken_repository_is_an_error() -> TestResult {
+        let _environment = gix_testtools::isolate_git_environment()?;
+        let tmp = tempfile::tempdir()?;
+        let outer = gix::init_or_open(tmp.path().join("outer"))?;
+        let inner_dir = outer.workdir().expect("non-bare").join("inner");
+        std::fs::create_dir(&inner_dir)?;
+        let inner = gix::init_or_open(&inner_dir)?;
+        assert_eq!(
+            inner.workdir(),
+            Some(inner_dir.as_path()),
+            "parent directories are not searched, so the repository is the one that was asked for"
+        );
+
+        let broken = tmp.path().join("broken");
+        std::fs::create_dir_all(broken.join(".git"))?;
+        std::fs::write(broken.join(".git/not-a-repository"), "")?;
+        gix::init_or_open(&broken)
+            .expect_err("a directory that looks like a broken repository is not initialized over");
+        assert!(
+            !broken.join(".git/HEAD").exists(),
+            "nothing was written into the broken repository"
+        );
+        Ok(())
+    }
+}
