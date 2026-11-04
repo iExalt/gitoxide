@@ -243,9 +243,11 @@ benchmark, fault experiment, conversion, or runtime acceptance is claimed by thi
 An overseer session runs these threads as separate worker sessions, each using
 `keep-me-in-the-loop`. Builds and tests run on a shared Linux host, never on the owner's
 laptop. Each worker uses `cargo -j4`, and only one thorough check runs at a time. The
-routine-check budget is 120 seconds against a warm baseline of 94–109 seconds. The
-thorough-check budget is 12 minutes against a warm baseline of 530 seconds. No spending
-beyond existing subscriptions is approved.
+`mise run test` budget is 120 seconds against a warm baseline of 94–109 seconds for core
+plumbing edits. `mise run check`, the affected-package gate before a PR, has no recorded
+baseline yet; workers report its runtime and selection. The
+thorough-check budget is 12 minutes against a warm baseline of 530 seconds. No spending beyond
+existing subscriptions is approved.
 
 | Thread | Scope | Depends on | Human | State |
 | --- | --- | --- | --- | --- |
