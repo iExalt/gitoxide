@@ -43,7 +43,8 @@ pub struct Store {
     pub(crate) write_reflog: WriteReflog,
     pub(crate) namespace: Option<Namespace>,
     unsupported_backend: Option<String>,
-    stack_options: std::result::Result<StackOptions, std::sync::Arc<gix_error::Error>>,
+    /// Shared, as it is larger than all the other fields, which keeps the store small as it is cloned along with repositories.
+    stack_options: OwnShared<std::result::Result<StackOptions, std::sync::Arc<gix_error::Error>>>,
     stacks: OwnShared<stacks::Stacks>,
 }
 
@@ -93,7 +94,7 @@ impl Store {
             write_reflog: options.write_reflog,
             namespace: None,
             unsupported_backend: None,
-            stack_options: Ok(StackOptions::default()),
+            stack_options: OwnShared::new(Ok(StackOptions::default())),
             stacks: OwnShared::new(stacks),
         }
     }
@@ -108,7 +109,7 @@ impl Store {
             write_reflog: self.write_reflog,
             namespace: self.namespace.clone(),
             unsupported_backend: self.unsupported_backend.clone(),
-            stack_options: self.stack_options.clone(),
+            stack_options: OwnShared::clone(&self.stack_options),
         }
     }
 }
@@ -123,13 +124,13 @@ impl Store {
     /// which reads reftable configuration when it writes for the first time and thus can read references with invalid
     /// settings.
     pub fn set_stack_options(&mut self, options: Result<StackOptions>) {
-        self.stack_options = options.map_err(std::sync::Arc::new);
+        self.stack_options = OwnShared::new(options.map_err(std::sync::Arc::new));
     }
 
     /// The options with which stacks are changed, or the reason they are invalid, see
     /// [`set_stack_options()`](Self::set_stack_options()).
     pub fn stack_options(&self) -> Result<&StackOptions> {
-        self.stack_options.as_ref().map_err(|reason| {
+        (*self.stack_options).as_ref().map_err(|reason| {
             InvalidOptions(reason.clone()).and_raise(gix_error::validation("The reftable configuration is invalid"))
         })
     }
