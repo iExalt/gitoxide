@@ -240,22 +240,27 @@ fn rename_a_to_a_slash_b_in_one_transaction() -> TestResult {
             Fail::Immediately,
         )
         .unwrap_err();
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "path-prefix collisions are reported early, without losing the I/O kind", @r#"
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "path-prefix collisions are reported early, as the conflict they are", @r#"
     Could not prepare reference edit, reference="refs/heads/old/new"
 
     Caused by:
-        0: Another IO error occurred while obtaining the lock
-        1: I/O error (NotADirectory)
-        2: AlreadyExists
+        0: Reference 'refs/heads/old/new' can't be created as its name conflicts with that of another one
+        1: 'refs/heads/old' exists; cannot create 'refs/heads/old/new'
     "#);
 
+    let conflict = err
+        .downcast_any_ref::<gix_ref::transaction::NameConflict>()
+        .expect("a typed conflict that callers can recover from");
     assert_eq!(
-        err.downcast_any_ref::<std::io::Error>()
-            .expect("original I/O error")
-            .kind(),
-        std::io::ErrorKind::NotADirectory,
-        "path-prefix collisions are reported early, without losing the I/O kind"
+        (
+            conflict.full_name.as_slice(),
+            conflict.other.as_slice(),
+            conflict.in_transaction
+        ),
+        (b"refs/heads/old/new".as_slice(), b"refs/heads/old".as_slice(), false),
+        "Git refuses this too, even though the transaction deletes the reference that is in the way"
     );
+    assert!(err.is_conflict());
 
     let edits = store
         .transaction()

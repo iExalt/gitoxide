@@ -14,6 +14,9 @@
 //!   - errors when committing while leave the ref store in an inconsistent, but operational state.
 use gix_object::bstr::BString;
 
+mod availability;
+pub use availability::NameConflict;
+pub(crate) use availability::{ExistingRefs, verify_available};
 pub mod commit_failure;
 
 use crate::{FullName, Target};

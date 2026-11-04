@@ -25,7 +25,8 @@
 //! For recovery, downcast to [`view::NotFound`] to distinguish an absent reference from an absent object,
 //! [`file::find::ReferenceDecode`] for loose reference contents that could not be decoded,
 //! [`view::transaction::ReferenceOutOfDate`] or [`view::transaction::MustNotExist`] for a failed
-//! update constraint, and [`view::transaction::MissingCommitter`] for a missing reflog identity.
+//! update constraint, [`view::transaction::NameConflict`] for a reference name that is a directory of another one, and
+//! [`view::transaction::MissingCommitter`] for a missing reflog identity.
 //!
 //! ## Feature Flags
 #![cfg_attr(
