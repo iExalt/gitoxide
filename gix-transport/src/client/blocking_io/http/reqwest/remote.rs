@@ -45,12 +45,47 @@ fn authority_changed(curr_url: &reqwest::Url, prev_url: &reqwest::Url) -> bool {
         || curr_url.port_or_known_default() != prev_url.port_or_known_default()
 }
 
+/// Ends the requests of a worker from other threads, and keeps them ended.
+#[derive(Default)]
+pub(super) struct Cancel {
+    cancelled: std::sync::atomic::AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl Cancel {
+    pub(super) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.wake.notify_waiters();
+    }
+
+    /// Complete as soon as `cancel()` was called, which is immediately if that already happened.
+    async fn cancelled(&self) {
+        loop {
+            // Being registered before the flag is checked means that a call in between wakes this up.
+            let notified = self.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.cancelled.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
 impl Default for Remote {
     fn default() -> Self {
+        Self::with_cancel(Arc::default())
+    }
+}
+
+impl Remote {
+    fn with_cancel(cancel: Arc<Cancel>) -> Self {
         let (req_send, req_recv) = tokio::sync::mpsc::channel(1);
         let (res_send, res_recv) = tokio::sync::mpsc::channel(1);
         let redirected_base_url_shared = Arc::new(Mutex::new(None));
         let redirected_base_url_shared_for_field = redirected_base_url_shared.clone();
+        let worker_cancel = cancel.clone();
         let handle = std::thread::spawn(gix_trace::in_thread(move || -> Result {
             // One runtime that is driven for as long as the worker lives, as connections that idle in the pool
             // have to be polled to notice that the server closed them. Otherwise, the next request could pick a
@@ -59,7 +94,7 @@ impl Default for Remote {
                 .enable_all()
                 .build()
                 .or_raise(|| message("Could not start the runtime of the HTTP client"))?;
-            runtime.block_on(serve(req_recv, res_send, redirected_base_url_shared))
+            runtime.block_on(serve(req_recv, res_send, redirected_base_url_shared, worker_cancel))
         }));
 
         Remote {
@@ -68,6 +103,7 @@ impl Default for Remote {
             response: res_recv,
             config: http::Options::default(),
             redirected_base_url: redirected_base_url_shared_for_field,
+            cancel,
         }
     }
 }
@@ -290,15 +326,30 @@ fn build_client(
 
 /// A request body that is read from a pipe by a thread that blocks on it, so the pipe can be written to by blocking code.
 struct UploadStream {
-    chunks: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    /// Shared with the worker, which closes it to make the thread that fills it stop if the stream isn't polled anymore.
+    chunks: Arc<std::sync::Mutex<tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>>,
     meter: Arc<Meter>,
+    /// Completes when the transport is interrupted. The connection task keeps writing a body even if the future of the request
+    /// is dropped, so the body itself has to fail for the upload to end.
+    interrupted: Option<Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
 }
 
 impl futures_core::Stream for UploadStream {
     type Item = std::io::Result<Vec<u8>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let poll = self.chunks.poll_recv(cx);
+        if let Some(interrupted) = self.interrupted.as_mut()
+            && interrupted.as_mut().poll(cx).is_ready()
+        {
+            self.interrupted = None;
+            close_upload(&self.chunks);
+            return Poll::Ready(Some(Err(crate::client::interrupted_error())));
+        }
+        let poll = self
+            .chunks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .poll_recv(cx);
         match &poll {
             Poll::Ready(Some(Ok(chunk))) => {
                 self.meter.up.fetch_add(chunk.len() as u64, Ordering::Relaxed);
@@ -413,6 +464,25 @@ impl LowSpeed {
 
 /// Move everything from `reader` to `sender` until either side is done, which is what makes a request body that is
 /// written by a thread that isn't driven by the runtime available to it, with a bounded amount of buffering.
+/// Make the thread that feeds an upload stop, as nobody takes what it produces.
+fn close_upload(chunks: &std::sync::Mutex<tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>) {
+    chunks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).close();
+}
+
+/// Tell the reader of `writer` that its transfer failed, from a thread of its own.
+///
+/// The reader may not look yet, as it can still be writing the request, which only ends if the worker keeps running to
+/// fail the body. Blocking the worker until the reader arrives would stall that.
+fn send_failure(writer: pipe::Writer, failure: std::io::Error) {
+    std::thread::Builder::new()
+        .name("report a failed transfer".into())
+        .stack_size(128 * 1024)
+        .spawn(move || {
+            writer.channel.send(Err(failure)).ok();
+        })
+        .ok();
+}
+
 fn pump_upload(mut reader: pipe::Reader, sender: tokio::sync::mpsc::Sender<std::io::Result<Vec<u8>>>) {
     let mut buf = vec![0; 64 * 1024];
     loop {
@@ -441,6 +511,7 @@ async fn serve(
     mut requests: tokio::sync::mpsc::Receiver<Request>,
     responses: tokio::sync::mpsc::Sender<Response>,
     redirected_base_url_shared: Arc<Mutex<Option<String>>>,
+    cancel: Arc<Cancel>,
 ) -> Result {
     let mut follow = None;
     let redirect_action = Arc::new(Mutex::new(RedirectAction::Stop));
@@ -493,6 +564,7 @@ async fn serve(
             // Shut down as something is off.
             break;
         }
+        let mut upload = None;
         req_builder = match upload_body_kind {
             Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                 // It's sent with a `Content-Length`, as some servers and proxies don't handle chunked requests.
@@ -510,9 +582,13 @@ async fn serve(
             Some(PostBodyDataKind::Unbounded) => {
                 let (sender, receiver) = tokio::sync::mpsc::channel(1);
                 std::thread::spawn(move || pump_upload(post_body_rx, sender));
+                let receiver = Arc::new(std::sync::Mutex::new(receiver));
+                upload = Some(receiver.clone());
+                let cancel = cancel.clone();
                 req_builder.body(reqwest::Body::wrap_stream(UploadStream {
                     chunks: receiver,
                     meter: meter.clone(),
+                    interrupted: Some(Box::pin(async move { cancel.cancelled().await })),
                 }))
             }
             None => {
@@ -564,9 +640,19 @@ async fn serve(
         let mut www_authenticate = Vec::new();
         let sent = tokio::select! {
             biased;
+            () = cancel.cancelled() => {
+                if let Some(upload) = &upload {
+                    close_upload(upload);
+                }
+                send_failure(headers_tx, crate::client::interrupted_error());
+                continue;
+            }
             sent = client.execute(req) => sent,
             err = &mut watchdog => {
-                headers_tx.channel.send(Err(err)).ok();
+                if let Some(upload) = &upload {
+                    close_upload(upload);
+                }
+                send_failure(headers_tx, err);
                 continue;
             }
         };
@@ -655,9 +741,13 @@ async fn serve(
         loop {
             let chunk = tokio::select! {
                 biased;
+                () = cancel.cancelled() => {
+                    send_failure(response_body_tx, crate::client::interrupted_error());
+                    break;
+                }
                 chunk = res.chunk() => chunk,
                 err = &mut watchdog => {
-                    response_body_tx.channel.send(Err(err)).ok();
+                    send_failure(response_body_tx, err);
                     break;
                 }
             };
@@ -698,7 +788,7 @@ impl Remote {
             .expect("handler thread should never panic")
             .expect_err("something should have gone wrong with curl (we join on error only)");
         let config = std::mem::take(&mut self.config);
-        *self = Remote::default();
+        *self = Remote::with_cancel(self.cancel.clone());
         self.config = config;
         err_that_brought_thread_down.and_raise(message("Could not initialize the http client"))
     }
@@ -773,6 +863,12 @@ impl http::Http for Remote {
     type Headers = pipe::Reader;
     type ResponseBody = pipe::Reader;
     type PostBody = pipe::Writer;
+
+    /// The request in flight is dropped, which closes its connection, and later requests fail.
+    fn interrupt_handle(&self) -> Option<crate::client::InterruptHandle> {
+        let cancel = self.cancel.clone();
+        Some(crate::client::InterruptHandle::new(move || cancel.cancel()))
+    }
 
     fn get(
         &mut self,

@@ -11,6 +11,8 @@ pub struct Remote {
     config: crate::client::blocking_io::http::Options,
     /// The effective base URL after an accepted redirect.
     redirected_base_url: std::sync::Arc<parking_lot::Mutex<Option<String>>>,
+    /// Ends the requests of the worker, which outlives a restart of it, so handles stay valid.
+    cancel: std::sync::Arc<remote::Cancel>,
 }
 
 /// A function to configure a single request prior to sending it, support most complex configuration beyond what's possible with
