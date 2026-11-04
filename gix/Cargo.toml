@@ -476,11 +476,19 @@ gix-pack = { path = "../gix-pack", default-features = false, features = [
 ] }
 pretty_assertions = "1.4.0"
 gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
+# The peers of the `network` tests speak plain HTTP on the loopback interface, and credentials are only sent with this feature.
+# Cargo unifies it into every test of `gix`, so tests can't rely on the refusal to send credentials in clear text.
+gix-transport = { path = "../gix-transport", default-features = false, features = ["http-client-insecure-credentials"] }
 is_ci = "1.1.1"
 serial_test = { version = "3.4.0", default-features = false }
 async-std = { version = "1.12.0", features = ["attributes"] }
 termtree = "1.0.0"
 insta = { version = "1.46.3", features = ["filters"] }
+
+[[test]]
+name = "network"
+path = "tests/network/main.rs"
+required-features = ["blocking-network-client"]
 
 [package.metadata.docs.rs]
 features = [
@@ -560,6 +568,8 @@ tests = [
     { args = ["--features", "async-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     { args = ["--features", "blocking-network-client,sha256"] },
     { args = ["--features", "blocking-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    # Peers with authentication, over both HTTP backends and SSH; they cover both hashes themselves.
+    { args = ["--features", "blocking-http-transport-curl,blocking-http-transport-reqwest,sha256", "--test", "network"] },
     { args = ["--features", "reftable,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     { args = ["--no-default-features", "--features", "sha256", "--lib"] },
 ]
