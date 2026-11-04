@@ -26,7 +26,7 @@ fn proxy_peer(setup: &Setup) -> TestResult<HttpPeer> {
     })?)
 }
 
-fn ref_map<H: http::Http + Default + 'static>(
+pub(crate) fn ref_map<H: http::Http + Default + 'static>(
     setup: &Setup,
     url: &str,
     config: &[(&str, String)],

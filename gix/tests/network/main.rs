@@ -28,6 +28,7 @@ mod http_connections;
 mod http_fetch;
 mod http_low_speed;
 mod http_proxy;
+mod http_tls;
 mod ssh;
 mod ssh_config;
 
@@ -54,6 +55,47 @@ macro_rules! for_each_backend {
     }};
 }
 pub(crate) use for_each_backend;
+
+/// Like [`for_each_backend!`], but for the backends that were built with TLS support, to test `https://`.
+#[cfg(any(
+    feature = "blocking-http-transport-curl-openssl",
+    feature = "blocking-http-transport-curl-rustls",
+    feature = "blocking-http-transport-reqwest-rust-tls",
+    feature = "blocking-http-transport-reqwest-rust-tls-ring",
+    feature = "blocking-http-transport-reqwest-rust-tls-trust-dns",
+    feature = "blocking-http-transport-reqwest-native-tls"
+))]
+macro_rules! for_each_tls_backend {
+    ($case:ident($($arg:expr),*)) => {{
+        #[cfg(any(
+            feature = "blocking-http-transport-curl-openssl",
+            feature = "blocking-http-transport-curl-rustls"
+        ))]
+        {
+            eprintln!("backend: curl");
+            $case::<http::curl::Curl>($($arg),*)?;
+        }
+        #[cfg(any(
+            feature = "blocking-http-transport-reqwest-rust-tls",
+    feature = "blocking-http-transport-reqwest-rust-tls-ring",
+            feature = "blocking-http-transport-reqwest-rust-tls-trust-dns",
+            feature = "blocking-http-transport-reqwest-native-tls"
+        ))]
+        {
+            eprintln!("backend: reqwest");
+            $case::<http::reqwest::Remote>($($arg),*)?;
+        }
+    }};
+}
+#[cfg(any(
+    feature = "blocking-http-transport-curl-openssl",
+    feature = "blocking-http-transport-curl-rustls",
+    feature = "blocking-http-transport-reqwest-rust-tls",
+    feature = "blocking-http-transport-reqwest-rust-tls-ring",
+    feature = "blocking-http-transport-reqwest-rust-tls-trust-dns",
+    feature = "blocking-http-transport-reqwest-native-tls"
+))]
+pub(crate) use for_each_tls_backend;
 
 /// The credentials every peer here accepts.
 pub(crate) const USER: &str = "user";
