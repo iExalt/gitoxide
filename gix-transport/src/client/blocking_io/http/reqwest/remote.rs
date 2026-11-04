@@ -3,9 +3,12 @@ use std::{
     io::{Read, Write},
     pin::Pin,
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gix_error::{Class, Error, ErrorExt, Result, ResultExt, message};
@@ -145,13 +148,125 @@ fn build_client(
 }
 
 /// A request body that is read from a pipe by a thread that blocks on it, so the pipe can be written to by blocking code.
-struct UploadStream(tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>);
+struct UploadStream {
+    chunks: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    meter: Arc<Meter>,
+}
 
 impl futures_core::Stream for UploadStream {
     type Item = std::io::Result<Vec<u8>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.0.poll_recv(cx)
+        let poll = self.chunks.poll_recv(cx);
+        match &poll {
+            Poll::Ready(Some(Ok(chunk))) => {
+                self.meter.up.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+            Poll::Ready(None) => self.meter.request_body_sent.store(true, Ordering::Relaxed),
+            _ => {}
+        }
+        poll
+    }
+}
+
+/// Evaluate `result`, and if it's an error, make the receiver of the response see it before the worker stops, rather
+/// than headers and a body that are empty without a reason.
+macro_rules! or_report {
+    ($headers:expr, $result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(err) => {
+                $headers
+                    .channel
+                    .send(Err(std::io::Error::other(
+                        gix_error::message!("The HTTP worker failed and stops: {err:?}").raise(),
+                    )))
+                    .ok();
+                return Err(err);
+            }
+        }
+    };
+}
+
+/// What has been transferred of the current request, which is what the low-speed limits look at.
+#[derive(Default)]
+struct Meter {
+    /// The bytes of the request body that were handed to the connection.
+    up: AtomicU64,
+    /// The bytes of the response body that were received.
+    down: AtomicU64,
+    /// `true` once the entire request body was handed to the connection.
+    request_body_sent: AtomicBool,
+}
+
+/// The low-speed limits of `curl`: a transfer fails if it moves fewer than `limit` bytes per second for `time`.
+#[derive(Clone, Copy)]
+struct LowSpeed {
+    limit: u32,
+    time: Duration,
+}
+
+impl LowSpeed {
+    fn from_options(config: &http::Options) -> Option<Self> {
+        (config.low_speed_limit_bytes_per_second > 0 && config.low_speed_time_seconds > 0).then_some(LowSpeed {
+            limit: config.low_speed_limit_bytes_per_second,
+            time: Duration::from_secs(config.low_speed_time_seconds),
+        })
+    }
+
+    /// Watch `meter` each second, and return the error to fail the transfer with once it's been too slow for too long.
+    ///
+    /// This follows `curl`. The speed is the larger of the bytes sent and received per second, averaged over the last five seconds.
+    /// The clock of the limit starts with the first sample that is too slow, and stops with a sample that is fast enough.
+    /// The time in which the runtime can't run, which is the time that is spent waiting for the consumer of the response, shows up
+    /// as a single slow sample. As with `curl`, that alone doesn't end the transfer, as the data that was held back
+    /// flows again after it.
+    /// Never returns if the transfer is fast enough, which is why it is meant to be raced against it.
+    async fn watch(self, meter: &Meter) -> std::io::Error {
+        const WINDOW: usize = 5;
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut samples = std::collections::VecDeque::from([(Instant::now(), 0u64, 0u64)]);
+        ticker.tick().await; // the first tick is immediate
+        // When the speed was first too low, and for how many samples that has been the case since.
+        let mut slow: Option<(Instant, u64)> = None;
+        loop {
+            ticker.tick().await;
+            let now = Instant::now();
+            let (up, down) = (meter.up.load(Ordering::Relaxed), meter.down.load(Ordering::Relaxed));
+            let &(oldest, oldest_up, oldest_down) = samples.front().expect("at least one sample");
+            let moved = (up - oldest_up).max(down - oldest_down) as f64;
+            let speed = moved / now.duration_since(oldest).as_secs_f64();
+            samples.push_back((now, up, down));
+            if samples.len() > WINDOW {
+                samples.pop_front();
+            }
+            if speed < f64::from(self.limit) {
+                let (since, samples_since) = slow.get_or_insert((now, 0));
+                *samples_since += 1;
+                // Samples are a second apart, but the time between them is a little off, which could let a sample
+                // that is due be missed by a hair, so both ways of counting are used.
+                if now.duration_since(*since) >= self.time || *samples_since > self.time.as_secs() {
+                    let err = gix_error::ClassificationMarker::with_source(
+                        Class::Retryable,
+                        std::io::Error::from(std::io::ErrorKind::TimedOut),
+                    )
+                    .and_raise(message!(
+                        "The transfer was slower than {} bytes per second for {} seconds, and {}",
+                        self.limit,
+                        self.time.as_secs(),
+                        if meter.request_body_sent.load(Ordering::Relaxed) {
+                            "the entire request had been handed to the connection"
+                        } else {
+                            "the request had not been handed to the connection entirely"
+                        }
+                    ));
+                    return std::io::Error::new(std::io::ErrorKind::TimedOut, err);
+                }
+            } else {
+                slow = None;
+            }
+        }
     }
 }
 
@@ -213,6 +328,7 @@ async fn serve(
             client.get(&effective_url)
         }
         .headers(headers);
+        let meter = Arc::new(Meter::default());
         let (post_body_tx, mut post_body_rx) = pipe::unidirectional(0);
         let (mut response_body_tx, response_body_rx) = pipe::unidirectional(0);
         let (mut headers_tx, headers_rx) = pipe::unidirectional(0);
@@ -233,29 +349,46 @@ async fn serve(
             Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                 // It's sent with a `Content-Length`, as some servers and proxies don't handle chunked requests.
                 let mut buf = Vec::<u8>::with_capacity(512);
-                post_body_rx
-                    .read_to_end(&mut buf)
-                    .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
+                or_report!(
+                    headers_tx,
+                    post_body_rx
+                        .read_to_end(&mut buf)
+                        .or_raise(|| message("Could not finish reading all data to post to the remote"))
+                );
+                meter.up.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                meter.request_body_sent.store(true, Ordering::Relaxed);
                 req_builder.body(buf)
             }
             Some(PostBodyDataKind::Unbounded) => {
                 let (sender, receiver) = tokio::sync::mpsc::channel(1);
                 std::thread::spawn(move || pump_upload(post_body_rx, sender));
-                req_builder.body(reqwest::Body::wrap_stream(UploadStream(receiver)))
+                req_builder.body(reqwest::Body::wrap_stream(UploadStream {
+                    chunks: receiver,
+                    meter: meter.clone(),
+                }))
             }
-            None => req_builder,
+            None => {
+                meter.request_body_sent.store(true, Ordering::Relaxed);
+                req_builder
+            }
         };
-        let mut req = req_builder
-            .build()
-            .map_err(classify_reqwest)
-            .or_raise(|| message("Could not build HTTP request"))?;
+        let mut req = or_report!(
+            headers_tx,
+            req_builder
+                .build()
+                .map_err(classify_reqwest)
+                .or_raise(|| message("Could not build HTTP request"))
+        );
         let mut has_configure_request = false;
         if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok())
             && let Some(options) = request_options.downcast_mut::<super::Options>()
             && let Some(configure_request) = &mut options.configure_request
         {
             has_configure_request = true;
-            configure_request(&mut req).or_raise(|| message("Request configuration failed"))?;
+            or_report!(
+                headers_tx,
+                configure_request(&mut req).or_raise(|| message("Request configuration failed"))
+            );
         }
 
         let follow = follow.get_or_insert(config.follow_redirects);
@@ -270,8 +403,26 @@ async fn serve(
             *follow = FollowRedirects::None;
         }
 
+        // The watchdog is raced against everything that waits for the server, so that a transfer that stalls ends, and the
+        // futures that wait are dropped, which closes the connection.
+        // This starts after the body of the request was read from the caller, which is local, and not what the limits are for.
+        let low_speed = LowSpeed::from_options(&config);
+        let mut watchdog = std::pin::pin!(async {
+            match low_speed {
+                Some(low_speed) => low_speed.watch(&meter).await,
+                None => std::future::pending().await,
+            }
+        });
         let mut www_authenticate = Vec::new();
-        let mut res = match client.execute(req).await.and_then(|res| {
+        let sent = tokio::select! {
+            biased;
+            sent = client.execute(req) => sent,
+            err = &mut watchdog => {
+                headers_tx.channel.send(Err(err)).ok();
+                continue;
+            }
+        };
+        let mut res = match sent.and_then(|res| {
             if res.status() == reqwest::StatusCode::UNAUTHORIZED {
                 www_authenticate = res
                     .headers()
@@ -289,7 +440,7 @@ async fn serve(
                 if let Some(actual_url) = err.url().map(reqwest::Url::as_str)
                     && actual_url != effective_url
                 {
-                    let new_base_url = redirect::base_url(actual_url, &base_url, url.clone())?;
+                    let new_base_url = or_report!(headers_tx, redirect::base_url(actual_url, &base_url, url.clone()));
                     *redirected_base_url_shared.lock() = Some(new_base_url);
                 }
                 let err = match err.status() {
@@ -320,7 +471,7 @@ async fn serve(
 
         let actual_url = res.url().as_str();
         if actual_url != effective_url.as_str() {
-            let new_base_url = redirect::base_url(actual_url, &base_url, url)?;
+            let new_base_url = or_report!(headers_tx, redirect::base_url(actual_url, &base_url, url));
             *redirected_base_url_shared.lock() = Some(new_base_url);
         }
 
@@ -342,11 +493,22 @@ async fn serve(
         // Reading the response body is streaming and may fail for many reasons. If so, we send the error over the response
         // body channel and that's all we can do.
         loop {
-            match res.chunk().await {
+            let chunk = tokio::select! {
+                biased;
+                chunk = res.chunk() => chunk,
+                err = &mut watchdog => {
+                    response_body_tx.channel.send(Err(err)).ok();
+                    break;
+                }
+            };
+            match chunk {
                 Ok(Some(chunk)) => {
+                    meter.down.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                     // This blocks the runtime for as long as the consumer doesn't take the data, which is intended: nothing else
                     // runs meanwhile, and a consumer that stalls is a stalled transfer for the low-speed limits, as with `curl`
                     // whose callback blocks in the same way. Handing this off to another thread would change that.
+                    // With HTTP/2 the other streams of the connection, its pings and its flow control wait as well, which
+                    // only matters for stalls so short that the low-speed limits don't end them.
                     if response_body_tx.write_all(&chunk).is_err() {
                         break;
                     }
