@@ -69,6 +69,30 @@ Warm task durations (seconds):
 | journey | 108 |
 | api | 26 |
 
+### Remeasured on 2026-11-04
+
+The push-support work added `gix-reftable` and `gix-hook`, about 43k lines across 114 commits, and
+about 450 native tests per fixture pass. The old and new trees were timed back to back on an 8-vCPU
+host of the same class, with the same stage set, git 2.56.0 and nothing else holding the thorough
+lock. Each row is one sample, with a load between 1 and 2 when it started. Other sessions on the host
+raised the load during the runs.
+
+| Run | Tree | Wall | CPU user + sys |
+| --- | --- | --- | --- |
+| Warm | `a2571afc8`, the merged tree the baseline above was taken on | 542 s | 538 + 636 s |
+| Warm | `b0eba4c98` | 615 s | 592 + 717 s |
+| Warm, after touching `gix-ref/src/lib.rs` | `b0eba4c98` | 1,372 s | 2,383 + 988 s |
+| Empty `target/` | `a2571afc8` | 1,687 s | 4,095 + 1,313 s |
+| Empty `target/` | `b0eba4c98` | 1,835 s | 4,520 + 1,433 s |
+
+- **Warm runs:** the 73 s of warm growth is `native-tests` (+53 s, mostly its second fixture pass)
+  and `feature-tests` (+20 s), where the new tests are. The other tasks didn't change. Warm runs stay
+  within the 12-minute budget.
+- **After a `gix-ref` change:** a change that reaches `gix-ref` rebuilds most of the workspace, so
+  that run takes about twice as long. That's a property of where `gix-ref` sits in the dependency
+  graph, not growth.
+- **Not measured:** run-to-run variance, and which tests account for the second pass's growth.
+
 On CI, every feature-build case recompiles its workspace crates (15–38 s each). `Swatinem/rust-cache`
 leaves workspace members out of the cache, and fresh checkout mtimes would make them stale anyway.
 Compilation, not test execution, dominates CI time.
