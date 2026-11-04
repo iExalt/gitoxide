@@ -12,7 +12,7 @@ impl Maintenance {
     /// The `maintenance.autoDetach` key, which tells automatic maintenance to run in the background, with `gc.autoDetach`
     /// as fallback.
     pub const AUTO_DETACH: keys::Boolean = keys::Boolean::new_boolean("autoDetach", &config::Tree::MAINTENANCE);
-    /// The `maintenance.strategy` key, which is `none`, `incremental` or `geometric`, and decides which tasks are enabled
+    /// The `maintenance.strategy` key, which is `incremental`, `gc` or `geometric` (Git refuses any other value), and decides which tasks are enabled
     /// unless `maintenance.<task>.enabled` says otherwise. The default is `geometric`.
     pub const STRATEGY: keys::String = keys::String::new_string("strategy", &config::Tree::MAINTENANCE);
     /// The `maintenance.<task>.enabled` key, which turns a task on or off regardless of the strategy.
