@@ -267,6 +267,14 @@ blocking-http-transport-reqwest-rust-tls = [
     "blocking-http-transport-reqwest",
     "gix-transport/http-client-reqwest-rust-tls",
 ]
+## Stacks with `blocking-http-transport-reqwest` and enables `https://` via the `rustls` crate with the `ring` crypto provider,
+## which builds faster and links less code than the `aws-lc-rs` provider of `blocking-http-transport-reqwest-rust-tls`.
+## It becomes the process-wide default of `rustls` with the first request unless one is installed, so applications that want
+## another provider have to install it before that.
+blocking-http-transport-reqwest-rust-tls-ring = [
+    "blocking-http-transport-reqwest",
+    "gix-transport/http-client-reqwest-rust-tls-ring",
+]
 ## Stacks with `blocking-http-transport-reqwest` and enables `https://` via the `rustls` crate.
 ## This also makes use of `trust-dns` to avoid `getaddrinfo`, but note it comes with its own problems.
 blocking-http-transport-reqwest-rust-tls-trust-dns = [
