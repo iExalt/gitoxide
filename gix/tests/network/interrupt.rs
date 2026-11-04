@@ -2,7 +2,12 @@
 //! thread, as promptly as the transport can tell, whatever the transport is.
 use std::time::{Duration, Instant};
 
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+use gix::remote::push::Update;
 
 use gix::protocol::transport::{
     Protocol, Service,
@@ -32,7 +37,7 @@ fn interrupt_after(
     })
 }
 
-fn ssh_transport(ssh: &FakeSsh) -> TestResult<impl Transport + TransportWithoutIO> {
+fn ssh_transport(ssh: &FakeSsh) -> TestResult<impl Transport> {
     Ok(ssh::connect(
         gix::url::parse("ssh://host.example/remote.git")?,
         Protocol::V2,
@@ -261,5 +266,162 @@ fn an_interrupt_ends_uploads_that_the_server_doesnt_take_with_each_backend() -> 
         return Ok(());
     };
     for_each_backend!(an_interrupt_ends_an_upload_that_the_server_doesnt_take());
+    Ok(())
+}
+
+fn a_push_whose_server_stops_responding_ends_promptly_with_an_uncertain_outcome<H: http::Http + Default + 'static>()
+-> TestResult {
+    let setup = Setup::new("sha1")?;
+    // The advertisement and the probe of the push handshake are served. The request with the commands and the pack then
+    // gets no answer, after it was sent completely.
+    let peer = HttpPeer::start(Config {
+        project_root: setup.path("."),
+        fault: Fault::Silent,
+        fault_after_requests: 2,
+        ..Default::default()
+    })?;
+    let repo = setup.work()?;
+    let head_id = repo.head_id()?.detach();
+    let url = peer.url("remote.git");
+    let prepare = repo
+        .remote_at(url.as_str())?
+        .to_connection_with_transport(transport::<H>(&url)?)
+        .prepare_push(
+            gix::progress::Discard,
+            vec![Update::create(
+                gix::refs::FullName::try_from("refs/heads/never-confirmed")?,
+                head_id,
+            )],
+            Default::default(),
+        )?;
+    let should_interrupt = AtomicBool::new(false);
+    let start = Instant::now();
+    let outcome = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(800));
+            should_interrupt.store(true, Ordering::SeqCst);
+        });
+        prepare.send(&should_interrupt)
+    })?;
+    assert!(
+        start.elapsed() < PROMPTLY,
+        "the push ended when the flag was set, though the server never answered: {:?}",
+        start.elapsed()
+    );
+    assert!(
+        outcome.is_uncertain(),
+        "the request was sent in full and nothing came back, so the server may have acted on it: {outcome:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_push_is_ended_by_its_flag_while_the_server_is_silent_with_each_backend() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for_each_backend!(a_push_whose_server_stops_responding_ends_promptly_with_an_uncertain_outcome());
+    Ok(())
+}
+
+fn a_fetch_is_ended_by_a_flag_while_the_server_is_silent<H: http::Http + Default + 'static>() -> TestResult {
+    let setup = Setup::new("sha1")?;
+    // The advertisement and the listing of references are served, and the request that asks for the pack gets headers and then nothing.
+    let peer = HttpPeer::start(Config {
+        project_root: setup.path("."),
+        fault: Fault::StallAfterHeaders,
+        fault_after_requests: 2,
+        ..Default::default()
+    })?;
+    let repo = setup.dest()?;
+    let url = peer.url("remote.git");
+    let remote = repo.remote_at(url.as_str())?.with_refspecs(
+        Some("+refs/heads/*:refs/remotes/origin/*"),
+        gix::remote::Direction::Fetch,
+    )?;
+    let prepare = remote
+        .to_connection_with_transport(transport::<H>(&url)?)
+        .prepare_fetch(gix::progress::Discard, Default::default())?;
+    let should_interrupt = AtomicBool::new(false);
+    let start = Instant::now();
+    // Only the flag is given to `receive()`, which has to make it reach the transport.
+    let result = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(800));
+            should_interrupt.store(true, Ordering::SeqCst);
+        });
+        prepare.receive(gix::progress::Discard, &should_interrupt)
+    });
+    assert!(
+        start.elapsed() < PROMPTLY,
+        "the fetch ended when the flag was set, though the server never finished: {:?}",
+        start.elapsed()
+    );
+    let err = result.expect_err("the pack never arrived");
+    assert!(
+        format!("{err:?}").contains("interrupted"),
+        "the failure says what happened: {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_fetch_is_ended_by_a_flag_while_the_server_is_silent_with_each_backend() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for_each_backend!(a_fetch_is_ended_by_a_flag_while_the_server_is_silent());
+    Ok(())
+}
+
+fn a_flag_that_is_set_before_a_push_ends_it_before_anything_is_sent<H: http::Http + Default + 'static>() -> TestResult {
+    let setup = Setup::new("sha1")?;
+    let peer = HttpPeer::start(Config {
+        project_root: setup.path("."),
+        ..Default::default()
+    })?;
+    let repo = setup.work()?;
+    let remote_repo = gix::open_opts(setup.path("remote.git"), gix::open::Options::isolated())?;
+    let main_id = remote_repo.find_reference("refs/heads/main")?.id().detach();
+    let url = peer.url("remote.git");
+    // A push that only deletes has no step of its own that looks at the flag, as it needs no pack.
+    let prepare = repo
+        .remote_at(url.as_str())?
+        .to_connection_with_transport(transport::<H>(&url)?)
+        .prepare_push(
+            gix::progress::Discard,
+            vec![Update::delete(
+                gix::refs::FullName::try_from("refs/heads/main")?,
+                main_id,
+            )],
+            Default::default(),
+        )?;
+    let requests_before = peer.requests().len();
+    let err = prepare.send(&AtomicBool::new(true)).expect_err(
+        "a push that was interrupted before it started sends nothing, which is a failure and not an outcome",
+    );
+    assert!(
+        format!("{err:?}").contains("interrupted"),
+        "the failure says what happened: {err:?}"
+    );
+    assert_eq!(
+        peer.requests().len(),
+        requests_before,
+        "the server wasn't contacted after the flag was set"
+    );
+    assert_eq!(
+        remote_repo.find_reference("refs/heads/main")?.id(),
+        main_id,
+        "the reference that the push would have deleted is still there"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_flag_that_is_set_before_a_push_ends_it_before_anything_is_sent_with_each_backend() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for_each_backend!(a_flag_that_is_set_before_a_push_ends_it_before_anything_is_sent());
     Ok(())
 }
