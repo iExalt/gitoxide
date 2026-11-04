@@ -24,8 +24,8 @@
 //! Inspect these dictionaries with [`metadata()`](gix_error::Error::metadata), and add context available at the call site.
 //! For recovery, downcast to [`view::NotFound`] to distinguish an absent reference from an absent object,
 //! [`file::find::ReferenceDecode`] for loose reference contents that could not be decoded,
-//! [`file::transaction::prepare::ReferenceOutOfDate`] or [`file::transaction::prepare::MustNotExist`] for a failed
-//! update constraint, and [`file::log::create_or_update::MissingCommitter`] for a missing reflog identity.
+//! [`view::transaction::ReferenceOutOfDate`] or [`view::transaction::MustNotExist`] for a failed
+//! update constraint, and [`view::transaction::MissingCommitter`] for a missing reflog identity.
 //!
 //! ## Feature Flags
 #![cfg_attr(
