@@ -2,34 +2,32 @@
 #![allow(clippy::empty_docs)]
 
 use crate::error::Error;
-use gix_error::ResultExt;
 
 use gix_path::RelativePath;
-use gix_ref::file::ReferenceExt;
 
 use crate::Result;
 
 /// A platform to create iterators over references.
 #[must_use = "Iterators should be obtained from this iterator platform"]
 pub struct Platform<'r> {
-    pub(crate) platform: gix_ref::file::iter::Platform<'r>,
+    pub(crate) platform: gix_ref::view::Platform<'r>,
     /// The owning repository.
     pub repo: &'r crate::Repository,
 }
 
 /// An iterator over references, with or without filter.
 pub struct Iter<'packed, 'repo> {
-    inner: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>,
-    peel_with_packed: Option<gix_ref::file::packed::SharedBufferSnapshot>,
+    inner: gix_ref::view::Iter<'packed, 'repo>,
+    peel_snapshot: Option<gix_ref::view::Snapshot<'repo>>,
     peel: bool,
     repo: &'repo crate::Repository,
 }
 
 impl<'packed, 'repo> Iter<'packed, 'repo> {
-    fn new(repo: &'repo crate::Repository, platform: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>) -> Self {
+    fn new(repo: &'repo crate::Repository, platform: gix_ref::view::Iter<'packed, 'repo>) -> Self {
         Iter {
             inner: platform,
-            peel_with_packed: None,
+            peel_snapshot: None,
             peel: false,
             repo,
         }
@@ -43,7 +41,7 @@ impl<'repo> Platform<'repo> {
     /// Even broken or otherwise unparsable or inaccessible references are returned and have to be handled by the caller on a
     /// case by case basis.
     pub fn all(&self) -> Result<Iter<'_, 'repo>> {
-        Ok(Iter::new(self.repo, self.platform.all().or_error()?))
+        Ok(Iter::new(self.repo, self.platform.all()?))
     }
 
     /// Return an iterator over all references that match the given `prefix`.
@@ -51,7 +49,7 @@ impl<'repo> Platform<'repo> {
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
     pub fn prefixed<'a>(&self, prefix: impl TryInto<&'a RelativePath, Error = Error>) -> Result<Iter<'_, 'repo>> {
         let prefix = prefix.try_into()?;
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_error()?))
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix)?))
     }
 
     /// Return an iterator over all references that are tags.
@@ -59,7 +57,7 @@ impl<'repo> Platform<'repo> {
     /// They are all prefixed with `refs/tags`.
     pub fn tags(&self) -> Result<Iter<'_, 'repo>> {
         let prefix = b"refs/tags/".try_into()?;
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_error()?))
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix)?))
     }
 
     // TODO: tests
@@ -68,13 +66,13 @@ impl<'repo> Platform<'repo> {
     /// They are all prefixed with `refs/heads`.
     pub fn local_branches(&self) -> Result<Iter<'_, 'repo>> {
         let prefix = b"refs/heads/".try_into()?;
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_error()?))
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix)?))
     }
 
     // TODO: tests
     /// Return an iterator over all local pseudo references.
     pub fn pseudo(&self) -> Result<Iter<'_, 'repo>> {
-        Ok(Iter::new(self.repo, self.platform.pseudo().or_error()?))
+        Ok(Iter::new(self.repo, self.platform.pseudo()?))
     }
 
     // TODO: tests
@@ -83,7 +81,7 @@ impl<'repo> Platform<'repo> {
     /// They are all prefixed with `refs/remotes`.
     pub fn remote_branches(&self) -> Result<Iter<'_, 'repo>> {
         let prefix = b"refs/remotes/".try_into()?;
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_error()?))
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix)?))
     }
 }
 
@@ -97,7 +95,7 @@ impl Iter<'_, '_> {
     /// Doing this is necessary as the packed-refs buffer is already held by the iterator, disallowing the consumer of the iterator
     /// to peel the returned references themselves.
     pub fn peeled(mut self) -> Result<Self> {
-        self.peel_with_packed = self.repo.refs.cached_packed_buffer()?;
+        self.peel_snapshot = Some(self.repo.ref_store().snapshot()?);
         self.peel = true;
         Ok(self)
     }
@@ -109,12 +107,8 @@ impl<'r> Iterator for Iter<'_, 'r> {
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|res| {
             let mut r = res?;
-            if self.peel {
-                r.peel_to_id_packed(
-                    &self.repo.refs,
-                    &self.repo.objects,
-                    self.peel_with_packed.as_ref().map(|p| &***p),
-                )?;
+            if let Some(snapshot) = self.peel_snapshot.as_ref().filter(|_| self.peel) {
+                snapshot.peel_to_id(&mut r, &self.repo.objects)?;
             }
             Ok(crate::Reference::from_ref(r, self.repo))
         })

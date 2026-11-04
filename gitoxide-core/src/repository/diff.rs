@@ -127,8 +127,8 @@ fn resolve_revspec(
         Err(err) => {
             // `is_not_found()` also matches missing objects, which must not become filesystem paths.
             // Extract the missing reference's name, which may differ from the revspec after following symbolic refs.
-            let not_found = err.downcast_any_ref::<gix::refs::file::find::NotFound>();
-            if let Some(gix::refs::file::find::NotFound { name }) = not_found {
+            let not_found = err.downcast_any_ref::<gix::refs::view::NotFound>();
+            if let Some(gix::refs::view::NotFound { name }) = not_found {
                 let root = repo.workdir().map(ToOwned::to_owned);
                 Ok((ObjectId::null(gix::hash::Kind::Sha1), root, name.clone()))
             } else {

@@ -1,7 +1,6 @@
 use gix_error::Result;
 use gix_error::{ErrorExt, bail, message};
 use gix_hash::ObjectId;
-use gix_ref::file::ReferenceExt as _;
 use gix_revision::spec::parse::{
     delegate,
     delegate::{ReflogLookup, SiblingBranch},
@@ -25,10 +24,10 @@ impl delegate::Revision for Delegate<'_> {
         }
         let r = self
             .repo
-            .refs
+            .ref_store()
             .find_resolved(name)
             // Keep deferred peel diagnostics when no candidate can be resolved.
-            .or_else(|_| self.repo.refs.find(name))
+            .or_else(|_| self.repo.ref_store().find(name))
             .map_err(|err| error::with_missing_reference(err.into_exn()))?;
         assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
         self.refs[self.idx] = Some(r);
@@ -74,7 +73,7 @@ impl delegate::Revision for Delegate<'_> {
                         Ok(())
                     }
                     RefsHint::PreferRef | RefsHint::PreferObjectOnFullLengthHexShaUseRefOtherwise | RefsHint::Fail => {
-                        match self.repo.refs.find_resolved(&prefix.to_string()) {
+                        match self.repo.ref_store().find_resolved(&prefix.to_string()) {
                             Ok(ref_) => {
                                 assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
                                 if self.opts.refs_hint == RefsHint::Fail {
@@ -214,10 +213,9 @@ impl delegate::Revision for Delegate<'_> {
         let ok = prior_checkouts_iter(&mut head.log_iter()).map(|mut it| it.nth(branch_no.saturating_sub(1)))?;
         match ok {
             Some((ref_name, _)) => {
-                let id = match self.repo.refs.find_resolved(ref_name.as_bstr()) {
+                let id = match self.repo.ref_store().find_resolved(ref_name.as_bstr()) {
                     Ok(mut r) => {
-                        let packed = self.repo.refs.cached_packed_buffer()?;
-                        let id = r.follow_to_object_packed(&self.repo.refs, packed.as_ref().map(|b| &***b))?;
+                        let id = self.repo.ref_store().snapshot()?.follow_to_object(&mut r)?;
                         self.refs[self.idx] = Some(r);
                         id
                     }

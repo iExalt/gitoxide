@@ -76,7 +76,11 @@ impl<'repo> Reference<'repo> {
     /// the chain of symbolic refs and annotated tags.
     #[deprecated = "Use `peel_to_id()` instead"]
     pub fn peel_to_id_in_place(&mut self) -> Result<Id<'repo>> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+        let oid = self
+            .repo
+            .ref_store()
+            .snapshot()?
+            .peel_to_id(&mut self.inner, &self.repo.objects)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -105,7 +109,11 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn peel_to_id(&mut self) -> Result<Id<'repo>> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+        let oid = self
+            .repo
+            .ref_store()
+            .snapshot()?
+            .peel_to_id(&mut self.inner, &self.repo.objects)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -152,8 +160,13 @@ impl<'repo> Reference<'repo> {
     /// instead.
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>> {
-        let packed = self.repo.refs.cached_packed_buffer()?;
-        self.peel_to_kind_packed(kind, packed.as_ref().map(|p| &***p))
+        let target = self
+            .repo
+            .ref_store()
+            .snapshot()?
+            .follow_to_object(&mut self.inner)?
+            .attach(self.repo);
+        target.object()?.peel_to_kind(kind)
     }
 
     /// Peel this ref until the first commit.
@@ -218,8 +231,12 @@ impl<'repo> Reference<'repo> {
     /// a symbolic target ref was looked up from packed-refs.
     #[doc(alias = "resolve", alias = "git2")]
     pub fn follow_to_object(&mut self) -> Result<Id<'repo>> {
-        let packed = self.repo.refs.cached_packed_buffer()?;
-        self.follow_to_object_packed(packed.as_ref().map(|p| &***p))
+        Ok(self
+            .repo
+            .ref_store()
+            .snapshot()?
+            .follow_to_object(&mut self.inner)?
+            .attach(self.repo))
     }
 
     /// Like [`follow_to_object`](Self::follow_to_object), but can be used for repeated calls as it won't
@@ -249,7 +266,11 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn follow(&self) -> Option<Result<Reference<'repo>>> {
-        self.inner.follow(&self.repo.refs).map(|res| {
+        let snapshot = match self.repo.ref_store().snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(err) => return Some(Err(err)),
+        };
+        snapshot.follow(&self.inner).map(|res| {
             res.map(|r| Reference {
                 inner: r,
                 repo: self.repo,

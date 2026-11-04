@@ -27,7 +27,7 @@ pub(crate) struct Repo {
 
 impl Repo {
     pub(crate) fn try_from(repo: &gix::Repository) -> Result<Self> {
-        let num_references = repo.refs.iter()?.all().or_error()?.count();
+        let num_references = repo.ref_store().iter()?.all()?.count();
         let num_objects = repo.objects.packed_object_count()?;
         let odb_size = ByteSize(
             std::fs::read_dir(repo.objects.store_ref().path().join("pack"))
