@@ -20,6 +20,7 @@ pub use crate::file::transaction::PackedRefs;
 /// [`Vetoed`] is what an [observer](Transaction::observer()) causes when it refuses a transaction while it is prepared.
 /// A failed [`Prepared::commit()`] carries [`NothingApplied`] if it changed nothing, and [`Uncertain`] with the
 /// progress of each edit if it may have changed something.
+pub use crate::transaction::{Rejected, RejectionReason};
 pub use crate::{
     file::{
         log::create_or_update::MissingCommitter,
@@ -106,6 +107,30 @@ impl<'s, 'p> Transaction<'s, 'p> {
         }
     }
 
+    /// Reject edits whose expectations aren't met, or whose names can't be used, one by one instead of failing the entire
+    /// transaction, while the others go on, as `git update-ref --batch-updates` does.
+    ///
+    /// Edits are rejected if the reference isn't what they expect ([`RejectionReason::IncorrectOldValue`]), exists although it was to be
+    /// created ([`RejectionReason::CreateExists`], which includes a lock that is held by somebody else), doesn't exist although it must
+    /// ([`RejectionReason::NonexistentRef`]), or has a name that conflicts with another reference
+    /// ([`RejectionReason::NameConflict`]). Anything else fails the transaction as a whole.
+    ///
+    /// [`Prepared::rejected()`] lists the rejected edits, which also appear in [`Outcome::rejected`]. They are not part of
+    /// [`Outcome::edits`] and don't change the reflog of `HEAD`. Observers hear about them nonetheless, in the position they
+    /// were requested in, as with Git's `reference-transaction` hook.
+    ///
+    /// An edit that fails only after all others were prepared, which happens if somebody else changes the reference in the meantime,
+    /// fails the transaction.
+    pub fn batch_updates(self) -> Self {
+        match self.inner {
+            Inner::File(transaction) => Transaction::new_file(transaction.batch_updates()),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(transaction) => Transaction {
+                inner: Inner::Reftable(transaction.batch_updates()),
+            },
+        }
+    }
+
     /// Decide how the reflog of `HEAD` follows the branch it points at, which is [what Git does](HeadLog::Git) by default.
     ///
     pub fn head_log(self, head_log: HeadLog) -> Self {
@@ -167,14 +192,31 @@ impl<'s, 'p> Prepared<'s, 'p> {
         }
     }
 
+    /// The edits that were rejected while preparing, which only happens with [`Transaction::batch_updates()`].
+    pub fn rejected(&self) -> &[Rejected] {
+        match &self.inner {
+            PreparedInner::File(transaction) => transaction.rejected(),
+            #[cfg(feature = "reftable")]
+            PreparedInner::Reftable(transaction) => transaction.rejected(),
+        }
+    }
+
     /// Make all prepared edits visible, using `committer` for reflogs, and return what was done.
     ///
     /// A failure doesn't imply that nothing was changed: how much of a transaction was applied depends on the storage.
     pub fn commit<'a>(self, committer: impl Into<Option<gix_actor::SignatureRef<'a>>>) -> Result<Outcome> {
         match self.inner {
-            PreparedInner::File(transaction) => transaction.commit(committer).map(|edits| Outcome { edits }),
+            PreparedInner::File(mut transaction) => {
+                let rejected = transaction.take_rejected();
+                transaction.commit(committer).map(|edits| Outcome { edits, rejected })
+            }
             #[cfg(feature = "reftable")]
-            PreparedInner::Reftable(transaction) => transaction.commit(committer.into()).map(|edits| Outcome { edits }),
+            PreparedInner::Reftable(mut transaction) => {
+                let rejected = transaction.take_rejected();
+                transaction
+                    .commit(committer.into())
+                    .map(|edits| Outcome { edits, rejected })
+            }
         }
     }
 
@@ -194,4 +236,6 @@ impl<'s, 'p> Prepared<'s, 'p> {
 pub struct Outcome {
     /// The edits that were applied, with the previous value of references filled in where it was known.
     pub edits: Vec<RefEdit>,
+    /// The edits that were rejected, which is only ever the case with [`Transaction::batch_updates()`].
+    pub rejected: Vec<Rejected>,
 }

@@ -1067,6 +1067,7 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
       * [ ] rename or copy references
       * [x] transparent handling of packed-refs during deletion
       * [x] writing loose refs into packed-refs and optionally delete them
+      * [x] `batch_updates()`: edits that fail on their own are rejected with Git's reasons while the others go on, as in `update-ref --batch-updates`, for files and reftables
       * [ ] initial transaction optimization (a faster way to create clones with a lot of refs)
     * **log**
       * [x] forward iteration

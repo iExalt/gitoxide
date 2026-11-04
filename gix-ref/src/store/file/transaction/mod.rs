@@ -81,6 +81,10 @@ impl file::Store {
             packed_refs: PackedRefs::default(),
             observer: Notifier::default(),
             head_log: HeadLog::default(),
+            batch_updates: false,
+            skip_transaction_conflicts: false,
+            dry_pass: false,
+            rejected: Vec::new(),
         }
     }
 }
@@ -99,6 +103,22 @@ impl<'p> Transaction<'_, 'p> {
     pub fn observer(mut self, observer: impl Observer + 'p) -> Self {
         self.observer.set(observer);
         self
+    }
+
+    /// Reject edits that fail their expectations on their own instead of failing the entire transaction, see
+    /// [`rejected()`](Self::rejected()).
+    pub fn batch_updates(mut self) -> Self {
+        self.batch_updates = true;
+        self
+    }
+
+    /// The edits that were rejected while preparing, which is only ever the case for [`batch_updates()`](Self::batch_updates()).
+    pub fn rejected(&self) -> &[crate::transaction::Rejected] {
+        &self.rejected
+    }
+
+    pub(crate) fn take_rejected(&mut self) -> Vec<crate::transaction::Rejected> {
+        std::mem::take(&mut self.rejected)
     }
 
     /// Decide how the reflog of `HEAD` follows the branch it points at, which is [what Git does](HeadLog::Git) by default.

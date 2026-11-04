@@ -114,6 +114,10 @@ impl Transaction<'_, '_> {
             packed_refs,
             mut observer,
             head_log: _,
+            batch_updates: _,
+            skip_transaction_conflicts: _,
+            dry_pass: _,
+            rejected: _,
         } = self;
         let mut updates = updates.expect("BUG: must call prepare before commit");
         let delete_loose_refs = matches!(
