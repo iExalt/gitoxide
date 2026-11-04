@@ -522,3 +522,25 @@ sequencing; the overseer proposes each as its dependencies finish.
     for #41, 1,236 s for #53 and 1,190 s for #58. All are above both numbers; the stages weren't timed, and each run followed a
     rebase that rebuilt the dependents of `gix-ref`. `mise run test` takes 37 s when nothing changed and 121 to 147 s after a
     change to `gix-ref`, against a 120 s budget.
+- 2026-11-04: thread 8 delivered the `reference-transaction` hook for local reference changes, and the owner's answer for how
+  closely it follows Git is "Copy Git exactly". `Repository::edit_references_with_hooks()` runs the hook through the hook runner
+  and the transaction observer of thread 5, with Git's arguments and input lines, a refusal in `preparing` and `prepared`, no effect
+  of the exit code afterwards, and a refusal of any change while `GIT_QUARANTINE_PATH` is set. Every nested sequence is pinned by a
+  differential test that runs `git update-ref --stdin` and this method with a recording hook, for the files store and for reftables:
+  creating, updating with and without an expected value, deleting a loose, a packed and a doubly stored reference, updating through
+  `HEAD`, a mixed transaction, refusals while preparing, once prepared and after the commit, and a stale expected value. This includes
+  the transaction on `packed-refs` that Git opens inside the outer one, which a hook can't tell from it. `edit_references()` and its
+  relatives don't run hooks.
+  - Also merged in this thread since the last entry: `references().under()` with `git for-each-ref`'s pattern meaning (#62);
+    `open::Options::ignore_repository_environment()`, `gix::init_or_open()`, `Repository::is_ancestor()` and byte comparisons of
+    configuration edits with `git config` (#63); `set_raw_value()` replacing a value that an earlier section holds (#64); and
+    comparisons of written blobs, commits, trees and tags, the empty tree, tree listings and short ids with Git, with `core.abbrev`
+    values longer than a hash accepted as Git does (#65). The reference lookup differences listed above are answered as follows:
+    dangling and absent references are told apart (a dangling symbolic reference is found and fails to peel), a broken reference is
+    an error item of an iterator where Git skips it with a warning, and `under()` matches by whole components.
+  - Still open from this thread. A batch write of objects into one pack was not examined: nothing in the repository API writes a set
+    of objects as a pack, which the push path does for itself. Writing commits isn't compared for messages with a NUL byte or invalid
+    UTF-8, `i18n.commitEncoding`, and names that Git cleans of `<`, `>` and surrounding spaces; re-encoding Git's commits with `gpgsig` or
+    `mergetag` is untried; ambiguity extension of short ids was not compared with many objects; `core.abbrev=0` and `off` are accepted
+    as "no abbreviation" where Git rejects `0`. Short ids count only packed objects for `auto`, where Git estimates loose ones too.
+    `config`: formatting differences to `git config` are pinned in `git_bytes.rs`, none changes how Git reads the file.
