@@ -503,6 +503,24 @@ sequencing; the overseer proposes each as its dependencies finish.
 - 2026-11-04: the owner chose the HTTP backend for thread 10: "Reqwest and rustls, apply the low-speed limits, proxy and CA
   settings." Thread 10 makes the `reqwest` backend with `rustls` the primary one for push and fetch, applies those
   settings on it, and keeps `curl` working. The backends that existing presets select don't change in this thread.
+- 2026-11-04: thread 10 made the `reqwest` backend carry the same traffic as `curl`. It now performs requests with the
+  asynchronous client on one thread of its own, which replaces `reqwest::blocking` and its 30 s limit per wait, and applies
+  the connect timeout, the low-speed limits (`curl`'s rule: below the speed for the whole time), proxies with basic
+  authentication, `no_proxy`, an empty `http.proxy`, `http.sslCAInfo`, `http.sslVerify` and `http.sslVersion`. Each is tested
+  against a local peer with both backends. Decisions and deviations:
+  - The hook types `ConfigureClientFn` and `ConfigureRequestFn` of the `reqwest` backend now take the asynchronous
+    `ClientBuilder` and `Request`, which is `change(gix-transport)!`. The backend panics on a `tokio` runtime thread.
+  - A new feature, `blocking-http-transport-reqwest-rust-tls-ring`, selects `rustls` with `ring`, as the owner preferred it
+    if `reqwest` 0.13 supports it cleanly. It installs `ring` as the process default unless one is installed. No preset
+    changed. Cold release builds of a scratch consumer at `-j4`, one run each at load 1.5 to 3.2: `curl` 39 s and 4.34 MB,
+    `reqwest` with `aws-lc-rs` 63 s and 9.74 MB, `reqwest` with `ring` 50 s and 7.64 MB (P11: 45 s and 4.12 MB for `curl`,
+    89 s and 9.45 MB for `reqwest`).
+  - Open for the owner: `curl` reads the proxy variables of the environment itself when `gix` hands it no proxy, even where
+    `gix`'s permissions deny them, and `reqwest` doesn't. Making `curl` strict would change precedence, so it stays.
+  - The `curl` backend failed on the first `407` of a proxy with credentials and sent an empty password when the URL had a user
+    and no password. Both are fixed. A push handshake now ends with Git's probe, a `POST` of `0000`, after `info/refs`.
+  - Not done in this thread: Digest, Negotiate and NTLM proxy authentication on `reqwest`, `http.<url>.*` scoping, `http.sslCAPath`,
+    and the lower bound of a TLS range on `rustls`, which has nothing older than 1.2.
 - 2026-11-04: thread 8 (local consumer backend), progress and what it left open so far. Merged: the files store's reflog
   messages are cleaned like Git's (#50), `HEAD` gets the reflog entry that Git writes when the branch it points to changes,
   in both stores, with `HeadLog::CallerDecides` as the explicit opt-in for the one consumer that edits `HEAD` and its branch
