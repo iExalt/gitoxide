@@ -283,6 +283,7 @@ impl crate::Bundle {
             index_version: index_kind,
             alloc_limit_bytes,
             compression: _,
+            fsync,
         }: Options,
         data_file: SharedTempFile,
         mut pack_entries_iter: Box<dyn Iterator<Item = Result<data::input::Entry>> + 'a>,
@@ -326,19 +327,35 @@ impl crate::Bundle {
                 } else {
                     let data_path = directory.join(format!("pack-{}.pack", outcome.data_hash.to_hex()));
                     let index_path = data_path.with_extension("idx");
+                    // Like Git, flush the index once it's complete, then the pack, then create the `.keep` file, which
+                    // isn't flushed, and finally make the pack and the index visible, in that order.
+                    if !index_path.is_file() {
+                        index_file
+                            .with_mut(|file| {
+                                fsync
+                                    .flush(file.as_file(), gix_fs::fsync::Components::PACK_METADATA)
+                                    .map(|_| ())
+                            })
+                            .and_then(|res| res)
+                            .or_raise(|| message("Could not flush pack index"))?;
+                    }
                     let keep_path = if data_path.is_file() {
                         // avoid trying to overwrite existing files, we know they have the same content
                         // and this is likely to fail on Windows as negotiation opened the pack.
                         None
                     } else {
-                        let keep_path = data_path.with_extension("keep");
-
-                        std::fs::write(&keep_path, b"").or_raise(|| message("Could not create pack keep file"))?;
-                        Arc::try_unwrap(data_file)
+                        let mut pack_file = Arc::try_unwrap(data_file)
                             .expect("only one handle left after pack was consumed")
                             .into_inner()
                             .into_inner()
-                            .or_error()?
+                            .or_error()?;
+                        pack_file
+                            .with_mut(|file| fsync.flush(file.as_file(), gix_fs::fsync::Components::PACK).map(|_| ()))
+                            .and_then(|res| res)
+                            .or_raise(|| message("Could not flush pack file"))?;
+                        let keep_path = data_path.with_extension("keep");
+                        std::fs::write(&keep_path, b"").or_raise(|| message("Could not create pack keep file"))?;
+                        pack_file
                             .persist(&data_path)
                             .or_raise(|| message("Could not persist pack file"))?;
                         Some(keep_path)

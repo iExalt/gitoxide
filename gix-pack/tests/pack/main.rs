@@ -84,6 +84,7 @@ pub fn fixup(v: Vec<u8>) -> Vec<u8> {
 
 mod bundle;
 mod data;
+mod durability;
 mod index;
 mod iter;
 mod malformed;
