@@ -125,7 +125,8 @@ impl crate::Repository {
         self.edit_references(Some(edit))
     }
 
-    /// Edit one or more references as described by their `edits`.
+    /// Edit one or more references as described by their `edits`. This fails while `GIT_QUARANTINE_PATH` is set, as Git
+    /// doesn't allow to change references in the hooks that check what is received.
     /// Note that one can set the committer name for use in the ref-log by temporarily
     /// [overriding the git-config](crate::Repository::config_snapshot_mut()), or use
     /// [`edit_references_as(committer)`](Self::edit_references_as()) for convenience.
@@ -169,9 +170,9 @@ impl crate::Repository {
     /// Git opens on `packed-refs` when it deletes references, and a hook that is configured with `hook.*` or `core.hooksPath` is found
     /// like [`hook()`](Self::hook()) finds it.
     ///
-    /// Like Git, this refuses to change references while `GIT_QUARANTINE_PATH` is set, which is the case in the hooks that
-    /// check what is received, where nothing may be updated. Hooks are programs, so it's an error to use this in a repository
-    /// that isn't fully trusted, as [`hook()`](Self::hook()) has it.
+    /// Hooks are programs, so it's an error to use this in a repository that isn't fully trusted, as
+    /// [`hook()`](Self::hook()) has it. Like all methods that edit references, this fails while `GIT_QUARANTINE_PATH` is
+    /// set, as it is in the hooks that check what is received, where Git doesn't allow to change references either.
     #[cfg(feature = "hook")]
     pub fn edit_references_with_hooks(
         &self,
@@ -195,14 +196,15 @@ impl crate::Repository {
                  milliseconds to wait for locks or negative to wait forever",
             )
         })?;
+        // Git doesn't let a process that checks what is received, and has this variable, change references.
+        if std::env::var_os("GIT_QUARANTINE_PATH").is_some() {
+            gix_error::bail!(gix_error::message(
+                "ref updates forbidden inside quarantine environment"
+            ));
+        }
         let mut transaction = self.ref_store().transaction().head_log(head_log);
         #[cfg(feature = "hook")]
         if run_hooks {
-            if std::env::var_os("GIT_QUARANTINE_PATH").is_some() {
-                gix_error::bail!(gix_error::message(
-                    "ref updates forbidden inside quarantine environment"
-                ));
-            }
             // Fail early, and once, if hooks can't be run at all.
             self.hook("reference-transaction")?;
             transaction = transaction.observer(ReferenceTransactionHook { repo: self });
