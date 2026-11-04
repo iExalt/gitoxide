@@ -156,6 +156,39 @@ pub(crate) fn observed(edit: &RefEdit) -> Option<Update> {
     })
 }
 
+/// Which of `edits` are split along symbolic references, which `find` follows. Git counts such an edit as the updates of the
+/// references that it leads to, which come last, so the position of a rejected edit among the others doesn't include it.
+pub(crate) fn split_edits(
+    edits: &[RefEdit],
+    find: &mut dyn FnMut(&crate::PartialNameRef) -> Option<crate::Target>,
+) -> Vec<bool> {
+    use crate::transaction::ext::RefEditsExt;
+    let mut copy = edits.to_vec();
+    let mut split = vec![false; edits.len()];
+    // A reference cycle or similar is the business of the preparation, which reports it.
+    copy.extend_with_splits_of_symbolic_refs(find, &mut |parent, edit| {
+        if let Some(split) = split.get_mut(parent) {
+            *split = true;
+        }
+        edit
+    })
+    .ok();
+    split
+}
+
+/// The position among all updates that the update of the rejected edit at `index` of `observed` takes, where `split` has those
+/// that are split along symbolic references, which are counted last.
+pub(crate) fn rejected_position(observed: &[Option<Update>], split: &[bool], index: usize) -> usize {
+    if split[index] {
+        return usize::MAX;
+    }
+    observed[..index]
+        .iter()
+        .zip(split)
+        .filter(|(update, split)| update.is_some() && !**split)
+        .count()
+}
+
 /// Put the `rejected` updates, each with its position among all updates, into `updates` which has none of them.
 /// What `updates` has beyond that, like updates that were split along symbolic references, is appended.
 pub(crate) fn splice(updates: &[Update], rejected: &[(usize, Update)]) -> Vec<Update> {

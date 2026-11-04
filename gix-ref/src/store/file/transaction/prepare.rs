@@ -388,6 +388,12 @@ impl Transaction<'_, '_> {
             return Err(err);
         }
         let observed: Vec<Option<Update>> = edits.iter().map(crate::transaction::observed).collect();
+        let split = crate::transaction::split_edits(&edits, &mut |name| {
+            self.store
+                .find_existing_inner(name, None)
+                .map(|reference| reference.target)
+                .ok()
+        });
         let mut remaining: Vec<(usize, RefEdit)> = edits.into_iter().enumerate().collect();
         let mut rejected: Vec<crate::transaction::Rejected> = Vec::new();
         // Git checks what an edit expects before it checks if its name conflicts with an earlier edit, and edits that are rejected
@@ -404,7 +410,7 @@ impl Transaction<'_, '_> {
                 let mut positions: Vec<_> = rejected
                     .iter()
                     .filter_map(|rejected: &crate::transaction::Rejected| {
-                        let position = observed[..rejected.index].iter().flatten().count();
+                        let position = crate::transaction::rejected_position(&observed, &split, rejected.index);
                         observed[rejected.index]
                             .clone()
                             .map(|update| (rejected.index, position, update))
