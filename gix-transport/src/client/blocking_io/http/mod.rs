@@ -30,10 +30,11 @@ use crate::{
 ///
 pub mod curl;
 
-/// The experimental `reqwest` backend.
+/// The `reqwest` backend.
 ///
-/// It doesn't support any of the shared http options yet, but can be seen as example on how to integrate blocking `http` backends.
-/// There is also nothing that would prevent it from becoming a fully-featured HTTP backend except for demand and time.
+/// It performs requests with the asynchronous client of `reqwest` on a thread of its own, so it can be used from blocking code, but
+/// *not* from code that runs on a `tokio` runtime thread, where it panics; use `spawn_blocking()` there. It applies the connect timeout,
+/// the user agent and the HTTP version of the shared options, and has no total timeout, like `curl`.
 #[cfg(feature = "http-client-reqwest")]
 pub mod reqwest;
 
