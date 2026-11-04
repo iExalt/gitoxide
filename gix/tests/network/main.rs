@@ -24,6 +24,7 @@ use gix_testtools::{
 };
 
 mod http_authentication;
+mod http_connections;
 mod http_fetch;
 mod ssh;
 mod ssh_config;
