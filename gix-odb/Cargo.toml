@@ -23,6 +23,8 @@ sha1 = ["gix-hash/sha1", "gix-pack/sha1"]
 sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
+## Provide the `quarantine` module to receive packs the way `git receive-pack` does. It writes packs, which isn't possible when targeting WASM.
+quarantine = ["gix-pack/streaming-input", "dep:filetime"]
 
 [dependencies]
 crc32fast = "1.5.0"
@@ -46,12 +48,13 @@ tempfile = "3.26.0"
 parking_lot = { version = "0.12.4" }
 arc-swap = "1.9.0"
 memmap2 = "0.9.11"
+filetime = { version = "0.2.29", optional = true }
 
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 insta = "1.46.3"
-gix-odb = { path = ".", features = ["sha1", "sha256"] }
+gix-odb = { path = ".", features = ["sha1", "sha256", "quarantine"] }
 gix-hash = { path = "../gix-hash" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-date = { path = "../gix-date" }
@@ -77,6 +80,7 @@ features = ["sha1", "document-features", "serde"]
 [package.metadata.qa]
 checks = [
     { args = ["--features", "sha1,serde"] },
+    { args = ["--features", "sha1,quarantine"] },
 ]
 tests = [
     { args = ["--all-features", "--features", "gix-parallel/parallel"] },

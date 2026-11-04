@@ -149,9 +149,38 @@ impl Store {
             alloc_limit_bytes,
             loose_compression,
             fsync,
+            extra_alternates: Vec::new(),
             num_handles_stable: Default::default(),
             num_handles_unstable: Default::default(),
             num_disk_state_consolidation: Default::default(),
         })
+    }
+
+    /// Use the object directories in `alternates` in addition to those listed in `info/alternates` files, as if they were listed
+    /// there, along with the alternates of these directories. They are searched after the object directory of this store, which
+    /// remains the only one that is written to.
+    ///
+    /// This is how the object directory of a quarantine sees the objects of the repository it belongs to.
+    /// Call it before the store is used, as objects that were looked up before aren't looked up again.
+    pub fn with_alternates(mut self, alternates: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.extra_alternates = alternates.into_iter().collect();
+        self
+    }
+
+    /// Return the object directories to read from, starting with `objects_dir`, followed by its alternates and the
+    /// alternates of the directories passed to [`Self::with_alternates()`].
+    pub(crate) fn object_directories(&self, objects_dir: &std::path::Path) -> gix_error::Result<Vec<PathBuf>> {
+        let mut out = vec![objects_dir.to_owned()];
+        out.extend(crate::alternate::resolve(objects_dir.to_owned(), &self.current_dir)?);
+        for extra in &self.extra_alternates {
+            for dir in
+                std::iter::once(extra.clone()).chain(crate::alternate::resolve(extra.clone(), &self.current_dir)?)
+            {
+                if !out.contains(&dir) {
+                    out.push(dir);
+                }
+            }
+        }
+        Ok(out)
     }
 }
