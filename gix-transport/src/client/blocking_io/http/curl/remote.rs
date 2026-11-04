@@ -665,7 +665,13 @@ pub fn new(interrupted: Arc<AtomicBool>) -> Worker {
             }
 
             handle.get_mut().receive_body = Some(match upload_body_kind {
-                Some(PostBodyDataKind::Unbounded) | None => StreamOrBuffer::Stream(receive_body),
+                Some(PostBodyDataKind::Unbounded) => {
+                    // The handle is reused, and keeps the size of an earlier upload that was buffered, which would cut this
+                    // one short. A size of -1 is the one of a body that isn't known yet, which `curl` sends in chunks.
+                    curl!(handle.post_field_size(u64::MAX));
+                    StreamOrBuffer::Stream(receive_body)
+                }
+                None => StreamOrBuffer::Stream(receive_body),
                 Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                     let mut buf = Vec::<u8>::with_capacity(512);
                     receive_body
