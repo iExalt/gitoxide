@@ -5,6 +5,8 @@ mod command;
 #[cfg(feature = "blocking-client")]
 mod driver;
 #[cfg(feature = "blocking-client")]
+mod journeys;
+#[cfg(feature = "blocking-client")]
 mod real_peer;
 mod report;
 mod request;
