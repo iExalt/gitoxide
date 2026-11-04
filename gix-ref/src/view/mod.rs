@@ -288,6 +288,43 @@ impl<'a> StoreRef<'a> {
 
 /// Edit
 impl<'a> StoreRef<'a> {
+    /// Remove the reflog of the reference `name` completely, and return `true` if there was one.
+    ///
+    /// The reference itself isn't touched, and neither are the observers of transactions told about this.
+    pub fn reflog_delete(self, name: &FullNameRef) -> Result<bool> {
+        match self.backend {
+            Backend::File(store) => store.reflog_delete_inner(name),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.reflog_delete_inner(name),
+        }
+    }
+
+    /// Remove the lines of the reflog of the reference `name` for which `keep` returns `false`.
+    ///
+    /// `keep` is called for every line, from the oldest to the most recent one, with the value that the reference has once it
+    /// is locked against other writers, resolved if it is symbolic, and `None` if it can't be resolved. A reflog that has
+    /// no lines left still exists. Nothing happens if there is no reflog.
+    ///
+    /// Unlike Git's `reflog expire`, this doesn't rewrite the previous values of the lines that remain, and doesn't update the
+    /// reference. Observers of transactions aren't told about this, as it isn't one.
+    pub fn reflog_expire(
+        self,
+        name: &FullNameRef,
+        options: crate::log::expire::Options,
+        mut keep: impl FnMut(&crate::log::Line, Option<&gix_hash::oid>) -> bool,
+    ) -> Result<crate::log::expire::Outcome> {
+        let current = || -> Result<Option<gix_hash::ObjectId>> {
+            Ok(self
+                .try_find_resolved(name.as_partial_name())?
+                .and_then(|reference| reference.target.try_id().map(ToOwned::to_owned)))
+        };
+        match self.backend {
+            Backend::File(store) => store.reflog_expire_inner(name, options, &current, &mut keep),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.reflog_expire_inner(name, options, &current, &mut keep),
+        }
+    }
+
     /// Start a transaction to edit references.
     ///
     /// The transaction inherits the namespace of the store.

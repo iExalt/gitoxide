@@ -14,3 +14,27 @@ pub struct Line {
     /// The message providing details about the operation performed in this log line.
     pub message: BString,
 }
+
+/// Removing lines from a reflog.
+pub mod expire {
+    /// Options to [expire the lines of a reflog](crate::StoreRef::reflog_expire()).
+    #[derive(Debug, Clone, Copy, Default)]
+    #[non_exhaustive]
+    pub struct Options {
+        /// If `true`, decide which lines go and report that, but change nothing. Locks are not taken either, so the
+        /// outcome may be outdated by the time somebody else changes the reference.
+        pub dry_run: bool,
+        /// How to wait if the lock of the reference or its reflog is held by somebody else. It's ignored for storage that has
+        /// its own rules for waiting, like `reftable`.
+        pub lock: gix_lock::acquire::Fail,
+    }
+
+    /// What expiring the lines of a reflog did, or, with [`dry_run`](Options::dry_run), would do.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct Outcome {
+        /// The number of lines that were removed.
+        pub removed: usize,
+        /// The number of lines that remain.
+        pub kept: usize,
+    }
+}

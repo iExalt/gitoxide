@@ -82,7 +82,7 @@ impl Store {
 }
 
 /// Convert a record into a line, or return `None` for tombstones and for the marker that a reflog exists.
-fn line_from_record(record: LogRecord) -> Option<Line> {
+pub(super) fn line_from_record(record: LogRecord) -> Option<Line> {
     let LogValue::Update {
         old_hash,
         new_hash,
