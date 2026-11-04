@@ -114,6 +114,9 @@ impl Handler {
     }
 
     /// Send `failure` to the consumer, which waits for the headers first and for the body if these arrived already.
+    ///
+    /// The body is told by waiting for room in its pipe if it is full, as dropping the failure there makes the consumer see
+    /// a body that ended early instead of the reason. The wait ends once the consumer reads or drops its end.
     fn report(&mut self, failure: io::Error) {
         match (self.send_header.take(), self.send_data.take()) {
             (Some(header), mut data) => {
@@ -121,11 +124,11 @@ impl Handler {
                     header.channel.try_send(Err(failure))
                     && let Some(body) = data.take()
                 {
-                    body.channel.try_send(failure).ok();
+                    body.channel.send(failure).ok();
                 }
             }
             (None, Some(body)) => {
-                body.channel.try_send(Err(failure)).ok();
+                body.channel.send(Err(failure)).ok();
             }
             (None, None) => {}
         }
@@ -1013,5 +1016,32 @@ mod tests {
         ");
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
         assert!(gix_error::classify(&err).can_retry_lenient());
+    }
+
+    #[test]
+    fn a_failure_is_told_to_a_consumer_that_has_not_drained_the_body_yet() {
+        use std::io::{Read, Write};
+        // The pipe holds one chunk that is not read yet, so there is no room for the failure.
+        let (mut writer, mut reader) = pipe::unidirectional(1);
+        writer.write_all(b"partial").expect("there is room for one chunk");
+        let mut handler = Handler {
+            send_data: Some(writer),
+            ..Default::default()
+        };
+        let reporting = std::thread::spawn(move || handler.report(io::Error::other("Operation too slow")));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mut buf = [0u8; 7];
+        let read = reader
+            .read(&mut buf)
+            .expect("the chunk that arrived before the failure is delivered first");
+        assert_eq!(&buf[..read], b"partial");
+        let err = reader
+            .read(&mut buf)
+            .expect_err("the body ended with a failure, not with an end of the data");
+        assert!(
+            err.to_string().contains("Operation too slow"),
+            "the consumer learns the reason, and doesn't see a body that just ended: {err}"
+        );
+        reporting.join().expect("the report finished once there was room");
     }
 }
