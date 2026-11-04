@@ -500,3 +500,6 @@ sequencing; the overseer proposes each as its dependencies finish.
     9. `wait_for_server()` has no Windows or async coverage.
   - `mise run check` took 18:41 (exhaustive selection of 207 QA cases, 250% CPU) and `check:thorough` 10:05 (211% CPU) against
     the 530 s baseline, both on the shared host with load around 1.5 to 4.5.
+- 2026-11-04: the owner chose the HTTP backend for thread 10: "Reqwest and rustls, apply the low-speed limits, proxy and CA
+  settings." Thread 10 makes the `reqwest` backend with `rustls` the primary one for push and fetch, applies those
+  settings on it, and keeps `curl` working. The backends that existing presets select don't change in this thread.
