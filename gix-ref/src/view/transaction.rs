@@ -26,7 +26,7 @@ pub use crate::{
         transaction::prepare::{MustNotExist, ReferenceOutOfDate},
     },
     transaction::{
-        NameConflict,
+        HeadLog, NameConflict,
         commit_failure::{NothingApplied, Uncertain},
         observe::Vetoed,
     },
@@ -106,10 +106,29 @@ impl<'s, 'p> Transaction<'s, 'p> {
         }
     }
 
+    /// Decide how the reflog of `HEAD` follows the branch it points at, which is [what Git does](HeadLog::Git) by default.
+    ///
+    /// Reftables don't implement [`HeadLog::CallerDecides`] yet, and ignore it.
+    pub fn head_log(self, head_log: HeadLog) -> Self {
+        match self.inner {
+            Inner::File(transaction) => Transaction::new_file(transaction.head_log(head_log)),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(transaction) => {
+                let _ = head_log;
+                Transaction {
+                    inner: Inner::Reftable(transaction),
+                }
+            }
+        }
+    }
+
     /// Lock everything the `edits` need and verify what they expect, so that [committing](Prepared::commit()) is
     /// likely to succeed. Nothing is changed if this fails.
     ///
     /// Failed edits identify the requested name in [metadata](gix_error::Error::metadata()) `reference` (bytes).
+    ///
+    /// Like in Git, writing or deleting the branch that `HEAD` points at is also logged in the reflog of `HEAD`, which
+    /// isn't among the edits that [`Prepared::commit()`] returns. See [`HeadLog`] for how to deviate from that.
     pub fn prepare(self, edits: impl IntoIterator<Item = RefEdit>, lock: LockOptions) -> Result<Prepared<'s, 'p>> {
         match self.inner {
             Inner::File(transaction) => transaction

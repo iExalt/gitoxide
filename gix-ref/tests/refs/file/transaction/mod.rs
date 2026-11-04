@@ -76,6 +76,7 @@ pub(crate) mod prepare_and_commit {
 
     mod durability;
 
+    mod head_reflog;
     mod name_conflicts;
     mod observe;
     mod reflog_message;

@@ -13,6 +13,7 @@ use crate::{
     transaction::{
         Change, LogChange, PreviousValue, RefEdit, RefLog,
         commit_failure::{NothingApplied, Progress, Uncertain},
+        is_noop_update,
     },
 };
 
@@ -44,7 +45,8 @@ impl Edit {
                 (previous, new_oid)
             }
         };
-        (previous.as_ref() != Some(new_oid)).then_some((previous, new_oid))
+        let current = previous.map(Target::Object);
+        (!is_noop_update(&self.update, current.as_ref())).then_some((previous, new_oid))
     }
 
     /// Return `true` if the value of this edit becomes visible through a rewritten `packed-refs` file, as opposed to
@@ -111,6 +113,7 @@ impl Transaction<'_, '_> {
             updates,
             packed_refs,
             mut observer,
+            head_log: _,
         } = self;
         let mut updates = updates.expect("BUG: must call prepare before commit");
         let delete_loose_refs = matches!(
@@ -138,7 +141,12 @@ impl Transaction<'_, '_> {
         ) {
             Ok(()) => {
                 observer.committed();
-                Ok(updates.into_iter().map(|edit| edit.update).collect())
+                // The log entries of `HEAD` that were added aren't what the caller asked for.
+                Ok(updates
+                    .into_iter()
+                    .filter(|edit| edit.head_log_of.is_none())
+                    .map(|edit| edit.update)
+                    .collect())
             }
             Err(err) => {
                 // Git doesn't tell anybody after failing to commit, and neither do we.

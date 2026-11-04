@@ -1,3 +1,4 @@
+use crate::edit::EditRefs as _;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Write as _,
@@ -310,7 +311,7 @@ pub(super) fn save(
         bail!("git stash push did not create a new stash");
     }
     let target = Target::Object(id);
-    if let Err(err) = repo.edit_references([RefEdit::update(
+    if let Err(err) = repo.edit_refs([RefEdit::update(
         name.clone(),
         target.clone(),
         PreviousValue::MustNotExist,
@@ -395,7 +396,7 @@ pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: S
         .or_raise(|| message("could not launch git stash apply"))?;
     let notice = if output.status.success() {
         let mut notice = format!("restored {}", stash.name.shorten());
-        if let Err(err) = repo.edit_references([RefEdit::delete(
+        if let Err(err) = repo.edit_refs([RefEdit::delete(
             stash.name.clone(),
             PreviousValue::MustExistAndMatch(stash.target),
         )]) {

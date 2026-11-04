@@ -14,8 +14,8 @@ use crate::{
         },
     },
     transaction::{
-        Change, ExistingRefs, LogChange, NameConflict, PreviousValue, RefEdit, RefEditsExt, RefLog, observe::Update,
-        verify_available,
+        Change, ExistingRefs, HeadLog, LogChange, NameConflict, PreviousValue, RefEdit, RefEditsExt, RefLog,
+        head_log_update, is_verification, observe::Update, verify_available,
     },
 };
 
@@ -362,6 +362,7 @@ impl Transaction<'_, '_> {
                 lock: None,
                 parent_index: None,
                 leaf_referent_previous_oid: None,
+                head_log_of: None,
             })
             .collect();
         let duplicate = |name: BString| validation(format!("A reference named '{name}' has multiple edits")).raise();
@@ -391,6 +392,7 @@ impl Transaction<'_, '_> {
                     lock: None,
                     parent_index: Some(idx),
                     leaf_referent_previous_oid: None,
+                    head_log_of: None,
                 },
             )
             .or_raise(|| message("Could not preprocess reference edits"))?;
@@ -521,12 +523,86 @@ impl Transaction<'_, '_> {
             .map(|edit| edit.update.name.as_bstr().to_owned())
             .collect();
         names_in_transaction.sort();
+        // Like Git, log what changes the branch that `HEAD` points at in `HEAD` as well.
+        // A `HEAD` that can't be read is no reason to fail edits of other references, and doesn't point at anything.
+        // The lookup finds other references if `HEAD` is missing, which don't count.
+        let head_referent = match store
+            .try_find_loose("HEAD")
+            .ok()
+            .flatten()
+            .filter(|head| head.name.as_bstr() == "HEAD")
+            .map(|head| head.target)
+        {
+            Some(Target::Symbolic(referent)) => Some(referent),
+            Some(Target::Object(_)) | None => None,
+        };
+        if let Some(head_referent) = head_referent.as_ref().map(FullName::as_ref) {
+            let head_name = BString::from("HEAD");
+            // Edits that verify what they leave as it is, don't change `HEAD` if the caller decides.
+            let changing = if self.head_log == HeadLog::CallerDecides {
+                let mut changing: Vec<BString> = updates
+                    .iter()
+                    .filter(|edit| !is_verification(&edit.update))
+                    .map(|edit| edit.update.name.as_bstr().to_owned())
+                    .collect();
+                changing.sort();
+                changing
+            } else {
+                names_in_transaction.clone()
+            };
+            let mut head_edits = Vec::new();
+            for (index, edit) in updates.iter().enumerate() {
+                let mut via_head = false;
+                let mut cursor = Some(index);
+                while let Some(position) = cursor.map(|position| &updates[position]) {
+                    via_head |= position.update.name.as_bstr() == head_name;
+                    cursor = position.parent_index;
+                }
+                if let Some(update) = head_log_update(
+                    &edit.update,
+                    via_head,
+                    Some(head_referent),
+                    &changing,
+                    store.object_hash,
+                    self.head_log,
+                )? {
+                    head_edits.push(Edit {
+                        update,
+                        lock: None,
+                        parent_index: None,
+                        leaf_referent_previous_oid: None,
+                        head_log_of: Some(index),
+                    });
+                }
+            }
+            if !head_edits.is_empty() {
+                updates.extend(head_edits);
+                if let Err(position) = names_in_transaction.binary_search(&head_name) {
+                    names_in_transaction.insert(position, head_name);
+                }
+            }
+        }
         let existing = Existing {
             store,
             packed: self.packed_transaction.as_ref().and_then(packed::Transaction::buffer),
             known: Default::default(),
         };
         for cid in 0..updates.len() {
+            if let Some(branch) = updates[cid].head_log_of {
+                // The branch was locked before, and the value found then is where the log entry of `HEAD` starts from.
+                // That is what `MustExistAndMatch` says after locking, while an expectation that is still
+                // `ExistingMustMatch` means that the branch doesn't exist yet.
+                let (Change::Update { expected, .. } | Change::Delete { expected, .. }) =
+                    &updates[branch].update.change;
+                if let PreviousValue::MustExistAndMatch(Target::Object(oid)) = expected {
+                    updates[cid].leaf_referent_previous_oid = Some(*oid);
+                }
+            }
+            if updates[cid].head_log_of.is_some() {
+                // Only the reflog of `HEAD` is written, and its value isn't locked, even if an edit guards it.
+                self.observer.locked_before(cid + 1);
+                continue;
+            }
             let change = &mut updates[cid];
             if let Err(err) = Self::lock_ref_and_apply_change(
                 self.store,
@@ -611,7 +687,13 @@ impl Transaction<'_, '_> {
     /// A rollback happens automatically as this instance is dropped as well.
     pub fn rollback(self) -> Vec<RefEdit> {
         self.updates
-            .map(|updates| updates.into_iter().map(|u| u.update).collect())
+            .map(|updates| {
+                updates
+                    .into_iter()
+                    .filter(|edit| edit.head_log_of.is_none())
+                    .map(|edit| edit.update)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }

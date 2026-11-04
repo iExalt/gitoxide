@@ -1,3 +1,4 @@
+use crate::edit::EditRefs as _;
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
@@ -585,7 +586,7 @@ pub(crate) fn attach_reporting(
         "tix attach",
     ));
     let applied = match repository
-        .edit_references(edits)
+        .edit_refs(edits)
         .or_raise(|| message("could not move and attach the remembered branch"))
     {
         Ok(applied) => applied,
@@ -692,7 +693,7 @@ fn cleanup_new_pins(repository: &gix::Repository, pins: &[(history::Pin, bool)],
         .collect();
     if !edits.is_empty()
         && let Err(err) = repository
-            .edit_references(edits)
+            .edit_refs(edits)
             .or_raise(|| message("could not remove provisional attach pins"))
     {
         cause = cause.and_raise(message!("provisional pin cleanup failed: {err:#}"));
@@ -1237,7 +1238,7 @@ fn create_or_update_head_pin_reporting(
     let target = Target::Symbolic(branch.clone());
     let edit = RefEdit::update(name.clone(), target.clone(), expected, "tix remember HEAD branch");
     let applied = repository
-        .edit_references([edit])
+        .edit_refs([edit])
         .or_raise(|| message("could not remember the branch HEAD was attached to"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((history::Pin { name, target, id }, changes))
@@ -1394,7 +1395,7 @@ fn create_named_pin_reporting(
         reflog_message,
     );
     let applied = repository
-        .edit_references([edit])
+        .edit_refs([edit])
         .or_raise(|| message("could not create tix pin"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((history::Pin { name, target, id }, changes))
@@ -1410,7 +1411,7 @@ pub(crate) fn delete_pin_reporting(
 ) -> Result<Vec<super::undo::RefChange>> {
     let edit = delete_pin_edit(pin);
     let applied = repository
-        .edit_references([edit])
+        .edit_refs([edit])
         .or_raise(|| message("could not remove tix pin"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok(changes)
@@ -1437,7 +1438,7 @@ pub(crate) fn remove_pins_reporting(
     }
     let edits: Vec<_> = pins.iter().map(delete_pin_edit).collect();
     let applied = repository
-        .edit_references(edits)
+        .edit_refs(edits)
         .or_raise(|| message("could not remove tix pins"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((pins.len(), changes))
@@ -1489,7 +1490,7 @@ pub(super) fn delete_deferred_refs(
         .map(|(name, old)| RefEdit::delete(name.clone(), PreviousValue::MustExistAndMatch(Target::Object(*old))))
         .collect();
     let applied = repository
-        .edit_references(edits)
+        .edit_refs(edits)
         .or_raise(|| message("could not delete the branch HEAD left during rebase"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok(changes)
@@ -1522,7 +1523,7 @@ fn checkout_reference(
     checkout_detached(workdir, selected)?;
     open_repository(repository_path, bare, false)
         .or_raise(|| message("could not reopen repository to attach HEAD"))?
-        .edit_reference(RefEdit::update(
+        .edit_ref(RefEdit::update(
             "HEAD".try_into().expect("valid reference name"),
             name.clone(),
             PreviousValue::MustExistAndMatch(Target::Object(selected)),
@@ -2315,7 +2316,7 @@ mod tests {
         let tip_id = repository.head_id()?.detach();
         let branch: gix::refs::FullName = "refs/heads/-f".try_into()?;
         repository.reference(branch.clone(), tip_id, PreviousValue::MustNotExist, "test branch")?;
-        repository.edit_reference(RefEdit::update(
+        repository.edit_ref(RefEdit::update(
             "HEAD".try_into()?,
             branch.clone(),
             PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/main".try_into()?)),
