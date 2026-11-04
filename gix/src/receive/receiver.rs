@@ -67,6 +67,8 @@ pub struct Outcome {
     /// What the commands became, for the hooks that run after the report was sent.
     commands: Vec<Command>,
     push_options: Vec<BString>,
+    /// Set if a `reference-transaction` hook refused the update, which Git doesn't report to the client but dies of.
+    died: Option<String>,
 }
 
 impl Repository {
@@ -171,6 +173,10 @@ impl<'repo> Receiver<'repo> {
         if side_band {
             write_messages(output, &outcome.messages)?;
         }
+        // Git exits without a report, and without the hooks that follow, if a hook refused the update.
+        if let Some(reason) = &outcome.died {
+            bail!(gix_error::message!("{reason}"));
+        }
         if let Some(format) = request.features.status_format() {
             write_report(output, &outcome.report, format, side_band)?;
         }
@@ -199,7 +205,11 @@ impl<'repo> Receiver<'repo> {
     /// Commands that can't be executed are reported as such, which isn't an error. Errors are returned if the request
     /// can't be handled at all, like if it asks for what isn't supported.
     pub fn receive(&self, request: &Request, pack: &mut dyn Read, interrupt: &AtomicBool) -> Result<Outcome> {
-        self.receive_with(request, pack, interrupt, None)
+        let outcome = self.receive_with(request, pack, interrupt, None)?;
+        match &outcome.died {
+            Some(reason) => bail!(gix_error::message!("{reason}")),
+            None => Ok(outcome),
+        }
     }
 
     /// Run the hooks that follow a push, which Git runs after it reported what happened to the client, and then
@@ -249,6 +259,7 @@ impl<'repo> Receiver<'repo> {
         let mut quarantine = None;
         let mut objects_migrated = false;
         let mut maintenance_due = false;
+        let mut died = None;
 
         if request.expects_pack() {
             let objects_dir = repo.objects.store_ref().path().to_owned();
@@ -293,7 +304,8 @@ impl<'repo> Receiver<'repo> {
                     Ok(migrated) => {
                         objects_migrated = migrated.is_some();
                         keep = migrated;
-                        self.update_references(&mut commands, request.features.atomic, &runner, &mut messages)?;
+                        died =
+                            self.update_references(&mut commands, request.features.atomic, &runner, &mut messages)?;
                     }
                 }
             }
@@ -322,6 +334,7 @@ impl<'repo> Receiver<'repo> {
             maintenance_due: maintenance_due && objects_migrated,
             commands: post_commands,
             push_options: request.push_options.clone(),
+            died,
         })
     }
 
@@ -374,7 +387,7 @@ impl<'repo> Receiver<'repo> {
         atomic: bool,
         runner: &Runner<'_, '_>,
         messages: &mut Messages,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let repo = self.repo;
         let update_hook = |command: &Command, messages: &mut Messages| runner.update(command, messages);
         let world = RepoWorld {
@@ -406,13 +419,15 @@ impl<'repo> Receiver<'repo> {
             atomic: false,
             fault: self.fault,
             messages: Vec::new(),
+            hook: runner.exists("reference-transaction"),
+            died: None,
         };
         policy::execute(commands, atomic, &policy, &world, &mut refs, messages);
         messages.0.extend(refs.messages.into_iter().map(|text| Message {
             level: policy::Level::Error,
             text: text.into(),
         }));
-        Ok(())
+        Ok(refs.died)
     }
 }
 
@@ -650,6 +665,10 @@ struct RepoRefs<'a> {
     fault: Option<Fault>,
     /// What went wrong, as Git tells the pusher.
     messages: Vec<String>,
+    /// `true` if there is a `reference-transaction` hook to tell about the transaction.
+    hook: bool,
+    /// Why Git would die, which is what a `reference-transaction` hook causes by refusing.
+    died: Option<String>,
 }
 
 impl Refs for RepoRefs<'_> {
@@ -719,12 +738,27 @@ impl Refs for RepoRefs<'_> {
         if !self.atomic {
             transaction = transaction.batch_updates();
         }
+        if self.hook {
+            transaction = transaction.observer(crate::repository::ReferenceTransactionHook {
+                repo: self.repo,
+                side: gix_hook::Side::Receive,
+            });
+        }
         let prepared = match transaction.prepare(
             edits,
             gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),
         ) {
             Ok(prepared) => prepared,
-            Err(err) => return Err(failed(self, &err)),
+            Err(err) => {
+                if let Some(vetoed) = err.downcast_any_ref::<gix_ref::transaction::observe::Vetoed>() {
+                    self.died = Some(format!(
+                        "in '{}' phase, update aborted by the reference-transaction hook",
+                        vetoed.state.as_str()
+                    ));
+                    return Err(StoreFailure::Died);
+                }
+                return Err(failed(self, &err));
+            }
         };
         let rejected: Vec<_> = prepared
             .rejected()

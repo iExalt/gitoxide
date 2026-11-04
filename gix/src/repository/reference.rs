@@ -207,7 +207,10 @@ impl crate::Repository {
         if run_hooks {
             // Fail early, and once, if hooks can't be run at all.
             self.hook("reference-transaction")?;
-            transaction = transaction.observer(ReferenceTransactionHook { repo: self });
+            transaction = transaction.observer(ReferenceTransactionHook {
+                repo: self,
+                side: gix_hook::Side::of_event("reference-transaction"),
+            });
         }
         Ok(transaction
             .prepare(
@@ -420,8 +423,10 @@ impl crate::Repository {
 #[cfg(feature = "hook")]
 /// Runs the `reference-transaction` hook for each state of a transaction, and refuses the transaction if the hook fails
 /// in a state that can be refused.
-struct ReferenceTransactionHook<'repo> {
-    repo: &'repo crate::Repository,
+pub(crate) struct ReferenceTransactionHook<'repo> {
+    pub(crate) repo: &'repo crate::Repository,
+    /// The side of the hook, which decides where it runs and what it sees.
+    pub(crate) side: gix_hook::Side,
 }
 
 #[cfg(feature = "hook")]
@@ -452,7 +457,7 @@ impl gix_ref::transaction::observe::Observer for ReferenceTransactionHook<'_> {
             input.extend_from_slice(update.name.as_bstr());
             input.push(b'\n');
         }
-        let outcome = self.repo.hook("reference-transaction").and_then(|hook| {
+        let outcome = self.repo.hook_for("reference-transaction", self.side).and_then(|hook| {
             hook.arg(event.state.as_str())
                 .stdin(gix_hook::Stdin::Bytes(input.into()))
                 .run()

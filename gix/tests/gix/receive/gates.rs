@@ -94,7 +94,13 @@ fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResu
         .expect("a hook that can't run is no hook");
 
     // These run, and so are no reason to refuse.
-    for event in ["pre-receive", "update", "post-receive", "post-update"] {
+    for event in [
+        "pre-receive",
+        "update",
+        "post-receive",
+        "post-update",
+        "reference-transaction",
+    ] {
         let hook = dir.path().join("hooks").join(event);
         std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
@@ -103,7 +109,8 @@ fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResu
             .unwrap_or_else(|err| panic!("the {event} hook can be run: {err}"));
         std::fs::remove_file(hook)?;
     }
-    for event in ["push-to-checkout", "reference-transaction"] {
+    {
+        let event = "push-to-checkout";
         let hook = dir.path().join("hooks").join(event);
         std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
