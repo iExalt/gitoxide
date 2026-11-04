@@ -230,6 +230,17 @@ title "Porcelain ${kind}"
         )
       )
     )
+    (with "the unsupported reference format reftable"
+      (sandbox
+        it "fails without creating anything" && {
+          WITH_SNAPSHOT="$snapshot/fail-with-unsupported-ref-format" \
+          expect_run $WITH_FAILURE "$exe" init --ref-format=reftable
+        }
+        it "didn't create a repository" && {
+          expect_run_sh $WITH_FAILURE "test -e .git"
+        }
+      )
+    )
     (with "a single argument denoting the directory to initialize"
       DIR=foo/bar
       (with "a multi-element directory: $DIR"

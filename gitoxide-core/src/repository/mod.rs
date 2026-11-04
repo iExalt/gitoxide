@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use gix::{
     Result,
     bstr::BString,
-    error::{ResultExt, message},
+    error::{OptionExt, ResultExt, message},
 };
 
 #[cfg(feature = "archive")]
@@ -56,13 +56,43 @@ pub mod tree;
 pub mod verify;
 pub mod worktree;
 
+/// Initialize a repository in `directory`, defaulting to the current directory, like `git init` would.
+///
+/// See [`init_with_ref_format()`] for how it selects the reference format.
 pub fn init(directory: Option<PathBuf>) -> Result<gix::discover::repository::Path> {
-    gix::create::into(
+    init_with_ref_format(directory, None)
+}
+
+/// Like [`init()`], but with `ref_format` as the equivalent of `git init --ref-format`.
+///
+/// `ref_format` is the equivalent of `git init --ref-format`. Like in Git, it takes precedence over
+/// `GIT_DEFAULT_REF_FORMAT` and `init.defaultRefFormat`, but not over `GIT_REFERENCE_BACKEND`.
+/// Anything but `files` is refused, before anything is created.
+///
+/// Apart from the reference format, it applies `init.defaultBranch` and `init.defaultObjectFormat` as well.
+pub fn init_with_ref_format(
+    directory: Option<PathBuf>,
+    ref_format: Option<String>,
+) -> Result<gix::discover::repository::Path> {
+    use gix::sec::trust::DefaultForLevel;
+    let mut open_options = gix::open::Options::default_for_level(gix::sec::Trust::Full);
+    if let Some(ref_format) = ref_format {
+        open_options = open_options.config_overrides([format!("init.defaultRefFormat={ref_format}")]);
+    }
+    let repo = gix::ThreadSafeRepository::init_opts(
         directory.unwrap_or_default(),
         gix::create::Kind::WithWorktree,
         gix::create::Options::default(),
+        open_options,
     )
-    .or_raise(|| message("Repository initialization failed"))
+    .or_raise(|| message("Repository initialization failed"))?;
+    let cwd = std::env::current_dir().or_raise(|| message("Could not obtain the current directory"))?;
+    gix::discover::repository::Path::from_dot_git_dir(
+        repo.git_dir().to_owned(),
+        gix::discover::repository::Kind::WorkTree { linked_git_dir: None },
+        &cwd,
+    )
+    .ok_or_raise(|| message("The new repository could not be located"))
 }
 
 pub enum PathsOrPatterns {

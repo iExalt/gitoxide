@@ -38,7 +38,9 @@ pub fn main() -> Result<()> {
             crate::shared::STANDARD_RANGE,
             move |_progress, _out, _err| panic!("something went very wrong"),
         ),
-        Subcommands::Init { directory } => core::repository::init(directory).map(|_| ()),
+        Subcommands::Init { directory, ref_format } => {
+            core::repository::init_with_ref_format(directory, ref_format).map(|_| ())
+        }
         #[cfg(feature = "gitoxide-core-tools")]
         Subcommands::Tool(tool) => match tool {
             #[cfg(feature = "gitoxide-core-tools-query")]

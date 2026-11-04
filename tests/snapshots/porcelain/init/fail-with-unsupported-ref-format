@@ -1,0 +1,4 @@
+Error: Repository initialization failed
+
+Caused by:
+    0: Creating repositories that store references other than in `files` is not supported, format="reftable"
