@@ -1,6 +1,7 @@
 use crate::bstr::BString;
+use gix_hash::ObjectId;
 
-use super::{Refusal, Update};
+use super::{Lease, Refusal, Update};
 
 pub use gix_protocol::push::report::{Unpack, Update as ServerUpdate};
 
@@ -77,5 +78,104 @@ impl Outcome {
                 .entries
                 .iter()
                 .any(|entry| matches!(entry.status, Status::Uncertain { .. } | Status::Unknown))
+    }
+}
+
+impl Entry {
+    /// Return `true` if the update was sent to the server, which means that it may have been applied whatever the status says,
+    /// as a server can change the reference and then fail to tell. [Reconcile](crate::remote::Connection::reconcile()) these
+    /// with the remote before concluding anything.
+    pub fn was_sent(&self) -> bool {
+        !matches!(self.status, Status::UpToDate | Status::Refused(_))
+    }
+}
+
+/// What the remote reference is, compared to what the push expected and wanted. It is an observation only: another writer
+/// can have changed the reference since the push, and can have put it back to a value it had before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Observed {
+    /// The reference has the value the update wanted it to have, or doesn't exist after a deletion.
+    ///
+    /// Only this permits to conclude that the update happened, and to remove a marker that says it is pending.
+    AtNew,
+    /// The reference has the value of the lease, or doesn't exist after a creation, which is what it had before the update.
+    ///
+    /// The update wasn't applied, or was applied and reverted by someone else, which can't be told. It is safe to try again
+    /// with the original lease, which has to pass the check against the advertisement again, but it is not a reason to conclude
+    /// that the update didn't happen.
+    AtLease,
+    /// The reference has another value, or doesn't exist.
+    Elsewhere(Option<ObjectId>),
+}
+
+impl Observed {
+    /// Compare `advertised`, the value of the reference on the remote, with what `update` expected and wanted.
+    pub(crate) fn of(update: &Update, advertised: Option<ObjectId>) -> Observed {
+        let lease = match update.lease {
+            Lease::At(id) => Some(id),
+            Lease::Absent => None,
+        };
+        if advertised == update.new {
+            Observed::AtNew
+        } else if advertised == lease {
+            Observed::AtLease
+        } else {
+            Observed::Elsewhere(advertised)
+        }
+    }
+}
+
+/// What the remote has for an update that was sent, which is a statement about the remote when it was observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observation {
+    /// The update that was sent.
+    pub update: Update,
+    /// How the remote reference compares to it.
+    pub observed: Observed,
+}
+
+/// Everything observed about the updates that were sent, obtained by [reconciling](crate::remote::Connection::reconcile()).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reconciliation {
+    /// One observation for each update that was sent, in the order of the outcome.
+    pub observations: Vec<Observation>,
+}
+
+#[cfg(test)]
+mod tests {
+    use gix_hash::{Kind, ObjectId};
+    use gix_ref::FullName;
+
+    use super::*;
+
+    fn id(byte: u8) -> ObjectId {
+        ObjectId::from_bytes_or_panic(&vec![byte; Kind::Sha1.len_in_bytes()])
+    }
+
+    fn name() -> FullName {
+        "refs/heads/a".try_into().expect("valid name")
+    }
+
+    #[test]
+    fn observations_compare_the_remote_with_what_was_expected_and_wanted() {
+        let change = Update::change(name(), id(1), id(2));
+        assert_eq!(Observed::of(&change, Some(id(2))), Observed::AtNew);
+        assert_eq!(
+            Observed::of(&change, Some(id(1))),
+            Observed::AtLease,
+            "this is also what a push that was applied and reverted looks like"
+        );
+        assert_eq!(Observed::of(&change, Some(id(3))), Observed::Elsewhere(Some(id(3))));
+        assert_eq!(Observed::of(&change, None), Observed::Elsewhere(None));
+
+        let delete = Update::delete(name(), id(1));
+        assert_eq!(Observed::of(&delete, None), Observed::AtNew, "the reference is gone");
+        assert_eq!(Observed::of(&delete, Some(id(1))), Observed::AtLease);
+        assert_eq!(Observed::of(&delete, Some(id(3))), Observed::Elsewhere(Some(id(3))));
+
+        let create = Update::create(name(), id(2));
+        assert_eq!(Observed::of(&create, Some(id(2))), Observed::AtNew);
+        assert_eq!(Observed::of(&create, None), Observed::AtLease, "it doesn't exist yet");
+        assert_eq!(Observed::of(&create, Some(id(3))), Observed::Elsewhere(Some(id(3))));
     }
 }
