@@ -89,9 +89,7 @@ impl Cutoffs {
         use gix_error::{ResultExt, message};
         let mut ids = Vec::new();
         // Git lists the references of alternates, which doesn't include their `HEAD`.
-        if include_head
-            && let Some(id) = repo.head().or_raise(|| message("Could not read HEAD"))?.id()
-        {
+        if include_head && let Some(id) = repo.head().or_raise(|| message("Could not read HEAD"))?.id() {
             ids.push(id.detach());
         }
         for reference in repo
@@ -201,7 +199,7 @@ pub fn verify(repo: &Repository, cutoffs: &Cutoffs, tips: &[ObjectId]) -> Result
                     .find_commit(*parent)
                     .ok()
                     .and_then(|commit| commit.tree_id().ok())
-                    .map(|id| id.detach())
+                    .map(crate::Id::detach)
             {
                 mark_known(repo, tree_id, &mut known);
             }
@@ -210,9 +208,12 @@ pub fn verify(repo: &Repository, cutoffs: &Cutoffs, tips: &[ObjectId]) -> Result
 
     let mut checked = HashSet::<ObjectId>::new();
     for (commit_id, _) in &new_commits {
-        let commit = repo
-            .find_commit(*commit_id)
-            .map_err(|err| disconnected(*commit_id, format!("Commit {commit_id} is missing or unreadable: {err}")))?;
+        let commit = repo.find_commit(*commit_id).map_err(|err| {
+            disconnected(
+                *commit_id,
+                format!("Commit {commit_id} is missing or unreadable: {err}"),
+            )
+        })?;
         let tree_id = commit
             .tree_id()
             .map_err(|err| disconnected(*commit_id, format!("Commit {commit_id} is invalid: {err}")))?
