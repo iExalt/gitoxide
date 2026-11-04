@@ -336,5 +336,34 @@ mod refedit_ext {
             );
             Ok(())
         }
+
+        #[test]
+        fn the_expected_id_of_a_deletion_moves_to_the_referent_of_a_symbolic_reference() -> gix_testtools::TestResult {
+            let id = hex_to_id("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+            let store = MockStore::with(vec![
+                ("refs/heads/alias", Target::Symbolic("refs/heads/main".try_into()?)),
+                ("refs/heads/main", Target::Object(id)),
+            ]);
+            let mut edits = vec![
+                RefEdit::delete(
+                    "refs/heads/alias".try_into()?,
+                    PreviousValue::MustExistAndMatch(Target::Object(id)),
+                )
+                .with_deref(true),
+            ];
+            edits.extend_with_splits_of_symbolic_refs(&mut |n| store.find_existing(n), &mut |_, e| e)?;
+            assert_eq!(
+                edits,
+                vec![
+                    RefEdit::delete_with_log("refs/heads/alias".try_into()?, PreviousValue::Any, RefLog::Only),
+                    RefEdit::delete(
+                        "refs/heads/main".try_into()?,
+                        PreviousValue::MustExistAndMatch(Target::Object(id))
+                    ),
+                ],
+                "a symbolic reference can't have the id, so only its referent is checked, like Git does when deleting through an alias"
+            );
+            Ok(())
+        }
     }
 }

@@ -82,7 +82,16 @@ where
                             } => {
                                 let current_mode = *mode;
                                 *mode = RefLog::Only;
-                                RefEdit::delete_with_log(referent, previous.clone(), current_mode).with_deref(true)
+                                // An expected id is the value of the referent, which is what is deleted in the end,
+                                // and a symbolic reference can't have it. Like for updates, the check moves there.
+                                let next = match previous {
+                                    PreviousValue::MustExistAndMatch(Target::Object(_))
+                                    | PreviousValue::ExistingMustMatch(Target::Object(_)) => {
+                                        std::mem::replace(previous, PreviousValue::Any)
+                                    }
+                                    other => other.clone(),
+                                };
+                                RefEdit::delete_with_log(referent, next, current_mode).with_deref(true)
                             }
                             Change::Update { log, expected, new } => {
                                 let current = std::mem::replace(
