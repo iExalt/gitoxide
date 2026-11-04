@@ -78,6 +78,16 @@ where
         P::SubProgress: 'static,
     {
         let Prepare { inner, repo } = self;
+        // A server that stopped responding blocks reads that don't look at the flag, so the transport is ended from a thread
+        // of its own once the flag is set.
+        #[cfg(feature = "blocking-network-client")]
+        if let Some(handle) = inner
+            .con
+            .as_ref()
+            .and_then(|con| gix_protocol::transport::client::TransportWithoutIO::interrupt_handle(&con.transport.inner))
+        {
+            return handle.watch(should_interrupt, || inner.receive(repo, progress, should_interrupt));
+        }
         inner.receive(repo, progress, should_interrupt).await
     }
 }
