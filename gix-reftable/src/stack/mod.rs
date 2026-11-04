@@ -171,6 +171,24 @@ impl Stack {
         })
     }
 
+    /// Create a stack from `snapshot`, which was taken from the stack in `dir` for the same `hash_kind`, without reading
+    /// anything. This is cheap, and meant for changing a stack that is otherwise shared, using
+    /// [`into_addition()`](Self::into_addition()), which reloads it under the lock.
+    ///
+    /// Using a snapshot of another directory or hash kind is not detected, and makes the stack misbehave.
+    pub fn from_snapshot(dir: impl Into<PathBuf>, hash_kind: Kind, options: Options, snapshot: Snapshot) -> Self {
+        Self {
+            dir: dir.into(),
+            hash_kind,
+            options,
+            snapshot,
+            #[cfg(test)]
+            inject: None,
+            #[cfg(test)]
+            hook: None,
+        }
+    }
+
     /// Read the list and the tables again and return `true` if the stack changed since it was read last.
     ///
     /// Snapshots taken before aren't affected.
