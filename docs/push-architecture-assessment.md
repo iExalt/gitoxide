@@ -337,7 +337,7 @@ leaves stale `*.lock` files, optionally with a `~pid.lock` sibling under
 and writes each new value into its lock file (`refs/files-backend.c:3020-3061`,
 `:2857-2887`). Any failure releases all locks and changes no ref (`:3123-3132`,
 `:2911-2947`), except per-ref rejections under `ALLOW_FAILURE`. An update whose new value
-equals the current value writes nothing and gets no reflog entry (`:2857-2866`).
+equals the current value writes nothing and gets no entry in the ref's own reflog (`:2857-2866`). When the ref is the branch `HEAD` points at, the `HEAD` reflog still gets an entry (ran, see [measured behaviour](push-durability-evidence.md)).
 
 **Commit order and partial application.** Finish performs, in this order
 (`refs/files-backend.c:3321-3475`):
@@ -497,10 +497,10 @@ backends: unset means off in bare and on in non-bare repositories
 | Ref publication | Rename of lock file; no directory flush | Rename of `tables.list.lock`; no directory flush | No |
 | Reflog | Append, never flushed | Part of the table; flushed only as above | No |
 | `packed-refs` / list file | Tempfile flushed if `reference` enabled, then renamed | `tables.list.lock` flushed if `reference` enabled, then renamed | No |
-| Objects from a push | Barrier flush of a scratch file before migration, unconditional (`object-file.c:1259-1294`); packs and derived metadata flushed by default; the default component set excludes loose objects, but pushes under the unpack limit run `unpack-objects`, which starts its own object transaction inside the quarantine (`builtin/unpack-objects.c:605`); that interaction is not checked | Same | Barrier yes; loose objects: unverified |
+| Objects from a push | Barrier flush of a scratch file before migration, unconditional (`object-file.c:1259-1294`); packs and derived metadata flushed by default; the default component set excludes loose objects, but pushes under the unpack limit run `unpack-objects`, which starts its own object transaction inside the quarantine (`builtin/unpack-objects.c:605`); with the defaults, no per-object flush happens, only the barrier (ran: [measured behaviour](push-durability-evidence.md)) | Same | Barrier yes; loose objects: no, except with the `loose-object` component or `core.fsyncObjectFiles`; batching needs `loose-object` as well |
 
 The plan's statement that objects are flushed "no earlier or later" than `core.fsync`
-requires does not hold for receive-pack: the migration barrier is unconditional, and a
+requires does not hold for receive-pack: the migration barrier ignores the selected components (it still follows `core.fsyncMethod`), and a
 fork receiver must match it.
 
 ### 3.5 What differential tests must pin per backend
