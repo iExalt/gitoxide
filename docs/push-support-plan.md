@@ -503,3 +503,22 @@ sequencing; the overseer proposes each as its dependencies finish.
 - 2026-11-04: the owner chose the HTTP backend for thread 10: "Reqwest and rustls, apply the low-speed limits, proxy and CA
   settings." Thread 10 makes the `reqwest` backend with `rustls` the primary one for push and fetch, applies those
   settings on it, and keeps `curl` working. The backends that existing presets select don't change in this thread.
+- 2026-11-04: thread 8 (local consumer backend), progress and what it left open so far. Merged: the files store's reflog
+  messages are cleaned like Git's (#50), `HEAD` gets the reflog entry that Git writes when the branch it points to changes,
+  in both stores, with `HeadLog::CallerDecides` as the explicit opt-in for the one consumer that edits `HEAD` and its branch
+  in one transaction (#53, `gix-tix` uses it), and the reftable arm decides alike and refuses to create existing references (#58).
+  This PR makes `core.logAllRefUpdates=false` and bare repositories append to existing reflogs instead of writing none.
+  Each is pinned against Git 2.56 for both hashes; the reftable arm is covered by differential tests of its own.
+  - Open items, deferred on purpose. The refusal for a transaction that edits `HEAD` and its referent lacks `reference` metadata,
+    and Git's wording when the verification comes first is not matched. The observer's view of a refused transaction, `HEAD` logs
+    in worktrees and namespaces, `WriteReflog::Always` and `Disable` with `HEAD` edits, a delete with `ExistingMustMatch` on an
+    absent branch, and that `edit_references` defaults to Git's rules are untested. Deletions don't log an empty message for `HEAD`.
+    A caller-supplied log-only edit of `HEAD` next to a branch edit is refused by the files store in Git's mode and accepted by
+    reftables. A repository with leftover reflogs but no identity now fails with `NothingApplied` where it wrote none before.
+    Reference lookup and listing still differ from Git in three ways: dangling and absent references are not told apart, a
+    broken reference stops iteration where Git's policy differs, and `prefixed("refs/heads/m")` matches `main` and `mine`.
+  - Runtimes on the 8-core station, one sample each, against the 530 s baseline and the 12-minute budget in FORK.md:
+    `check:thorough` took 1,185 s at the tip of the commit that changes the default (load 5.3, 4.4 and 3.7), after 904 s
+    for #41, 1,236 s for #53 and 1,190 s for #58. All are above both numbers; the stages weren't timed, and each run followed a
+    rebase that rebuilt the dependents of `gix-ref`. `mise run test` takes 37 s when nothing changed and 121 to 147 s after a
+    change to `gix-ref`, against a 120 s budget.
