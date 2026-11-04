@@ -6,9 +6,9 @@ use std::{
 
 use crate::{OutputFormat, net, pack::receive::protocol::fetch::negotiate};
 #[cfg(feature = "async-client")]
-use gix::protocol::transport::client::async_io::connect;
+use gix::protocol::transport::client::async_io::{Transport, connect};
 #[cfg(feature = "blocking-client")]
-use gix::protocol::transport::client::blocking_io::connect;
+use gix::protocol::transport::client::blocking_io::{Transport, connect};
 use gix::{
     DynNestedProgress, Result,
     config::tree::Key,
@@ -44,6 +44,40 @@ pub async fn receive<P, W>(
     url: &str,
     directory: Option<PathBuf>,
     refs_directory: Option<PathBuf>,
+    wanted_refs: Vec<BString>,
+    progress: P,
+    ctx: Context<W>,
+) -> Result<()>
+where
+    W: std::io::Write,
+    P: NestedProgress + 'static,
+    P::SubProgress: 'static,
+{
+    let transport = net::connect(
+        url,
+        connect::Options {
+            version: protocol.unwrap_or_default().into(),
+            ..Default::default()
+        },
+    )
+    .await?;
+    // A server that stops responding blocks reads that don't look at the flag, so the transport is ended from a thread of its
+    // own once the flag is set, as the interrupt handler of the program sets it.
+    #[cfg(feature = "blocking-client")]
+    if let Some(handle) = gix::protocol::transport::client::TransportWithoutIO::interrupt_handle(&transport.inner) {
+        let should_interrupt = ctx.should_interrupt.clone();
+        return handle.watch(&should_interrupt, || {
+            receive_from(transport, directory, refs_directory, wanted_refs, progress, ctx)
+        });
+    }
+    receive_from(transport, directory, refs_directory, wanted_refs, progress, ctx).await
+}
+
+#[bisync::bisync]
+async fn receive_from<P, W>(
+    mut transport: gix::protocol::SendFlushOnDrop<Box<dyn Transport + Send>>,
+    directory: Option<PathBuf>,
+    refs_directory: Option<PathBuf>,
     mut wanted_refs: Vec<BString>,
     mut progress: P,
     ctx: Context<W>,
@@ -53,14 +87,6 @@ where
     P: NestedProgress + 'static,
     P::SubProgress: 'static,
 {
-    let mut transport = net::connect(
-        url,
-        connect::Options {
-            version: protocol.unwrap_or_default().into(),
-            ..Default::default()
-        },
-    )
-    .await?;
     let trace_packetlines = std::env::var_os(
         gix::config::tree::Gitoxide::TRACE_PACKET
             .environment_override()
