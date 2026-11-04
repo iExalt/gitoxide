@@ -5,6 +5,7 @@ use gix_testtools::TestResult;
 
 use crate::{fixture_hash_kind, scripted_fixture_read_only};
 
+mod git_cases;
 mod read;
 mod write;
 
