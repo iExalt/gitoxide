@@ -90,6 +90,7 @@ extras = [
     "blame",
     "merge",
     "notes",
+    "maintenance",
 ]
 
 ## Various progress-related features that improve the look of progress message units.
@@ -145,6 +146,9 @@ interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
 
 ## Access to `.git/index` files.
 index = ["dep:gix-index"]
+
+## Find what is still wanted in a repository, as a first step of removing what isn't, with a top-level `maintenance` module.
+maintenance = ["index"]
 
 ## Support directory walks with Git-style annoations.
 dirwalk = ["dep:gix-dir", "attributes", "excludes"]

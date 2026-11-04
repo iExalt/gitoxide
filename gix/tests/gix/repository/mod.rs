@@ -22,6 +22,8 @@ mod hook;
 mod location;
 #[cfg(feature = "mailmap")]
 mod mailmap;
+#[cfg(feature = "maintenance")]
+mod maintenance;
 #[cfg(feature = "merge")]
 mod merge;
 #[cfg(feature = "notes")]
