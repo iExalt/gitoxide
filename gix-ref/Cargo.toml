@@ -47,6 +47,7 @@ gix-utils = { path = "../gix-utils" }
 gix-validate = { path = "../gix-validate" }
 gix-actor = { path = "../gix-actor" }
 gix-lock = { path = "../gix-lock" }
+gix-tempfile = { path = "../gix-tempfile" }
 gix-reftable = { path = "../gix-reftable", optional = true }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = [

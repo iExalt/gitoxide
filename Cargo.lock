@@ -2522,6 +2522,7 @@ dependencies = [
  "gix-parallel",
  "gix-path",
  "gix-reftable",
+ "gix-tempfile",
  "gix-testtools",
  "gix-utils",
  "gix-validate",

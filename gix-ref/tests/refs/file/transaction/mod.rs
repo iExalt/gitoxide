@@ -79,6 +79,7 @@ pub(crate) mod prepare_and_commit {
     mod head_reflog;
     mod name_conflicts;
     mod observe;
+    mod packed_refs_lock;
     mod reflog_message;
     mod write_reflog;
 }
