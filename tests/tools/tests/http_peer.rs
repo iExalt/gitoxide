@@ -405,3 +405,48 @@ fn keep_alive_serves_several_requests_per_connection_and_closes_idle_ones() -> T
     );
     Ok(())
 }
+
+#[test]
+fn git_uses_the_peer_as_an_authenticating_proxy() -> TestResult {
+    if !git_supports_http() {
+        return Ok(());
+    }
+    let setup = Setup::new("sha1")?;
+    let peer = HttpPeer::start(Config {
+        project_root: setup.root(),
+        proxy_mode: gix_testtools::http_peer::ProxyMode::Forward,
+        proxy_auth: Some(BasicAuth {
+            username: "user".into(),
+            password: "secret".into(),
+        }),
+        ..Default::default()
+    })?;
+    let url = "http://git.example.invalid/remote.git";
+    // The proxy is the point of this test, so the isolation's `NO_PROXY=*` must not apply.
+    let proxy = |credentials: &str| format!("http.proxy=http://{credentials}{}", peer.addr());
+    let git = |args: &[&str]| -> std::io::Result<std::process::Output> {
+        let mut cmd = gix_testtools::git_command(setup.work());
+        cmd.env_remove("NO_PROXY").env_remove("no_proxy").args(args);
+        cmd.output()
+    };
+    assert_fails(
+        git(&["-c", &proxy(""), "ls-remote", url]),
+        "the proxy asks for credentials",
+    )?;
+    assert_ok(
+        git(&["-c", &proxy("user:secret@"), "ls-remote", url]),
+        "with credentials the proxy serves the request",
+    )?;
+    let requests = peer.requests();
+    assert!(
+        requests.iter().any(|req| req.status == 407),
+        "a request without credentials is refused: {requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|req| req.target.starts_with("http://git.example.invalid/") && req.status == 200),
+        "{requests:?}"
+    );
+    Ok(())
+}
