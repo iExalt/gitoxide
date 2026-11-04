@@ -61,8 +61,11 @@ pub(crate) mod function {
     where
         Find: crate::Find + Send + Clone + 'static,
     {
+        // The size of chunks is only chosen for the work to be distributed if there are multiple threads. With a single one,
+        // it bounds the memory that is held, so the caller's choice is used as is.
+        let num_items = (thread_limit != Some(1)).then_some(counts.len());
         let (chunk_size, thread_limit, _) =
-            parallel::optimize_chunk_size_and_thread_limit(chunk_size, Some(counts.len()), thread_limit, None);
+            parallel::optimize_chunk_size_and_thread_limit(chunk_size, num_items, thread_limit, None);
         {
             let progress = Arc::new(parking_lot::Mutex::new(
                 progress.add_child_with_id("resolving".into(), ProgressId::ResolveCounts.into()),
@@ -389,7 +392,11 @@ mod types {
         ///
         /// If set to false, delta objects will be decompressed and recompressed as base objects.
         pub allow_thin_pack: bool,
-        /// The amount of objects per chunk or unit of work to be sent to threads for processing
+        /// The amount of objects per chunk or unit of work to be sent to threads for processing, which are also
+        /// the objects that are held in memory at a time.
+        ///
+        /// If `thread_limit` is `Some(1)`, this is the size of the chunks. Otherwise, it is a hint that is replaced
+        /// with a size that distributes the work well if the `parallel` feature is enabled.
         /// TODO: could this become the window size?
         pub chunk_size: usize,
         /// The pack data version to produce for each entry
