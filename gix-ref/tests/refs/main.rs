@@ -67,6 +67,8 @@ mod equality;
 mod error;
 mod file;
 mod fullname;
+#[cfg(feature = "reftable")]
+mod reftable;
 mod view;
 mod partialname {
     use gix_ref::PartialName;

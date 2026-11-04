@@ -36,6 +36,8 @@ pub use crate::file::find::NotFound;
 pub enum Kind {
     /// References are stored in loose files, and in `packed-refs`.
     Files,
+    /// References and their reflogs are stored in stacks of reftables.
+    Reftable,
 }
 
 /// A borrowed, backend-neutral view of a reference store, to find, iterate and edit references.
@@ -49,6 +51,17 @@ pub struct StoreRef<'a> {
 #[derive(Clone, Copy)]
 enum Backend<'a> {
     File(&'a file::Store),
+    #[cfg(feature = "reftable")]
+    Reftable(&'a crate::reftable::Store),
+}
+
+#[cfg(feature = "reftable")]
+impl<'a> From<&'a crate::reftable::Store> for StoreRef<'a> {
+    fn from(store: &'a crate::reftable::Store) -> Self {
+        StoreRef {
+            backend: Backend::Reftable(store),
+        }
+    }
 }
 
 impl<'a> From<&'a file::Store> for StoreRef<'a> {
@@ -63,6 +76,8 @@ impl std::fmt::Debug for StoreRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.backend {
             Backend::File(store) => f.debug_tuple("StoreRef").field(store).finish(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => f.debug_tuple("StoreRef").field(store).finish(),
         }
     }
 }
@@ -73,6 +88,8 @@ impl<'a> StoreRef<'a> {
     pub fn kind(self) -> Kind {
         match self.backend {
             Backend::File(_) => Kind::Files,
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(_) => Kind::Reftable,
         }
     }
 
@@ -83,6 +100,8 @@ impl<'a> StoreRef<'a> {
     pub fn git_dir(self) -> &'a Path {
         match self.backend {
             Backend::File(store) => store.git_dir(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.git_dir(),
         }
     }
 
@@ -90,6 +109,8 @@ impl<'a> StoreRef<'a> {
     pub fn common_dir(self) -> Option<&'a Path> {
         match self.backend {
             Backend::File(store) => store.common_dir(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.common_dir(),
         }
     }
 
@@ -97,6 +118,8 @@ impl<'a> StoreRef<'a> {
     pub fn object_hash(self) -> gix_hash::Kind {
         match self.backend {
             Backend::File(store) => store.object_hash(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.object_hash(),
         }
     }
 
@@ -104,6 +127,8 @@ impl<'a> StoreRef<'a> {
     pub fn namespace(self) -> Option<&'a Namespace> {
         match self.backend {
             Backend::File(store) => store.namespace.as_ref(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.namespace.as_ref(),
         }
     }
 
@@ -111,6 +136,8 @@ impl<'a> StoreRef<'a> {
     pub fn write_reflog(self) -> WriteReflog {
         match self.backend {
             Backend::File(store) => store.write_reflog,
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.write_reflog,
         }
     }
 
@@ -118,6 +145,8 @@ impl<'a> StoreRef<'a> {
     pub fn unsupported_backend(self) -> Option<&'a str> {
         match self.backend {
             Backend::File(store) => store.unsupported_backend(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.unsupported_backend(),
         }
     }
 
@@ -126,6 +155,8 @@ impl<'a> StoreRef<'a> {
     pub fn assure_backend_supported(self) -> Result<()> {
         match self.backend {
             Backend::File(store) => store.assure_backend_supported(),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.assure_backend_supported(),
         }
     }
 
@@ -134,6 +165,8 @@ impl<'a> StoreRef<'a> {
     pub fn is_pristine(self, default_ref: &FullNameRef) -> Option<bool> {
         match self.backend {
             Backend::File(store) => store.is_pristine(default_ref),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.is_pristine(default_ref),
         }
     }
 
@@ -143,6 +176,8 @@ impl<'a> StoreRef<'a> {
     pub fn as_file(self) -> Option<&'a file::Store> {
         match self.backend {
             Backend::File(store) => Some(store),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(_) => None,
         }
     }
 }
@@ -159,6 +194,8 @@ impl<'a> StoreRef<'a> {
     {
         match self.backend {
             Backend::File(store) => store.try_find(partial),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.try_find(partial),
         }
     }
 
@@ -171,6 +208,8 @@ impl<'a> StoreRef<'a> {
     {
         match self.backend {
             Backend::File(store) => store.find(partial),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.find(partial),
         }
     }
 
@@ -183,6 +222,8 @@ impl<'a> StoreRef<'a> {
     {
         match self.backend {
             Backend::File(store) => store.try_find_resolved(partial),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.try_find_resolved(partial),
         }
     }
 
@@ -195,6 +236,8 @@ impl<'a> StoreRef<'a> {
     {
         match self.backend {
             Backend::File(store) => store.find_resolved(partial),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.find_resolved(partial),
         }
     }
 
@@ -208,6 +251,8 @@ impl<'a> StoreRef<'a> {
                 .cached_packed_buffer()
                 .map(|packed| Snapshot::new_file(store, packed))
                 .or_raise(|| message("Could not obtain a snapshot of the references")),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.snapshot().map(Snapshot::new_reftable),
         }
     }
 
@@ -215,6 +260,8 @@ impl<'a> StoreRef<'a> {
     pub fn iter(self) -> Result<Platform<'a>> {
         match self.backend {
             Backend::File(store) => store.iter().map(Platform::new_file),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.iter().map(Platform::new_reftable),
         }
     }
 
@@ -233,6 +280,8 @@ impl<'a> StoreRef<'a> {
     {
         match self.backend {
             Backend::File(store) => store.reflog_exists(name),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.reflog_exists(name),
         }
     }
 }
@@ -245,6 +294,8 @@ impl<'a> StoreRef<'a> {
     pub fn transaction(self) -> Transaction<'a, 'a> {
         match self.backend {
             Backend::File(store) => Transaction::new_file(store.transaction()),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => Transaction::new_reftable(store),
         }
     }
 }
