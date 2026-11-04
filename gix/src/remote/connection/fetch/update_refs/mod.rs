@@ -200,7 +200,7 @@ pub(crate) fn update(
                                     PreviousValue::MustExistAndMatch(existing.target().into_owned()),
                                 )
                             }
-                            Err(err) if err.downcast_any_ref::<gix_ref::file::find::NotFound>().is_some() => {
+                            Err(err) if err.downcast_any_ref::<gix_ref::view::NotFound>().is_some() => {
                                 // An unborn reference, always allow it to be changed to whatever the remote wants.
                                 (
                                     if existing.target().try_name().map(gix_ref::FullNameRef::as_bstr)
@@ -312,16 +312,19 @@ pub(crate) fn update(
             let (file_lock_fail, packed_refs_lock_fail) = repo.config.lock_timeout().or_raise(|| {
                 gix_error::message("Failed to update references to their new position to match their remote locations")
             })?;
-            repo.refs
+            repo.ref_store()
                 .transaction()
                 .packed_refs(
                     match write_packed_refs {
                         fetch::WritePackedRefs::Only => {
-                            gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(Box::new(&repo.objects))},
-                        fetch::WritePackedRefs::Never => gix_ref::file::transaction::PackedRefs::DeletionsOnly
+                            gix_ref::view::transaction::PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(Box::new(&repo.objects))},
+                        fetch::WritePackedRefs::Never => gix_ref::view::transaction::PackedRefs::DeletionsOnly
                     }
                 )
-                .prepare(edits, file_lock_fail, packed_refs_lock_fail)
+                .prepare(
+                    edits,
+                    gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),
+                )
                 .or_raise(|| {
                     gix_error::message(
                         "Failed to update references to their new position to match their remote locations",
@@ -341,6 +344,7 @@ pub(crate) fn update(
                         "Failed to update references to their new position to match their remote locations",
                     )
                 })?
+                .edits
         }
         fetch::DryRun::Yes => edits,
     };
@@ -365,7 +369,8 @@ fn update_needs_adjustment_as_edits_symbolic_target_is_missing(
                             if current_target_name.as_ref() == new_target_ref {
                                 return false; // no-op are always fine
                             }
-                            let current_is_unborn = repo.refs.try_find(current_target_name).ok().flatten().is_none();
+                            let current_is_unborn =
+                                repo.ref_store().try_find(current_target_name).ok().flatten().is_none();
                             if current_is_unborn {
                                 return false;
                             }
@@ -380,7 +385,7 @@ fn update_needs_adjustment_as_edits_symbolic_target_is_missing(
                     unreachable!("we don't ever delete here")
                 }
             }
-            let target_ref_exists_locally = repo.refs.try_find(new_target_ref).ok().flatten().is_some();
+            let target_ref_exists_locally = repo.ref_store().try_find(new_target_ref).ok().flatten().is_some();
             if target_ref_exists_locally {
                 return false;
             }

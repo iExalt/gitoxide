@@ -129,7 +129,7 @@ impl crate::Repository {
     ) -> Result<PrepareCheckout> {
         let repo = self.with_absolute_paths()?;
         // Refuse before registering anything, as the HEAD of the new worktree can't be created without references.
-        repo.refs.assure_backend_supported()?;
+        repo.ref_store().assure_backend_supported()?;
         let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
             .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))

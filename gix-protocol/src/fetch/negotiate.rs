@@ -374,7 +374,7 @@ fn mark_all_refs_in_repo(
             .or_raise(|| message("Could not open packed refs"))?;
         let id = match local_ref.peel_to_id_packed(store, objects, packed.as_ref().map(|b| &***b)) {
             Ok(id) => id,
-            Err(err) if err.downcast_any_ref::<gix_ref::file::find::NotFound>().is_some() => continue,
+            Err(err) if err.downcast_any_ref::<gix_ref::view::NotFound>().is_some() => continue,
             Err(err) => return Err(err.and_raise(message("Could not peel reference to ID"))),
         };
         let mut is_complete = false;
