@@ -53,7 +53,8 @@ fn test_command(
     command
         .args(["--no-tests", "pass"])
         .env_remove("GIX_TEST_IGNORE_ARCHIVES")
-        .env_remove("GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI");
+        .env_remove("GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI")
+        .env_remove("GIX_TEST_USE_ARCHIVES");
     command.env(
         match fixtures {
             Fixtures::Archived => "GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI",
@@ -61,6 +62,11 @@ fn test_command(
         },
         "1",
     );
+    if fixtures == Fixtures::Archived {
+        // A shim or wrapper (such as mise's) may re-inject `GIX_TEST_IGNORE_ARCHIVES` from its own environment,
+        // which removing the variable cannot prevent; this marker makes the test tools use the archives regardless.
+        command.env("GIX_TEST_USE_ARCHIVES", "1");
+    }
     command.args([
         "-E",
         if windows_arm {
@@ -398,6 +404,10 @@ mod tests {
                 ),
                 (
                     "GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI",
+                    (*fixtures == Fixtures::Archived).then_some("1"),
+                ),
+                (
+                    "GIX_TEST_USE_ARCHIVES",
                     (*fixtures == Fixtures::Archived).then_some("1"),
                 ),
             ] {
