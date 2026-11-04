@@ -14,6 +14,8 @@ mod head;
 mod id;
 mod init;
 mod object;
+#[cfg(feature = "receive")]
+mod receive;
 mod reference;
 mod remote;
 mod repository;

@@ -237,6 +237,10 @@ pub mod progress;
 pub mod push;
 
 ///
+#[cfg(feature = "receive")]
+pub mod receive;
+
+///
 pub mod diff;
 
 ///
