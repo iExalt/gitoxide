@@ -571,6 +571,10 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
     * [ ] async client
     * [ ] signed pushes and thin packs
 * [ ] upload-pack / receive-pack server plumbing for in-process transports
+    * [x] receive-pack advertisement, request parsing, status reports and side bands, see `receive`
+    * [ ] receive-pack object ingestion, policy and hooks
+    * [ ] push certificates
+    * [ ] upload-pack
 * [ ] bundle-uri protocol integration
 * [ ] remote helper protocol and integration
 * [x] API documentation
