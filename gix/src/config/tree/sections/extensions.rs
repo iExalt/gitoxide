@@ -13,8 +13,8 @@ impl Extensions {
     pub const OBJECT_FORMAT: ObjectFormat = ObjectFormat::new_object_format("objectFormat", &config::Tree::EXTENSIONS);
     /// The `extensions.refStorage` key, selecting the reference storage backend.
     ///
-    /// `files` is always supported, and `reftable` with the `reftable` feature, which can read and edit references of existing
-    /// repositories, but not yet create new ones.
+    /// `files` is always supported, and `reftable` with the `reftable` feature, which can read and edit references,
+    /// and create new repositories that store them this way.
     /// Without the feature, or at a location given with the `<format>://<payload>` form, `gix` can't operate
     /// on references and refuses to.
     pub const REF_STORAGE: RefStorage = RefStorage::new_ref_storage("refStorage", &config::Tree::EXTENSIONS)

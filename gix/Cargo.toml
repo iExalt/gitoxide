@@ -35,6 +35,7 @@ default = [
     "extras",
     "auto-chain-error",
     "sha1",
+    "reftable",
 ]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
@@ -66,12 +67,11 @@ default = [
 basic = ["blob-diff", "revision", "index"]
 
 ## Read and edit the references of repositories that store them as reftables, which Git selects with
-## `extensions.refStorage = reftable`.
+## `extensions.refStorage = reftable`, and create such repositories if asked to like Git does, with `init.defaultRefFormat`,
+## `GIT_DEFAULT_REF_FORMAT` or `feature.experimental`.
 ##
 ## Without it, such repositories can be opened and their objects used, but every operation on references fails with an
-## `Unsupported` error. It adds `gix-reftable` and its dependencies.
-##
-## Creating repositories that store references this way, with `init` or `clone`, isn't supported yet.
+## `Unsupported` error, and creating one fails the same way. It adds `gix-reftable` and its dependencies.
 reftable = ["gix-ref/reftable"]
 
 ## Various additional features and capabilities that are not necessarily part of what most users would need.
