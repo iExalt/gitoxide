@@ -135,7 +135,7 @@ impl gix_object::Write for crate::Repository {
 
     fn write_buf(&self, object: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId> {
         let oid = gix_object::compute_hash(self.object_hash(), object, from)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.freshen_without_refresh(&oid) {
             return Ok(oid);
         }
         self.objects.write_buf_with_known_id(object, from, oid)
@@ -161,7 +161,7 @@ impl gix_object::Write for crate::Repository {
         from: &[u8],
         id: gix_hash::ObjectId,
     ) -> Result<gix_hash::ObjectId> {
-        if self.objects.exists_without_refresh(&id) {
+        if self.objects.freshen_without_refresh(&id) {
             return Ok(id);
         }
         self.objects.write_buf_with_known_id(object, from, id)

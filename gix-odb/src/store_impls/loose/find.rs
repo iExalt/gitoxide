@@ -13,6 +13,15 @@ impl Store {
         hash_path(id, self.path.clone()).is_file()
     }
 
+    /// Set the modification time of the loose object `id` to now, and return `true` if there was such an object and that worked.
+    ///
+    /// This is how Git tells its pruning that an object it was about to write again is still wanted, so a writer
+    /// that skips writing an object that exists must call this instead and write the object if it returns `false`.
+    pub fn freshen(&self, id: &gix_hash::oid) -> bool {
+        debug_assert_eq!(self.object_hash, id.kind());
+        filetime::set_file_mtime(hash_path(id, self.path.clone()), filetime::FileTime::now()).is_ok()
+    }
+
     /// Given a `prefix`, find an object that matches it uniquely within this loose object
     /// database as `Ok(Some(Ok(<oid>)))`.
     /// If there is more than one object matching the object `Ok(Some(Err(()))` is returned.
