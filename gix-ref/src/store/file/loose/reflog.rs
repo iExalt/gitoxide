@@ -112,6 +112,7 @@ impl file::Store {
 impl file::Store {
     /// Implements the logic required to transform a fully qualified refname into its log name
     pub(crate) fn reflog_path(&self, name: &FullNameRef) -> Result<PathBuf> {
+        self.assure_backend_supported()?;
         let (base, rela_path) = self.reflog_base_and_relative_path(name)?;
         Ok(base.join(rela_path))
     }

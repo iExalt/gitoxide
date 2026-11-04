@@ -370,6 +370,48 @@ mod blocking_and_async_io {
         Ok(())
     }
 
+    #[test]
+    #[cfg(feature = "blocking-network-client")]
+    fn fetch_with_alternates_ignores_those_with_unsupported_ref_storage() -> TestResult {
+        use gix::error::ResultExt;
+
+        // See `fetch_with_alternates_adds_tips_from_alternates` for why this runs in a child.
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let Some(reftable_fixture) =
+            gix_testtools::scripted_fixture_read_only_with_git_version("make_reftable_repo.sh", |version| {
+                version >= (2, 44, 0)
+            })?
+        else {
+            return Ok(());
+        };
+        let alternate_objects = reftable_fixture.join("reftable-clone").join(".git").join("objects");
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (_repo, out) = gix::clone::PrepareFetch::new(
+            remote::repo("multi_round/server").path(),
+            tmp.path(),
+            gix::create::Kind::Bare,
+            Default::default(),
+            gix::open::Options::isolated(),
+        )?
+        .configure_remote(move |r| {
+            std::fs::write(
+                r.repo().objects.store_ref().path().join("info").join("alternates"),
+                format!("{}\n", gix::path::realpath(&alternate_objects)?.display()).as_bytes(),
+            )
+            .or_erased()?;
+            Ok(r)
+        })
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert!(
+            matches!(out.status, Status::Change { .. }),
+            "the alternate only serves as a hint, so its unreadable references don't prevent the fetch"
+        );
+        Ok(())
+    }
+
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]

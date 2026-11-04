@@ -8,6 +8,7 @@ impl file::Store {
     /// Return a packed transaction ready to receive updates. Use this to create or update `packed-refs`.
     /// Note that if you already have a [`packed::Buffer`] then use its [`packed::Buffer::into_transaction()`] method instead.
     pub(crate) fn packed_transaction(&self, lock_mode: gix_lock::acquire::Fail) -> Result<packed::Transaction> {
+        self.assure_backend_supported()?;
         let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None, 0)
             .or_raise(|| message("Could not lock packed refs"))?;
         // We 'steal' the possibly existing packed buffer which may safe time if it's already there and fresh.
@@ -26,6 +27,7 @@ impl file::Store {
     /// Note that it will automatically be memory mapped if it exceeds the default threshold of 32KB.
     /// Change the threshold with [file::Store::set_packed_buffer_mmap_threshold()].
     pub fn open_packed_buffer(&self) -> Result<Option<packed::Buffer>> {
+        self.assure_backend_supported()?;
         match packed::Buffer::open(
             self.packed_refs_path(),
             self.packed_buffer_mmap_threshold,
@@ -81,6 +83,7 @@ pub(crate) mod modifiable {
         /// [Metadata](gix_error::Error::metadata()) `path` (native path) identifies a packed-refs file whose modification
         /// time could not be read.
         pub fn force_refresh_packed_buffer(&self) -> Result {
+            self.assure_backend_supported()?;
             self.packed.force_refresh(|| {
                 let path = self.packed_refs_path();
                 let modified = path
@@ -91,6 +94,7 @@ pub(crate) mod modifiable {
             })
         }
         pub(crate) fn assure_packed_refs_uptodate(&self) -> Result<Option<super::SharedBufferSnapshot>> {
+            self.assure_backend_supported()?;
             self.packed.recent_snapshot(
                 || self.packed_refs_path().metadata().and_then(|m| m.modified()).ok(),
                 || self.open_packed_buffer(),

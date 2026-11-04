@@ -42,8 +42,13 @@ impl crate::Repository {
         {
             let mut repo = repo.or_raise(|| message("Could not open a worktree repository"))?;
             repo.refs.namespace = namespace.cloned();
-            if repo.workdir().is_some() && repo.find_reference("HEAD").is_ok() {
-                insert_head(Some(repo.head()?), &mut map)?;
+            if repo.workdir().is_some() {
+                match repo.find_reference("HEAD") {
+                    Ok(_) => insert_head(Some(repo.head()?), &mut map)?,
+                    // A worktree without a readable HEAD can't have a branch checked out, but unsupported storage is no HEAD to skip.
+                    Err(err) if err.is_unsupported() => return Err(err),
+                    Err(_) => {}
+                }
             }
         }
         Ok(map)

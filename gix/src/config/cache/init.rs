@@ -27,6 +27,7 @@ impl Cache {
             lossy,
             is_bare,
             object_hash,
+            unsupported_ref_storage: _,
             reflog: _,
             precompose_unicode: _,
             protect_windows: _,

@@ -43,7 +43,9 @@ pub enum FormatVersion {
     ///   `gix` needs the corresponding `sha1` or `sha256` Cargo feature.
     /// - `relativeWorktrees`: records that worktrees may use relative links to their administrative Git directories.
     ///   Creating relative links is controlled separately by `worktree.useRelativePaths`.
-    /// - `refStorage`: selects Git's reference storage backend, including reftable.
+    /// - `refStorage`: selects Git's reference storage backend, including reftable. `gix` opens such repositories, but
+    ///   refuses all operations on references unless the backend is `files`, see
+    ///   [`Extensions::REF_STORAGE`](crate::config::tree::Extensions::REF_STORAGE).
     ///
     /// The historical version-0 extensions remain valid. Recognizing version 1 does not imply that `gix` supports
     /// every extension. With no extensions configured, prefer [`V0`][Self::V0] for compatibility with older readers.
