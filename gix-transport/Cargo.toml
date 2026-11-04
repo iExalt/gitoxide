@@ -127,7 +127,7 @@ curl = { version = "0.4", optional = true, default-features = false }
 
 # for http-client-reqwest
 # all but the 'default-tls' feature
-reqwest = { version = "0.13.4", optional = true, default-features = false, features = ["stream", "charset", "http2"] }
+reqwest = { version = "0.13.4", optional = true, default-features = false, features = ["stream", "charset", "http2", "socks"] }
 tokio = { version = "1.54", optional = true, default-features = false, features = ["rt", "time", "sync", "macros"] }
 futures-core = { version = "0.3.32", optional = true, default-features = false }
 

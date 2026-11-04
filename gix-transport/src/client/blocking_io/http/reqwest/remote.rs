@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gix_error::{Class, Error, ErrorExt, Result, ResultExt, message};
+use gix_error::{Class, Error, ErrorExt, OptionExt, Result, ResultExt, message};
 use gix_utils::io::pipe;
 use parking_lot::Mutex;
 
@@ -75,11 +75,26 @@ impl Default for Remote {
 /// The time to wait for a connection to be established if nothing else is configured, like `curl` does.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// The credentials of an authenticating proxy, which are stored once the proxy accepted them, and erased when it didn't.
+struct ProxyCredentials {
+    next: gix_credentials::helper::NextAction,
+    authenticate: Arc<std::sync::Mutex<http::options::AuthenticateFn>>,
+    stored: bool,
+}
+
+impl ProxyCredentials {
+    fn update(&self, action: gix_credentials::helper::Action) -> Result {
+        (self.authenticate.lock().expect("no panics in other threads"))(action)
+            .or_raise(|| message("Could not update proxy credentials"))?;
+        Ok(())
+    }
+}
+
 fn build_client(
     config: &http::Options,
     redirect_action: &Arc<Mutex<RedirectAction>>,
     redirect_tail: &Arc<Mutex<String>>,
-) -> Result<reqwest::Client> {
+) -> Result<(reqwest::Client, Option<ProxyCredentials>)> {
     // There is no total timeout: how long a transfer may take is up to the low-speed limits, as with `curl` and `git`.
     let mut builder = reqwest::ClientBuilder::new()
         .connect_timeout(config.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT))
@@ -89,6 +104,45 @@ fn build_client(
     }
     if config.http_version == Some(http::options::HttpVersion::V1_1) {
         builder = builder.http1_only();
+    }
+    let mut proxy_credentials = None;
+    // `reqwest` reads the proxy variables of the environment unless told not to, which would bypass the configuration:
+    // it turns these variables into `http::Options` if it is allowed to, and an empty `http.proxy` is how `git` switches
+    // all proxies off. (`curl` reads them itself whenever it isn't given a proxy, which is a known difference.)
+    builder = builder.no_proxy();
+    if let Some(proxy_url) = config.proxy.as_deref().filter(|url| !url.is_empty()) {
+        use http::options::ProxyAuthMethod::*;
+        if !matches!(config.proxy_auth_method, AnyAuth | Basic) {
+            return Err(message!(
+                "The `reqwest` backend only supports basic authentication with proxies, but {:?} was configured",
+                config.proxy_auth_method
+            )
+            .raise());
+        }
+        // The credentials are applied below, and the ones in the URL stay out of messages.
+        let proxy_url = if config.proxy_authenticate.is_some() {
+            super::super::without_userinfo(proxy_url)
+        } else {
+            proxy_url.to_owned()
+        };
+        let mut proxy = reqwest::Proxy::all(&proxy_url)
+            .map_err(classify_reqwest)
+            .or_raise(|| message!("The proxy {proxy_url:?} is not valid"))?;
+        if let Some((action, authenticate)) = config.proxy_authenticate.clone() {
+            let credentials = (authenticate.lock().expect("no panics in other threads"))(action)
+                .or_raise(|| message("Could not obtain proxy credentials"))?
+                .ok_or_raise(|| message("The credential helpers provided no credentials for the proxy"))?;
+            proxy = proxy.basic_auth(&credentials.identity.username, &credentials.identity.password);
+            proxy_credentials = Some(ProxyCredentials {
+                next: credentials.next,
+                authenticate,
+                stored: false,
+            });
+        }
+        if let Some(no_proxy) = config.no_proxy.as_deref() {
+            proxy = proxy.no_proxy(reqwest::NoProxy::from_string(no_proxy));
+        }
+        builder = builder.proxy(proxy);
     }
     if let Some(backend) = config.backend.as_ref() {
         let mut backend = backend
@@ -101,7 +155,7 @@ fn build_client(
         }
     }
     // Keep Git's redirect policy authoritative after client customization.
-    builder
+    let client = builder
         .redirect(reqwest::redirect::Policy::custom({
             let redirect_action = redirect_action.clone();
             let redirect_tail = redirect_tail.clone();
@@ -144,7 +198,8 @@ fn build_client(
         }))
         .build()
         .map_err(classify_reqwest)
-        .or_raise(|| message("Could not initialize HTTP client"))
+        .or_raise(|| message("Could not initialize HTTP client"))?;
+    Ok((client, proxy_credentials))
 }
 
 /// A request body that is read from a pipe by a thread that blocks on it, so the pipe can be written to by blocking code.
@@ -306,6 +361,8 @@ async fn serve(
     let redirect_tail = Arc::new(Mutex::new(String::new()));
 
     let mut client = None;
+    let mut proxy_credentials: Option<ProxyCredentials> = None;
+    let mut discard_client = false;
 
     while let Some(Request {
         url,
@@ -315,8 +372,13 @@ async fn serve(
         config,
     }) = requests.recv().await
     {
+        if std::mem::take(&mut discard_client) {
+            client = None;
+        }
         if client.is_none() {
-            client = Some(build_client(&config, &redirect_action, &redirect_tail)?);
+            let (new_client, credentials) = build_client(&config, &redirect_action, &redirect_tail)?;
+            client = Some(new_client);
+            proxy_credentials = credentials;
         }
         let client = client.as_ref().expect("initialized before making requests");
         let redirected_base_url = redirected_base_url_shared.lock().clone();
@@ -435,6 +497,14 @@ async fn serve(
         }) {
             Ok(res) => res,
             Err(err) => {
+                if err.status() == Some(reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED) {
+                    // The proxy didn't accept what it was given, so forget it and ask again with the next request. A handshake
+                    // that fails with this error isn't retried here, so it can't loop: the caller decides whether to try again.
+                    if let Some(credentials) = proxy_credentials.take() {
+                        credentials.update(credentials.next.clone().erase())?;
+                    }
+                    discard_client = true;
+                }
                 // `error_for_status()` preserves the final URL for HTTP error responses. Capture it here so
                 // authentication retries after redirected 401 responses use the redirected base URL.
                 if let Some(actual_url) = err.url().map(reqwest::Url::as_str)
@@ -469,6 +539,10 @@ async fn serve(
             }
         };
 
+        if let Some(credentials) = proxy_credentials.as_mut().filter(|credentials| !credentials.stored) {
+            credentials.update(credentials.next.clone().store())?;
+            credentials.stored = true;
+        }
         let actual_url = res.url().as_str();
         if actual_url != effective_url.as_str() {
             let new_base_url = or_report!(headers_tx, redirect::base_url(actual_url, &base_url, url));
