@@ -2025,6 +2025,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-hook"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "gix-command",
+ "gix-config",
+ "gix-error",
+ "gix-path",
+ "gix-testtools",
+ "rustix",
+]
+
+[[package]]
 name = "gix-ignore"
 version = "0.1.0"
 dependencies = [

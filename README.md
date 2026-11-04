@@ -126,6 +126,7 @@ exposing their APIs through public crates, may remain _major-zero crates_ indefi
   * [gix-revision](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-revision)
   * [gix-revwalk](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-revwalk)
   * [gix-command](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-command)
+  * [gix-hook](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-hook)
   * [gix-prompt](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-prompt)
   * [gix-refspec](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-refspec)
   * [gix-utils](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-utils)

@@ -612,6 +612,16 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
 * [x] execute commands with `sh`
 * [ ] support for `GIT_EXEC_PATH` environment variable with `gix-sec` filter
 
+### gix-hook
+* [x] find hook files, skipping missing ones and ignoring non-executable ones with Git's advice
+* [x] `hook.<name>.command`, `.event`, `.enabled`, `.parallel`, `hook.jobs` and `hook.<event>.jobs` and `.enabled`
+* [x] configured hooks before the hook file, all hooks run, exit codes combined like Git
+* [x] standard input from bytes, a file or a producer; output to standard error or captured
+* [x] parallel hooks with buffered output
+* [x] Git-differential tests for ordering, shell arguments, disabling, exit codes and advice
+* [ ] `.exe` suffix lookup on Windows
+* [ ] warnings for invalid `hook.*` values
+
 ### gix-prompt
 * [x] open prompts for usernames for example
 * [x] secure prompts for password
