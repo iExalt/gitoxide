@@ -177,6 +177,13 @@ where
     pub fn exists_without_refresh(&self, id: &gix_hash::oid) -> bool {
         self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) || self.inner.exists_without_refresh(id)
     }
+
+    /// Like [`exists_without_refresh()`](Self::exists_without_refresh()), but freshen what is on disk, and return `false`
+    /// if it can't be relied upon.
+    /// See [`Handle::freshen_without_refresh()`](crate::store::Handle::freshen_without_refresh()).
+    pub fn freshen_without_refresh(&self, id: &gix_hash::oid) -> bool {
+        self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) || self.inner.freshen_without_refresh(id)
+    }
 }
 
 impl<T> crate::Header for Proxy<T>

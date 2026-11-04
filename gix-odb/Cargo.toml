@@ -45,6 +45,7 @@ serde = { version = "1.0.114", optional = true, default-features = false, featur
 ] }
 
 tempfile = "3.26.0"
+filetime = "0.2.29"
 parking_lot = { version = "0.12.4" }
 arc-swap = "1.9.0"
 memmap2 = "0.9.11"
@@ -61,7 +62,6 @@ gix-date = { path = "../gix-date" }
 gix-pack = { path = "../gix-pack", features = ["sha1"] }
 gix-actor = { path = "../gix-actor" }
 pretty_assertions = "1.0.0"
-filetime = "0.2.29"
 maplit = "1.0.2"
 crossbeam-channel = "0.5.15"
 

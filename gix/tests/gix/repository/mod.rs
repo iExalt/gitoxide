@@ -16,6 +16,7 @@ pub(crate) mod config;
 mod excludes;
 #[cfg(feature = "attributes")]
 mod filter;
+mod freshen;
 #[cfg(feature = "hook")]
 mod hook;
 mod location;

@@ -229,6 +229,8 @@ impl crate::Repository {
     ///
     /// Note that we hash the object in memory to avoid storing objects that are already present. That way,
     /// we avoid writing duplicate objects using slow disks that will eventually have to be garbage collected.
+    /// An object that is present is still touched, like Git does, so that pruning by age keeps what the caller is about
+    /// to make reachable. An object that is only in a cruft pack is written again as a loose object.
     pub fn write_object(&self, object: impl gix_object::WriteTo) -> Result<Id<'_>> {
         let mut buf = self.empty_reusable_buffer();
         object.write_to(buf.deref_mut()).or_error()?;
@@ -238,7 +240,7 @@ impl crate::Repository {
 
     fn write_object_inner(&self, buf: &[u8], kind: gix_object::Kind) -> Result<Id<'_>> {
         let oid = gix_object::compute_hash(self.object_hash(), kind, buf)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.freshen_without_refresh(&oid) {
             return Ok(oid.attach(self));
         }
 
@@ -250,7 +252,8 @@ impl crate::Repository {
     /// Write a blob from the given `bytes`.
     ///
     /// We avoid writing duplicate objects to slow disks that will eventually have to be garbage collected by
-    /// pre-hashing the data, and checking if the object is already present.
+    /// pre-hashing the data, and checking if the object is already present, in which case it is touched so that
+    /// pruning by age keeps it, like Git does.
     ///
     /// # Examples
     ///
@@ -267,7 +270,7 @@ impl crate::Repository {
     pub fn write_blob(&self, bytes: impl AsRef<[u8]>) -> Result<Id<'_>> {
         let bytes = bytes.as_ref();
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.freshen_without_refresh(&oid) {
             return Ok(oid.attach(self));
         }
         self.objects
@@ -290,7 +293,7 @@ impl crate::Repository {
 
     fn write_blob_stream_inner(&self, buf: &[u8]) -> Result<Id<'_>> {
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, buf)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.freshen_without_refresh(&oid) {
             return Ok(oid.attach(self));
         }
 

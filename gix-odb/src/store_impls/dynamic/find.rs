@@ -285,6 +285,51 @@ where
         self.contains_with_refresh_mode(id, super::RefreshMode::Never)
     }
 
+    /// Like [`exists_without_refresh()`](Self::exists_without_refresh()), but also set the modification time of the loose object
+    /// file or of the `.pack` file that holds `id` to now, like Git does when it skips writing an object it already has.
+    ///
+    /// Without that, pruning of objects older than its expiry (by Git or by this crate's maintenance) can remove an
+    /// unreachable object between the moment a writer decides to rely on it and the moment a reference makes it reachable.
+    ///
+    /// Return `true` only if the object exists and was freshened, so that the caller may skip writing it. This is `false` if
+    /// the object is missing, if the file couldn't be touched (it may belong to somebody else, as an alternate can), or if
+    /// the only pack that has the object is a cruft pack, whose objects expire individually and by a time that can't be
+    /// changed by touching the pack. The caller then has to write the object, which creates a fresh loose copy.
+    pub fn freshen_without_refresh(&self, id: &gix_hash::oid) -> bool {
+        let mut snapshot = self.snapshot.borrow_mut();
+        let now = || filetime::FileTime::now();
+        loop {
+            for index in snapshot.indices.iter() {
+                let Some(pack_path) = index.pack_path_of(id) else {
+                    continue;
+                };
+                if pack_path.with_extension("mtimes").is_file() {
+                    continue;
+                }
+                if filetime::set_file_mtime(&pack_path, now()).is_ok() {
+                    return true;
+                }
+            }
+
+            for lodb in snapshot.loose_dbs.iter() {
+                if lodb.freshen(id) {
+                    return true;
+                }
+            }
+
+            match self.store.load_one_index(super::IndexCtx {
+                refresh_mode: super::RefreshMode::Never,
+                ..self.index_ctx(snapshot.marker)
+            }) {
+                Ok(Some(new_snapshot)) => {
+                    *snapshot = new_snapshot;
+                    self.clear_cache();
+                }
+                Ok(None) | Err(_) => return false,
+            }
+        }
+    }
+
     fn contains_with_refresh_mode(&self, id: &gix_hash::oid, refresh_mode: super::RefreshMode) -> bool {
         let mut snapshot = self.snapshot.borrow_mut();
         loop {
