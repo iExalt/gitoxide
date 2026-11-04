@@ -76,6 +76,105 @@ fn reftable_storage_is_used_if_it_is_selected_and_supported() -> Result {
 }
 
 #[test]
+#[cfg(feature = "reftable")]
+fn how_reftables_are_written_follows_the_configuration() -> Result {
+    use std::time::Duration;
+
+    let open_with = |name: &str, overrides: &[&str], lenient: bool| -> Result<gix::Repository> {
+        let root = scripted_fixture_read_only("make_ref_storage_repos.sh")?;
+        Ok(gix::open_opts(
+            root.join(name),
+            gix::open::Options::isolated()
+                .strict_config(!lenient)
+                .config_overrides(overrides.iter().copied()),
+        )?)
+    };
+    if open("v1-reftable")?.is_none() {
+        return Ok(());
+    }
+
+    let defaults = open_with("v1-reftable", &[], false)?;
+    let defaults = *defaults.refs.as_reftable().expect("reftable").stack_options()?;
+    assert_eq!(defaults.lock_timeout, Some(Duration::from_millis(100)), "Git's default");
+    assert_eq!(
+        (
+            defaults.write.block_size,
+            defaults.write.restart_interval,
+            defaults.shared_repository_permissions
+        ),
+        (0, 0, 0),
+        "everything else is left to the defaults of the writer"
+    );
+
+    let repo = open_with(
+        "v1-reftable",
+        &[
+            "reftable.blockSize=8192",
+            "reftable.restartInterval=4",
+            "reftable.geometricFactor=3",
+            "reftable.lockTimeout=-1",
+            "core.fsync=reference",
+            "core.sharedRepository=0660",
+        ],
+        false,
+    )?;
+    let options = *repo.refs.as_reftable().expect("reftable").stack_options()?;
+    assert_eq!(options.write.block_size, 8192);
+    assert_eq!(options.write.restart_interval, 4);
+    assert_eq!(options.geometric_factor, 3);
+    assert_eq!(options.lock_timeout, None, "-1 waits as long as it takes");
+    assert_ne!(options.fsync, defaults.fsync, "core.fsync reaches the stacks");
+    assert_ne!(
+        options.shared_repository_permissions, 0,
+        "core.sharedRepository reaches the stacks"
+    );
+
+    // Like Git, which only reads these settings when it writes, invalid ones don't keep references from being read.
+    for invalid in ["reftable.lockTimeout=-2", "reftable.blockSize=99999999"] {
+        let repo = open_with("v1-reftable", &[invalid], false)?;
+        assert!(
+            repo.try_find_reference("HEAD")?.is_none(),
+            "{invalid}: the fixture's stack is empty, which is read without complaints"
+        );
+        repo.references()?.all()?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let err = repo
+            .refs
+            .as_reftable()
+            .expect("reftable")
+            .stack_options()
+            .expect_err("writing would need the invalid value");
+        let key = invalid.split('=').next().expect("a key");
+        assert!(
+            format!("{err:?}").to_lowercase().contains(&key.to_lowercase()),
+            "{invalid}: the error names the key: {err:?}"
+        );
+    }
+    let repo = open_with(
+        "v1-reftable",
+        &["reftable.lockTimeout=-2", "reftable.blockSize=99999999"],
+        true,
+    )?;
+    let lenient = repo.refs.as_reftable().expect("reftable").stack_options()?;
+    assert_eq!(
+        (lenient.lock_timeout, lenient.write.block_size),
+        (defaults.lock_timeout, 0),
+        "lenient configuration ignores invalid values"
+    );
+
+    let files = open_with(
+        "v1-files",
+        &["reftable.blockSize=99999999", "reftable.lockTimeout=-5"],
+        false,
+    )?;
+    assert_eq!(
+        files.refs.as_ref().kind(),
+        gix::refs::view::Kind::Files,
+        "settings of a store that isn't used don't matter, as in Git"
+    );
+    Ok(())
+}
+
+#[test]
 fn unsupported_storage_is_opened_but_refuses_references() -> Result {
     let mut unsupported = vec![
         ("v1-files-with-payload", "files://elsewhere"),

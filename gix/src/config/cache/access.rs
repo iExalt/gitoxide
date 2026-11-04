@@ -295,6 +295,53 @@ impl Cache {
         Ok(options)
     }
 
+    /// How reftable stacks are changed, from `reftable.*`, `core.sharedRepository` and the flush configuration.
+    ///
+    /// Unset values keep the defaults of Git. Invalid values are errors, which Git only finds when it writes, unless the configuration is lenient, in which case
+    /// they are ignored like unset ones.
+    #[cfg(feature = "reftable")]
+    pub(crate) fn reftable_options(&self, fsync: gix_fs::fsync::Options) -> Result<gix_ref::reftable::StackOptions> {
+        use crate::config::tree::Reftable;
+
+        let filter = self.filter_config_section;
+        let mut options = gix_ref::reftable::StackOptions::default();
+        options.fsync = fsync;
+        options.shared_repository_permissions = self
+            .apply_leniency(config::file_mut::shared_repository_permissions(&self.resolved, filter).map(Some))?
+            .unwrap_or_default();
+        if let Some(size) = self.apply_leniency(
+            Reftable::BLOCK_SIZE
+                .try_into_block_size(self.resolved.integer_filter(Reftable::BLOCK_SIZE, &mut filter.clone())),
+        )? {
+            options.write.block_size = size;
+        }
+        if let Some(interval) = self.apply_leniency(
+            Reftable::RESTART_INTERVAL.try_into_restart_interval(
+                self.resolved
+                    .integer_filter(Reftable::RESTART_INTERVAL, &mut filter.clone()),
+            ),
+        )? {
+            options.write.restart_interval = interval;
+        }
+        if let Some(factor) = self.apply_leniency(
+            Reftable::GEOMETRIC_FACTOR.try_into_geometric_factor(
+                self.resolved
+                    .integer_filter(Reftable::GEOMETRIC_FACTOR, &mut filter.clone()),
+            ),
+        )? {
+            options.geometric_factor = factor;
+        }
+        if let Some(timeout) = self.apply_leniency(
+            Reftable::LOCK_TIMEOUT.try_into_lock_timeout(
+                self.resolved
+                    .integer_filter(Reftable::LOCK_TIMEOUT, &mut filter.clone()),
+            ),
+        )? {
+            options.lock_timeout = timeout;
+        }
+        Ok(options)
+    }
+
     pub(crate) fn fs_capabilities(&self) -> Result<gix_fs::Capabilities> {
         Ok(gix_fs::Capabilities {
             precompose_unicode: boolean(self, "core.precomposeUnicode", &Core::PRECOMPOSE_UNICODE, false)?,
