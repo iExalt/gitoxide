@@ -329,17 +329,6 @@ fn fork_side(
 }
 
 fn assert_same(repos: &Repos, label: &str, edits: &[Edit], setup: impl Fn(&Path) -> TestResult + Copy) -> TestResult {
-    assert_same_with(repos, label, edits, setup, true)
-}
-
-/// Like `assert_same()`, but only compare the order in which observers hear about updates if `same_order` is set.
-fn assert_same_with(
-    repos: &Repos,
-    label: &str,
-    edits: &[Edit],
-    setup: impl Fn(&Path) -> TestResult + Copy,
-    same_order: bool,
-) -> TestResult {
     for backend in BACKENDS {
         let git = git_side(repos, backend, label, edits, setup)?;
         let fork = fork_side(repos, backend, label, edits, setup)?;
@@ -368,21 +357,8 @@ fn assert_same_with(
                 "{backend}/{label}: the reflog of HEAD follows the branch it points to when that is updated"
             );
         }
-        let normalized = |events: &[(String, Vec<String>)]| {
-            events
-                .iter()
-                .map(|(state, updates)| {
-                    let mut updates = updates.clone();
-                    if !same_order {
-                        updates.sort();
-                    }
-                    (state.clone(), updates)
-                })
-                .collect::<Vec<_>>()
-        };
         assert_eq!(
-            normalized(&fork.events),
-            normalized(&git.events),
+            fork.events, git.events,
             "{backend}/{label}: observers hear about all edits, rejected or not, like Git's hook does"
         );
         assert!(
@@ -527,10 +503,9 @@ fn a_rejected_edit_doesnt_make_its_name_unavailable_for_others() -> TestResult {
 fn edits_through_a_symbolic_reference_are_reported_where_git_reports_them_while_others_are_rejected() -> TestResult {
     let repos = Repos::new()?;
     // Git lists a rejected edit after the edits that precede it in what was asked for, and an edit through a symbolic reference
-    // counts as the reference it leads to, which comes last. The fork can't know that for a rejected edit without having split it, so
-    // that only the order of such a batch differs, which is a named divergence that the order is not compared for.
+    // counts as the reference it leads to, which comes last. Observers hear about the same updates in the same order.
     // `HEAD` points to `main`, which is at C2, so this edit is split into one for `HEAD` and one for `main`.
-    assert_same_with(
+    assert_same(
         &repos,
         "through-head",
         &[
@@ -539,7 +514,6 @@ fn edits_through_a_symbolic_reference_are_reported_where_git_reports_them_while_
             Edit::Update("refs/heads/b", "C2", "C1"),
         ],
         |_| Ok(()),
-        false,
     )?;
     // The branch behind `HEAD` doesn't match, which rejects the edit as a whole. Git names the reference it leads to, and
     // the fork the edit as it was asked for, which is what a caller can look for. Events are named in the same way, so only
