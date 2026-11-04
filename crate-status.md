@@ -534,16 +534,20 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
 | **feature** | **curl** | **reqwest** |
 |-------------|----------|-------------|
 |      01     |          |             |
-|      02     |     X    |             |
+|      02     |     X    |      X      |
 |      03     |          |      X      |
-|      04     |     X    |             |
+|      04     |     X    |      X      |
 |      05     |          |             |
+|      06     |     X    |      X      |
+|      07     |     X    |      X      |
 
 * **01** -> async
-* **02** -> proxy support
+* **02** -> proxy support, with `http.noProxy` and an empty `http.proxy` to switch proxies off; `curl` also reads proxy variables of the environment by itself
 * **03** -> custom request configuration via fn(request)
-* **04** -> proxy authentication
+* **04** -> proxy authentication, with `reqwest` limited to basic authentication
 * **05** -> [reauthentication after redirect](https://github.com/git/git/blob/eea7033409a0ed713c78437fc76486983d211e25/http.c#L1931)
+* **06** -> TLS settings: `http.sslCAInfo`, `http.sslVerify` and `http.sslVersion` (`reqwest` has no SSLv2/v3 and, with `rustls`, no TLS before 1.2)
+* **07** -> low-speed limits (`http.lowSpeedLimit` and `http.lowSpeedTime`), which end a transfer that stays below the speed for that long
 
 ### gix-protocol
 * _abstract over protocol versions to allow delegates to deal only with a single way of doing things_
