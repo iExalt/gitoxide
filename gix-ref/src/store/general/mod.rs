@@ -12,6 +12,15 @@ impl From<file::Store> for crate::Store {
     }
 }
 
+#[cfg(feature = "reftable")]
+impl From<crate::reftable::Store> for crate::Store {
+    fn from(store: crate::reftable::Store) -> Self {
+        crate::Store {
+            inner: store::State::Reftable { store },
+        }
+    }
+}
+
 impl<'a> From<&'a crate::Store> for StoreRef<'a> {
     fn from(store: &'a crate::Store) -> Self {
         store.as_ref()
@@ -24,6 +33,8 @@ impl crate::Store {
     pub fn as_ref(&self) -> StoreRef<'_> {
         match &self.inner {
             store::State::Files { store } => StoreRef::from(store),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { store } => StoreRef::from(store),
         }
     }
 
@@ -33,6 +44,17 @@ impl crate::Store {
     pub fn as_file(&self) -> Option<&file::Store> {
         match &self.inner {
             store::State::Files { store } => Some(store),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { .. } => None,
+        }
+    }
+
+    /// Return the reftable store that this is, or `None` for other kinds of storage.
+    #[cfg(feature = "reftable")]
+    pub fn as_reftable(&self) -> Option<&crate::reftable::Store> {
+        match &self.inner {
+            store::State::Files { .. } => None,
+            store::State::Reftable { store } => Some(store),
         }
     }
 
@@ -40,6 +62,8 @@ impl crate::Store {
     pub fn as_file_mut(&mut self) -> Option<&mut file::Store> {
         match &mut self.inner {
             store::State::Files { store } => Some(store),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { .. } => None,
         }
     }
 
@@ -85,6 +109,8 @@ impl crate::Store {
     pub fn with_locations(&self, git_dir: std::path::PathBuf, common_dir: Option<std::path::PathBuf>) -> crate::Store {
         match &self.inner {
             store::State::Files { store } => store.with_locations(git_dir, common_dir).into(),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { store } => store.with_locations(git_dir, common_dir).into(),
         }
     }
 }
@@ -95,6 +121,8 @@ impl crate::Store {
     pub fn set_namespace(&mut self, namespace: Option<Namespace>) -> Option<Namespace> {
         match &mut self.inner {
             store::State::Files { store } => std::mem::replace(&mut store.namespace, namespace),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { store } => std::mem::replace(&mut store.namespace, namespace),
         }
     }
 
@@ -102,6 +130,8 @@ impl crate::Store {
     pub fn set_write_reflog(&mut self, mode: WriteReflog) -> WriteReflog {
         match &mut self.inner {
             store::State::Files { store } => std::mem::replace(&mut store.write_reflog, mode),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { store } => std::mem::replace(&mut store.write_reflog, mode),
         }
     }
 
@@ -111,6 +141,8 @@ impl crate::Store {
     pub fn set_unsupported_backend(&mut self, backend: Option<String>) {
         match &mut self.inner {
             store::State::Files { store } => store.set_unsupported_backend(backend),
+            #[cfg(feature = "reftable")]
+            store::State::Reftable { store } => store.set_unsupported_backend(backend),
         }
     }
 }

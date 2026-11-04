@@ -14,6 +14,8 @@
 //!     * one reference maps to a file on disk
 //!   * **packed**
 //!     * references are stored in a single human-readable file, along with their targets if they are symbolic.
+//! * **reftable**, with the `reftable` feature
+//!   * references and their reflogs are stored in stacks of immutable tables, see `reftable::Store`
 //!
 //! Concrete recovery signals such as missing references and reflog identities expose classification-only
 //! [`gix_error::ClassificationMarker`] sources. Use `is_not_found()`, `is_corrupted()`, `is_validation()`, or
@@ -42,6 +44,8 @@ use gix_object::bstr::{BStr, BString};
 
 #[path = "store/mod.rs"]
 mod store_impl;
+#[cfg(feature = "reftable")]
+pub use store_impl::reftable;
 pub use store_impl::{file, packed};
 
 mod compare;
@@ -101,7 +105,13 @@ pub mod store {
 
     #[derive(Debug, Clone)]
     pub(crate) enum State {
-        Files { store: crate::file::Store },
+        Files {
+            store: crate::file::Store,
+        },
+        #[cfg(feature = "reftable")]
+        Reftable {
+            store: crate::reftable::Store,
+        },
     }
 
     pub(crate) mod general;

@@ -34,10 +34,13 @@ impl<'n, 's> ReflogPlatform<'n, 's> {
                 self.buf.clear();
                 self.buf.resize(1024 * 4, 0);
                 let path = store.reflog_path(self.name)?;
-                store
+                Ok(store
                     .reflog_iter_rev_inner(&path, &mut self.buf)
-                    .or_raise(|| message("Could not read reflog").with("path", path))
+                    .or_raise(|| message("Could not read reflog").with("path", path))?
+                    .map(Lines::File))
             }
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => Ok(store.reflog(self.name, true)?.map(Lines::Reftable)),
         }
     }
 
@@ -49,11 +52,33 @@ impl<'n, 's> ReflogPlatform<'n, 's> {
         match self.store.backend {
             Backend::File(store) => {
                 let path = store.reflog_path(self.name)?;
-                store
+                Ok(store
                     .reflog_iter_inner(&path, &mut self.buf)
                     .map(|iter| iter.map(|iter| iter.map(|line| line.map(Line::from))))
-                    .or_raise(|| message("Could not read reflog").with("path", path))
+                    .or_raise(|| message("Could not read reflog").with("path", path))?
+                    .map(Lines::File))
             }
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => Ok(store.reflog(self.name, false)?.map(Lines::Reftable)),
+        }
+    }
+}
+
+/// The lines of a reflog of any kind of storage, which is `Send` and `Sync` if the lines of the used storage are.
+enum Lines<F> {
+    File(F),
+    #[cfg(feature = "reftable")]
+    Reftable(std::vec::IntoIter<Result<Line>>),
+}
+
+impl<F: Iterator<Item = Result<Line>>> Iterator for Lines<F> {
+    type Item = Result<Line>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Lines::File(iter) => iter.next(),
+            #[cfg(feature = "reftable")]
+            Lines::Reftable(iter) => iter.next(),
         }
     }
 }
