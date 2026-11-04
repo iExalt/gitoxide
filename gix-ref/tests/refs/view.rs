@@ -305,7 +305,15 @@ mod owned_store {
 
     #[test]
     fn with_locations_keeps_everything_but_the_places() -> crate::Result {
-        let files = store_at("make_ref_repository.sh")?;
+        let base = store_at("make_ref_repository.sh")?;
+        let files = gix_ref::file::Store::at_opts(
+            base.git_dir().to_owned(),
+            crate::fixture_hash_kind(),
+            gix_ref::store::init::Options {
+                precompose_unicode: true,
+                ..Default::default()
+            },
+        );
         let mut store = Store::from(files.clone());
         store.set_write_reflog(WriteReflog::Disable);
         store.set_namespace(Some(gix_ref::namespace::expand("ns")?));
@@ -313,10 +321,9 @@ mod owned_store {
 
         let moved = store.with_locations(files.git_dir().to_owned(), None);
         assert_eq!(moved.git_dir(), files.git_dir());
-        assert_eq!(
+        assert!(
             moved.as_file().expect("files").precompose_unicode,
-            files.precompose_unicode,
-            "options of the files store are retained"
+            "a non-default option of the files store is retained"
         );
         assert_eq!(moved.write_reflog(), WriteReflog::Disable);
         assert_eq!(moved.namespace(), store.namespace());
