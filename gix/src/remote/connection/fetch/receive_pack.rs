@@ -227,7 +227,7 @@ where
                 .ok();
         }
 
-        let update_refs = refs::update(
+        let update_refs = refs::update_and_prune(
             repo,
             self.reflog_message
                 .take()
@@ -238,6 +238,7 @@ where
             con.remote.fetch_tags,
             self.dry_run,
             self.write_packed_refs,
+            self.prune,
         )?;
 
         if let Some(bundle) = write_pack_bundle.as_mut()

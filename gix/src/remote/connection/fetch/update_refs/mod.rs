@@ -21,6 +21,8 @@ use crate::{
 ///
 pub mod update;
 
+mod prune;
+
 /// Information about the update of a single reference, corresponding the respective entry in [`RefMap::mappings`][crate::remote::fetch::RefMap::mappings].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Update {
@@ -59,6 +61,7 @@ impl From<Mode> for Update {
 ///
 /// With these safeguards in place, one can handle each naturally and implement mirrors or bare repos easily.
 #[expect(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn update(
     repo: &Repository,
     message: RefLogMessage,
@@ -68,6 +71,50 @@ pub(crate) fn update(
     fetch_tags: fetch::Tags,
     dry_run: fetch::DryRun,
     write_packed_refs: fetch::WritePackedRefs,
+) -> Result<update::Outcome> {
+    update_and_prune(
+        repo,
+        message,
+        mappings,
+        refspecs,
+        extra_refspecs,
+        fetch_tags,
+        dry_run,
+        write_packed_refs,
+        Prune::No,
+    )
+}
+
+/// Whether to delete the references of the destinations of the ref-specs that the remote no longer has.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum Prune {
+    /// Leave them alone.
+    No,
+    /// Delete them once all updates were applied successfully, or in a transaction of their own beforehand if they stand in the
+    /// way of one of the updates, which can't create `refs/p/a/b` while `refs/p/a` exists.
+    Yes,
+}
+
+/// Like [`update()`], but also deletes the local references that are stale if `prune` is [`Prune::Yes`].
+///
+/// A reference is stale if a ref-spec maps it to a source that the remote doesn't have, which is the case if none of the
+/// `mappings` has it as destination. Only the destinations of `refspecs` are ever considered, and nothing is pruned if
+/// any update was rejected, as the fetch isn't complete then.
+/// The deletions are part of the transaction that applies the updates, so none of them happens if any update fails,
+/// and each of them requires the reference to still have the value it had when it was found stale.
+/// The exception are references that conflict with the name of an update, which are deleted first, and in a transaction of their own,
+/// like Git deletes all stale references before it updates, as the update can't happen otherwise.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn update_and_prune(
+    repo: &Repository,
+    message: RefLogMessage,
+    mappings: &[fetch::refmap::Mapping],
+    refspecs: &[gix_refspec::RefSpec],
+    extra_refspecs: &[gix_refspec::RefSpec],
+    fetch_tags: fetch::Tags,
+    dry_run: fetch::DryRun,
+    write_packed_refs: fetch::WritePackedRefs,
+    prune: Prune,
 ) -> Result<update::Outcome> {
     let _span = gix_trace::detail!("update_refs()", mappings = mappings.len());
     let mut edits = Vec::new();
@@ -306,45 +353,72 @@ pub(crate) fn update(
         }
     }
 
+    let mut early_deletions = Vec::new();
+    if prune == Prune::Yes
+        && !updates.iter().any(|update| {
+            matches!(
+                update.mode,
+                Mode::RejectedSourceObjectNotFound { .. }
+                    | Mode::RejectedTagUpdate
+                    | Mode::RejectedNonFastForward
+                    | Mode::RejectedToReplaceWithUnborn
+                    | Mode::RejectedCurrentlyCheckedOut { .. }
+            )
+        })
+    {
+        for stale in prune::stale_destinations(repo, refspecs, mappings)? {
+            let in_the_way = edits
+                .iter()
+                .any(|edit| prune::conflicts(stale.name.as_bstr(), edit.name.as_bstr()));
+            let deletion = stale.into_delete_edit();
+            if in_the_way && matches!(dry_run, fetch::DryRun::No) {
+                early_deletions.push(deletion);
+            } else {
+                edits.push(deletion);
+            }
+        }
+    }
+
     let edits = match dry_run {
         fetch::DryRun::No => {
             let _span = gix_trace::detail!("apply", edits = edits.len());
             let (file_lock_fail, packed_refs_lock_fail) = repo.config.lock_timeout().or_raise(|| {
                 gix_error::message("Failed to update references to their new position to match their remote locations")
             })?;
-            repo.ref_store()
-                .transaction()
-                .packed_refs(
-                    match write_packed_refs {
+            let apply = |edits: Vec<gix_ref::transaction::RefEdit>| -> Result<Vec<gix_ref::transaction::RefEdit>> {
+                const CONTEXT: &str =
+                    "Failed to update references to their new position to match their remote locations";
+                Ok(repo
+                    .ref_store()
+                    .transaction()
+                    .packed_refs(match write_packed_refs {
                         fetch::WritePackedRefs::Only => {
                             gix_ref::view::transaction::PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(Box::new(&repo.objects))},
                         fetch::WritePackedRefs::Never => gix_ref::view::transaction::PackedRefs::DeletionsOnly
-                    }
-                )
-                .prepare(
-                    edits,
-                    gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),
-                )
-                .or_raise(|| {
-                    gix_error::message(
-                        "Failed to update references to their new position to match their remote locations",
+                    })
+                    .prepare(
+                        edits,
+                        gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),
                     )
-                })?
-                .commit(
-                    repo.committer()
-                        .transpose()
-                        .or_raise(|| {
-                            gix_error::message(
-                                "Failed to update references to their new position to match their remote locations",
-                            )
-                        })?,
-                )
-                .or_raise(|| {
-                    gix_error::message(
-                        "Failed to update references to their new position to match their remote locations",
+                    .or_raise(|| gix_error::message(CONTEXT))?
+                    .commit(
+                        repo.committer()
+                            .transpose()
+                            .or_raise(|| gix_error::message(CONTEXT))?,
                     )
-                })?
-                .edits
+                    .or_raise(|| gix_error::message(CONTEXT))?
+                    .edits)
+            };
+            let mut committed = if early_deletions.is_empty() {
+                Vec::new()
+            } else {
+                apply(early_deletions)?
+            };
+            // The edits are in the order of the updates, with deletions at the end, so edit indices stay valid. Those
+            // of references that were deleted early come last, which no update refers to.
+            let mut applied = apply(edits)?;
+            applied.append(&mut committed);
+            applied
         }
         fetch::DryRun::Yes => edits,
     };

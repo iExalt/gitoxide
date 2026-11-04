@@ -149,6 +149,7 @@ where
             reflog_message: None,
             write_packed_refs: WritePackedRefs::Never,
             shallow: Default::default(),
+            prune: refs::Prune::No,
         })
     }
 }
@@ -199,6 +200,7 @@ where
     reflog_message: Option<RefLogMessage>,
     write_packed_refs: WritePackedRefs,
     shallow: remote::fetch::Shallow,
+    prune: refs::Prune,
 }
 
 /// Builder
@@ -235,6 +237,29 @@ where
     /// *Has no effect if the current repository is not as shallow clone.*
     pub fn with_shallow(mut self, shallow: remote::fetch::Shallow) -> Self {
         self.inner.shallow = shallow;
+        self
+    }
+
+    /// If enabled, delete the local references that are destinations of the remote's fetch ref-specs, but have no counterpart
+    /// on the remote anymore, like `git fetch --prune` does. The deleted names are available through
+    /// [`update::Outcome::pruned()`](refs::update::Outcome::pruned()).
+    ///
+    /// Only references that a ref-spec maps are ever deleted, so what lies outside of the destinations stays, and so do symbolic
+    /// references. Negative ref-specs are respected. Nothing is deleted unless the fetch was complete, which means that every
+    /// update was applied or up to date, and that includes fetches that received no new objects. Deletions are part of the transaction
+    /// that updates the references, so a failure to update anything deletes nothing. The exception are references that
+    /// conflict with a reference to update, like `refs/p/a` when `refs/p/a/b` is about to be created, which are deleted in
+    /// a transaction of their own just before, as nothing could be created otherwise. That is the one difference to Git beyond
+    /// the order, as Git deletes all of them before it updates anything.
+    ///
+    /// Each deletion expects the value the reference had when it was looked at, so a reference that another writer moved in
+    /// the meantime fails the update of the references, after the objects were received, instead of being deleted. Git deletes
+    /// it regardless. A ref-spec that asks the remote for no reference prefix at all doesn't count as covering anything, as
+    /// what it maps may not have been listed.
+    ///
+    /// The `remote.<name>.prune` and `fetch.prune` configuration is not read, so this is off unless it is enabled here.
+    pub fn with_prune(mut self, enabled: bool) -> Self {
+        self.inner.prune = if enabled { refs::Prune::Yes } else { refs::Prune::No };
         self
     }
 }

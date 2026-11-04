@@ -157,6 +157,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
             * [x] 'ref-in-want'
             * [ ] 'wanted-ref'
             * [x] standard negotiation algorithms `consecutive`, `skipping` and `noop`.
+            * [x] prune stale tracking references that the explicit refspecs cover, with `Prepare::with_prune()`; `remote.<name>.prune` isn't read
         * [x] push with the blocking client, see `gix::remote::push`
             * [x] create, update and delete several references, atomically if asked to, with leases that are checked against the advertisement
             * [x] fast-forward or rewrite policy per update, and refusal of a shallow source
