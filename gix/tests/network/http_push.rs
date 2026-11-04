@@ -7,7 +7,7 @@ use gix_testtools::{
     http_peer::{Config, HttpPeer},
 };
 
-use crate::{Setup, for_each_backend, isolated, transport};
+use crate::{HASHES, Setup, for_each_backend, isolated, push_scenarios::push_scenarios, transport};
 
 /// Push a new branch at the tip of `work`, after `prepare_remote` changed `remote.git`, and return what the push reported with the
 /// requests that the peer saw.
@@ -174,5 +174,28 @@ fn a_silent_hook_ends_a_push_with_the_limits_with_each_backend() -> TestResult {
         return Ok(());
     };
     for_each_backend!(a_silent_hook_is_ended_by_the_limits());
+    Ok(())
+}
+
+fn leases_and_atomic_pushes<H: http::Http + Default + 'static>() -> TestResult {
+    for hash in HASHES {
+        let setup = Setup::new(hash)?;
+        let peer = HttpPeer::start(Config {
+            project_root: setup.path("."),
+            ..Default::default()
+        })?;
+        let url = peer.url("remote.git");
+        push_scenarios!(&setup, hash, url.as_str(), repo = setup.work()?, |remote| remote
+            .to_connection_with_transport(transport::<H>(&url)?));
+    }
+    Ok(())
+}
+
+#[test]
+fn leases_and_atomic_pushes_work_over_http_for_both_hashes_with_each_backend() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for_each_backend!(leases_and_atomic_pushes());
     Ok(())
 }
