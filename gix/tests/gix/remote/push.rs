@@ -8,7 +8,7 @@ use gix::{
     refs::FullName,
     remote::{
         Direction,
-        push::{self, Decision, Policy, Refusal, Status, Update},
+        push::{self, Decision, Observed, Policy, Refusal, Status, Update},
     },
 };
 use gix_hash::Kind;
@@ -97,6 +97,33 @@ impl World {
                 .connect(Direction::Push)?
                 .prepare_push(gix::progress::Discard, updates, push::Options::default())?;
         Ok(prepare.plan().clone())
+    }
+
+    /// Look at what `remote` has for the updates of `outcome`, with a fresh connection.
+    fn reconcile(&self, from: &str, remote: &str, outcome: &push::Outcome) -> TestResult<push::Reconciliation> {
+        let repo = self.repo(from)?;
+        let remote = repo.remote_at(self.path(remote).to_string_lossy().into_owned())?;
+        Ok(remote
+            .connect(Direction::Push)?
+            .reconcile(gix::progress::Discard, outcome)?)
+    }
+
+    /// All `*.lock` files below `repo`, which a server leaves behind if it is interrupted while it changes references.
+    fn lock_files(&self, repo: &str) -> TestResult<Vec<PathBuf>> {
+        fn collect(dir: &std::path::Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+            for entry in std::fs::read_dir(dir)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    collect(&path, out)?;
+                } else if path.extension().is_some_and(|ext| ext == "lock") {
+                    out.push(path);
+                }
+            }
+            Ok(())
+        }
+        let mut out = Vec::new();
+        collect(&self.path(repo), &mut out)?;
+        Ok(out)
     }
 
     fn fsck(&self, repo: &str) -> TestResult {
@@ -618,5 +645,189 @@ fn updates_that_are_up_to_date_or_refused_do_not_prevent_the_others_in_a_non_ato
         one,
         "the refused update left the reference alone"
     );
+    Ok(())
+}
+
+#[test]
+fn a_server_that_dies_after_committing_gives_an_uncertain_outcome_that_reconciles_to_the_new_value() -> TestResult {
+    if isolated()? {
+        return Ok(());
+    }
+    let (_, fork) = sha1_only()?;
+    let (two, three) = (fork.id("source", "main~1")?, fork.id("source", "main")?);
+    // Kill `receive-pack` once the reference is committed, which is before it can report anything.
+    fork.write_hook(
+        "remote.git",
+        "reference-transaction",
+        "[ \"$1\" = committed ] && kill -9 $PPID\nexit 0",
+    )?;
+    let update = Update::change(name("refs/heads/main"), two, three);
+    let outcome = fork
+        .push("source", "remote.git", vec![update.clone()], push::Options::default())?
+        .expect("the request was sent, so the result is an outcome and not an error");
+    assert!(outcome.is_uncertain() && !outcome.is_success(), "{outcome:?}");
+    assert!(
+        outcome.uncertain.is_some() && outcome.entries[0].status == Status::Unknown,
+        "no report came back, so nothing can be said about the update: {outcome:?}"
+    );
+    assert!(outcome.entries[0].was_sent());
+
+    let reconciliation = fork.reconcile("source", "remote.git", &outcome)?;
+    assert_eq!(
+        reconciliation.observations,
+        [push::Observation {
+            update,
+            observed: Observed::AtNew
+        }],
+        "the reference was committed before the server died"
+    );
+    assert_eq!(
+        fork.lock_files("remote.git")?,
+        Vec::<PathBuf>::new(),
+        "the server was waited for, and nothing it was doing was interrupted by us"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_rejected_update_reconciles_to_the_other_writers_value_and_a_retry_cannot_overwrite_it() -> TestResult {
+    if isolated()? {
+        return Ok(());
+    }
+    let (_, fork) = sha1_only()?;
+    let (one, two, three) = (
+        fork.id("source", "light")?,
+        fork.id("source", "main~1")?,
+        fork.id("source", "main")?,
+    );
+    fork.write_hook(
+        "remote.git",
+        "pre-receive",
+        &format!("env -u GIT_QUARANTINE_PATH git update-ref refs/heads/main {one}"),
+    )?;
+    let update = Update::change(name("refs/heads/main"), two, three);
+    let outcome = fork
+        .push("source", "remote.git", vec![update.clone()], push::Options::default())?
+        .expect("the request was sent");
+    assert!(is_rejected(&outcome.entries[0].status), "{outcome:?}");
+    assert_eq!(
+        fork.reconcile("source", "remote.git", &outcome)?.observations[0].observed,
+        Observed::Elsewhere(Some(one)),
+        "somebody else moved the reference, which is neither what we expected nor what we wanted"
+    );
+
+    // The retry keeps its lease, which is now stale, so it can't replace the other writer's value.
+    std::fs::remove_file(fork.path("remote.git/hooks/pre-receive"))?;
+    let retried = fork
+        .push("source", "remote.git", vec![update], push::Options::default())?
+        .expect_err("the lease no longer matches, so nothing is sent");
+    assert!(retried.classify().is_validation(), "{retried:#}");
+    assert_eq!(
+        fork.id("remote.git", "main")?,
+        one,
+        "the other writer's value is intact"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_generic_failure_of_a_batch_is_uncertain_and_reconciles_per_update() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    if isolated()? {
+        return Ok(());
+    }
+    let (_, fork) = sha1_only()?;
+    let (one, two, three) = (
+        fork.id("source", "light")?,
+        fork.id("source", "main~1")?,
+        fork.id("source", "main")?,
+    );
+    // Deleting a tag doesn't need the directory of the branches, but updating a branch does. A non-atomic push commits deletions first, and then
+    // reports the failure of the second batch for every command, including the deletion that was committed.
+    let heads = fork.path("remote.git/refs/heads");
+    std::fs::set_permissions(&heads, std::fs::Permissions::from_mode(0o555))?;
+    let restore = scopeguard(heads.clone());
+    if std::fs::File::create(heads.join("probe")).is_ok() {
+        std::fs::remove_file(heads.join("probe"))?;
+        eprintln!("skipped as read-only directories can't be enforced, which happens when running as root");
+        return Ok(());
+    }
+    let delete = Update::delete(name("refs/tags/light"), one);
+    let change = Update::change(name("refs/heads/main"), two, three);
+    let outcome = fork
+        .push(
+            "source",
+            "remote.git",
+            vec![delete.clone(), change.clone()],
+            push::Options {
+                atomic: false,
+                ..Default::default()
+            },
+        )?
+        .expect("the request was sent");
+    drop(restore);
+    assert!(
+        !matches!(outcome.entries[0].status, Status::Rejected { .. }),
+        "a deletion that happened is never called rejected: {outcome:?}"
+    );
+    assert!(
+        !matches!(outcome.entries[1].status, Status::Applied { .. }),
+        "an update that didn't happen is never called applied: {outcome:?}"
+    );
+    let reconciliation = fork.reconcile("source", "remote.git", &outcome)?;
+    assert_eq!(
+        reconciliation
+            .observations
+            .iter()
+            .map(|o| o.observed)
+            .collect::<Vec<_>>(),
+        [Observed::AtNew, Observed::AtLease],
+        "the deletion happened and the update didn't, whatever the server said for the batch"
+    );
+    Ok(())
+}
+
+/// Make `dir` writable again when dropped, so it can be removed even if a test fails early.
+#[cfg(unix)]
+fn scopeguard(dir: PathBuf) -> impl Drop {
+    struct MakeWritable(PathBuf);
+    impl Drop for MakeWritable {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755)).ok();
+        }
+    }
+    MakeWritable(dir)
+}
+
+#[test]
+fn pushing_to_a_remote_without_references_or_objects_creates_them() -> TestResult {
+    if isolated()? {
+        return Ok(());
+    }
+    for kind in kinds() {
+        let (git, fork) = World::twins(kind)?;
+        assert!(git.git_push(
+            "source",
+            "empty.git",
+            &["--atomic", "main:refs/heads/main", "side:refs/heads/side"]
+        )?);
+        let (three, side) = (fork.id("source", "main")?, fork.id("source", "side")?);
+        let outcome = fork
+            .push(
+                "source",
+                "empty.git",
+                vec![
+                    Update::create(name("refs/heads/main"), three),
+                    Update::create(name("refs/heads/side"), side),
+                ],
+                push::Options::default(),
+            )?
+            .expect("the request was sent");
+        assert!(outcome.is_success(), "{kind}: {outcome:?}");
+        assert_eq!(fork.refs("empty.git")?, git.refs("empty.git")?, "{kind}");
+        fork.fsck("empty.git")?;
+    }
     Ok(())
 }
