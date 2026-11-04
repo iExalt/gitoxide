@@ -255,7 +255,7 @@ existing subscriptions is approved.
 | 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | done |
 | 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks; Git 2.56 config-defined hooks, parallel jobs and per-hook stdin producers | None | None known | done |
 | 4. Ref-store abstraction and interim reftable refusal | Probe P12 first; refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while opening and object access keep working; `gix init` follows Git's ref-format precedence and refuses a requested reftable; then the staged ref-store abstraction (assessment 5.1, additive handle first) and its call-site migration; probe P11 | None | None known | done |
-| 5. Durability plumbing and differential fault harness | Probes P1, P3, P5 and P7; `core.fsync` and `core.fsyncMethod` for objects, packs and refs, including the barrier flush; the files-store gaps in assessment 4.3; an uncertain-outcome class; a transaction observer; P1, P3 and P5 turned into differential tests against Git | None; rebases on thread 4 where both touch `gix-ref` | None known | ready |
+| 5. Durability plumbing and differential fault harness | Probes P1, P3, P5 and P7; `core.fsync` and `core.fsyncMethod` for objects, packs and refs, including the barrier flush; the files-store gaps in assessment 4.3; an uncertain-outcome class; a transaction observer; P1, P3 and P5 turned into differential tests against Git | None; rebases on thread 4 where both touch `gix-ref` | None known | done |
 | 6. Reftable codecs and stack layer | Probes P6 and P4; adopt the upstream reftable codecs after a parity review, both hashes and version 2; a new stack layer following Git's lock and publication protocol, with reload, segment compaction, cleanup and flush; interoperability tests where Git reads fork-written tables and stacks and the fork reads Git's. Integration as a ref backend waits for thread 4 | None for the standalone crate | None known | done: standalone `gix-reftable` crate, estimated at 4–5.5 sessions and run in that range; see the revision log |
 | 7. Reftable ref backend | A feature-gated `gix_ref::store::reftable` adapter over `gix-reftable` behind the neutral `gix_ref::Store`: reads, iteration, symrefs, peeled values, transactions with reflogs, the `HEAD` reflog and tombstones, reflog reading and expiry, worktree stacks; opening selects it for `extensions.refStorage=reftable` when the feature is built, and the interim refusal stays otherwise; `init` and clone create reftable only on an explicit or configured request, with `files` the default; outcome classes and the transaction observer through the neutral wrapper; a differential matrix against Git (selected `t0610`, `t0613`, `t0614` cases, mixed writers, both hashes). Excludes migration (decision 3) and the `reference-transaction` hook | Threads 4 and 6; rebases on thread 5 where both touch `gix-ref` | None known | ready |
 | 8. Local consumer backend | The plan's consumer operation inventory for local work, against Git 2.56 as the oracle: opening and discovery that ignores locating and injected-config environment variables, reference lookup and listing, tree and object reads, object and commit writes without touching the index or checkout, local ref transactions, configuration persistence, initialization, readiness and ancestry, for both hashes and both ref formats; the `reference-transaction` hook with prepared, committed and aborted states and a prepare-phase veto through the hook runner and the transaction observer, matching `git update-ref`; the files store's reflog divergences from Git that thread 7 records. Starts with an audit that replaces the placeholder estimate | Threads 3, 4 and 5; the hook part waits for thread 5's observer; rebases on thread 7 where both touch `gix-ref` | None known | ready |
@@ -373,3 +373,35 @@ sequencing; the overseer proposes each as its dependencies finish.
     tables below the fork's range inside its unlock window, which would contend for the same locks. The backend adapter
     in `gix-ref` and migration wait for thread 4's abstraction. `Stack` and `Snapshot` are `Send + Sync` and `Snapshot`
     is cheap to clone, so an adapter can open the stack lazily behind an `Arc`.
+- 2026-11-04: thread 5 (durability plumbing and differential fault harness) is done, in four pull requests (#22, #32, #36 and #39). Git 2.56.0's
+  flush behaviour was measured under `strace` (probes P1, P3 and P5) and is recorded in
+  [push-durability-evidence.md](push-durability-evidence.md), and the fork follows it as follows:
+  - `gix_fs::fsync` parses `core.fsync`, `core.fsyncMethod` and `core.fsyncObjectFiles` like Git and flushes by component,
+    with the barrier file that batching needs, which nothing calls yet: the receiver thread wires it. The files store flushes reference and `packed-refs` values while a
+    transaction is prepared. `Transaction::commit()` fails with `NothingApplied` or with `Uncertain`, which says how far
+    each edit got. Loose objects and the bundle writer's pack and index are flushed as Git does, in the same order.
+  - `gix_ref::transaction::observe` reports `Preparing`, `Prepared`, `Committed` and `Aborted` to an `Observer` that may
+    refuse the transaction while preparing and once prepared, including the nested events of the `packed-refs`
+    transaction. 27 rows compare its events with the `reference-transaction` hook of Git. Threads 7 and 8 take it
+    through the neutral wrapper.
+  - The differential tests run Git and the fork under `strace` and compare the order of writes, flushes and renames. The
+    Linux lanes of Fork CI install `strace` and set `GIX_TEST_REQUIRE_STRACE`, so they fail on a runner that can't trace.
+    The runners ship Git 2.56.0, every differential passed on the first run there, and the install step took 2 to 9
+    seconds per lane. `golden/p5-git-2.56.0.txt` keeps Git's flush protocol for `receive-pack` as data. No test
+    compares it with the fork, because the fork has no receiver; the thread that writes one adds that comparison.
+  - Deviations from Git that remain: the files store fails without a committer, where Git derives an identity from the
+    system, and a no-op update of the branch `HEAD` points at doesn't append to the `HEAD` reflog, where Git does; both are
+    on the evidence page. A commit that fails before it changed anything is reported `Aborted`. The files store takes
+    the lock on `packed-refs` before the others, where Git takes it last. An I/O error while reading the target of a
+    symbolic reference fires no nested `Aborted`. Whether Git deletes an emptied `packed-refs` wasn't verified.
+    Missing values of `core.fsync*` keys are read leniently. A reference whose reflog can't be deleted is deleted, like
+    Git, and only deleting nothing but a reflog fails.
+  - Not done: flushing the multi-pack index, `gix free pack explode` (no repository configuration) and pack output outside
+    the bundle writer. `core.fsyncMethod=writeout-only` flushes fully on platforms without a write-out-only flush, which
+    includes Windows, where Git has one. Directories are never flushed, as in Git. Evidence is from killing processes and from `strace`
+    only, on Linux and ext4: what survives a power failure is unproven, and macOS and Windows were read from source.
+  - Runtimes of `mise run check` on the dev station at the tips of the last two pull requests: 1,297 s with load 5 to 10
+    (observer), and 1,815 s with load 5 to 10 and three checks running at once (objects and packs, where a workflow
+    change selected the whole workspace). Neither is a baseline.
+  - Changes to public fields without `!` on the way: `gix_ref::store::init::Options` gained `fsync` in the transaction
+    change, under the 0.x exemption. `gix-odb` and `gix-pack` option structs gained `fsync` with `!`.
