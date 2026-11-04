@@ -32,6 +32,15 @@ impl Core {
         keys::Program::new_program("editor", &config::Tree::CORE).with_environment_override("GIT_EDITOR");
     /// The `core.fileMode` key.
     pub const FILE_MODE: keys::Boolean = keys::Boolean::new_boolean("fileMode", &config::Tree::CORE);
+    /// The `core.fsync` key.
+    pub const FSYNC: keys::Any = keys::Any::new("fsync", &config::Tree::CORE)
+        .with_note("a list of the components to flush, which adds to what Git flushes by default unless it ends in `none`. Its handling follows Git, including the quirks. It's applied by `gix_fs::fsync::Components::parse()`");
+    /// The `core.fsyncMethod` key.
+    pub const FSYNC_METHOD: FsyncMethod = FsyncMethod::new_with_validate("fsyncMethod", &config::Tree::CORE, validate::FsyncMethod)
+        .with_note("one of `fsync`, `writeout-only` or `batch`. Unknown values are ignored by Git and by `gix`, which uses the last known one");
+    /// The `core.fsyncObjectFiles` key.
+    pub const FSYNC_OBJECT_FILES: keys::Boolean = keys::Boolean::new_boolean("fsyncObjectFiles", &config::Tree::CORE)
+        .with_note("deprecated in favor of `core.fsync`, and flushes loose objects if true");
     /// The `core.fsCache` key.
     pub const FS_CACHE: keys::Boolean = keys::Boolean::new_boolean("fsCache", &config::Tree::CORE);
     /// The `core.ignoreCase` key.
@@ -140,6 +149,9 @@ impl Section for Core {
             &Self::EDITOR,
             &Self::FILE_MODE,
             &Self::FS_CACHE,
+            &Self::FSYNC,
+            &Self::FSYNC_METHOD,
+            &Self::FSYNC_OBJECT_FILES,
             &Self::IGNORE_CASE,
             &Self::CONFIG_LOCK_TIMEOUT,
             &Self::FILES_REF_LOCK_TIMEOUT,
@@ -177,6 +189,9 @@ impl Section for Core {
 
 /// The `core.notesRef` key.
 pub type NotesRef = keys::Any<keys::validate::FullNameRef>;
+
+/// The `core.fsyncMethod` key.
+pub type FsyncMethod = keys::Any<validate::FsyncMethod>;
 
 /// The `core.checkStat` key.
 pub type CheckStat = keys::Any<validate::CheckStat>;
@@ -545,6 +560,19 @@ mod abbrev {
 
 mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
+
+    #[derive(Clone, Copy)]
+    pub struct FsyncMethod;
+    impl keys::Validate for FsyncMethod {
+        fn validate(&self, value: &BStr) -> Result {
+            if gix_fs::fsync::Method::parse(value).is_none() {
+                gix_error::bail!(gix_error::message!(
+                    "Unknown value, expected one of 'fsync', 'writeout-only' or 'batch'"
+                ));
+            }
+            Ok(())
+        }
+    }
 
     #[derive(Clone, Copy)]
     pub struct RepositoryFormatVersion;

@@ -744,6 +744,19 @@ mod core {
     }
 
     #[test]
+    fn fsync_method_accepts_only_the_values_git_knows() {
+        for valid in ["fsync", "writeout-only", "batch"] {
+            assert!(Core::FSYNC_METHOD.validate(valid.into()).is_ok(), "{valid} is a method");
+        }
+        for invalid in ["", "Batch", "sync"] {
+            assert!(
+                Core::FSYNC_METHOD.validate(invalid.into()).is_err(),
+                "{invalid:?} is no method, which Git warns about and ignores"
+            );
+        }
+    }
+
+    #[test]
     fn repository_format_version() -> TestResult {
         use gix::repository::FormatVersion;
 
