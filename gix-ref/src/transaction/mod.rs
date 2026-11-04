@@ -26,7 +26,7 @@ mod reflog_message;
 mod rejection;
 pub(crate) use reflog_message::normalize_reflog_message;
 pub use rejection::{Rejected, RejectionReason};
-pub(crate) use rejection::{find_offender, observed, splice};
+pub(crate) use rejection::{find_offender, observed, rejected_position, splice, split_edits};
 
 use crate::{FullName, Target};
 

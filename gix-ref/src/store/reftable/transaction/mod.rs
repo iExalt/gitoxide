@@ -225,6 +225,10 @@ impl<'s, 'p> Transaction<'s, 'p> {
             .iter()
             .map(|(_, edit)| crate::transaction::observed(edit))
             .collect();
+        let split = crate::transaction::split_edits(
+            &remaining.iter().map(|(_, edit)| edit.clone()).collect::<Vec<_>>(),
+            &mut |name| store.try_find(name).ok().flatten().map(|reference| reference.target),
+        );
         let mut rejected: Vec<crate::transaction::Rejected> = Vec::new();
         // Git checks what an edit expects before it checks if its name conflicts with another edit, and edits that are rejected
         // can't conflict with others. Find the former first, with names of edits not conflicting, and the latter after.
@@ -237,7 +241,7 @@ impl<'s, 'p> Transaction<'s, 'p> {
                     .iter()
                     .filter_map(|rejected: &crate::transaction::Rejected| {
                         // Edits that only change a reflog aren't reported, so positions count the others.
-                        let position = observed[..rejected.index].iter().flatten().count();
+                        let position = crate::transaction::rejected_position(&observed, &split, rejected.index);
                         observed[rejected.index]
                             .clone()
                             .map(|update| (rejected.index, position, update))
