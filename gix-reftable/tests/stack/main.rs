@@ -1,4 +1,4 @@
-//! Reading stacks of tables that Git wrote.
+//! Stacks of tables, which Git wrote or which Git reads.
 
 use gix_testtools::Result;
 
@@ -7,3 +7,4 @@ use gix_testtools::Result;
 mod util;
 
 mod read;
+mod write;
