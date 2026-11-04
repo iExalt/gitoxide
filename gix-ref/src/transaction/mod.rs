@@ -52,7 +52,9 @@ pub enum PreviousValue {
     Any,
     /// The reference must exist and may have any value.
     MustExist,
-    /// Create the ref only, hence the reference must not exist.
+    /// Create the ref only, hence the reference must not exist, not even with the value that is to be written.
+    ///
+    /// A reference that exists but can't be decoded isn't absent either, and makes the edit fail, like in Git.
     MustNotExist,
     /// The ref _must_ exist and have the given value.
     MustExistAndMatch(Target),

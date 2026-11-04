@@ -130,9 +130,14 @@ impl Transaction<'_, '_> {
         let loose = store
             .ref_contents(name)
             .or_raise(|| message("Could not read existing reference"))?
-            // Git permits replacing malformed loose references, but I/O errors must propagate.
-            .and_then(|buf| loose::Reference::try_from_path(name.to_owned(), &buf, store.object_hash).ok())
-            .map(Reference::from);
+            // Like Git, don't treat a malformed loose reference as absent: edits would replace or delete it, and
+            // decide against the packed reference that it hides.
+            .map(|buf| {
+                loose::Reference::try_from_path(name.to_owned(), &buf, store.object_hash)
+                    .map(Reference::from)
+                    .or_raise(|| message!("Unable to resolve reference '{name}': reference broken"))
+            })
+            .transpose()?;
         match (loose, packed) {
             (None, Some(packed)) => packed.try_find(name).map(|reference| reference.map(Into::into)),
             (reference, _) => Ok(reference),
@@ -246,14 +251,14 @@ impl Transaction<'_, '_> {
                         bail!(not_found("The reference to update must exist"));
                     }
                     (PreviousValue::MustNotExist, Some(existing)) => {
-                        if existing.target != *new {
-                            let context = message!("Expected the reference not to exist when writing {new}");
-                            return Err(MustNotExist {
-                                full_name: change.name(),
-                                actual: existing.target.clone(),
-                            }
-                            .and_raise(context));
+                        // Even a reference that has the new value exists, and creating it is a duplicate write that
+                        // the caller wants to know about, as Git does.
+                        let context = message!("Expected the reference not to exist when writing {new}");
+                        return Err(MustNotExist {
+                            full_name: change.name(),
+                            actual: existing.target.clone(),
                         }
+                        .and_raise(context));
                     }
                     (
                         PreviousValue::MustExistAndMatch(previous) | PreviousValue::ExistingMustMatch(previous),
@@ -684,7 +689,7 @@ impl std::error::Error for ReferenceOutOfDate {
     }
 }
 
-/// A reference exists with a different target although the edit required its absence.
+/// A reference exists, no matter its target, although the edit required its absence.
 #[derive(Debug)]
 pub struct MustNotExist {
     /// The reference which unexpectedly exists.

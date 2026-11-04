@@ -1,4 +1,5 @@
-//! References whose names conflict, as `refs/heads/a` and `refs/heads/a/b` do.
+//! References whose names conflict, as `refs/heads/a` and `refs/heads/a/b` do, references that exist already, and
+//! references that can't be read.
 //!
 //! Each case runs against Git first, which refuses the transaction while preparing it, and then against the files store,
 //! which has to refuse it in the same way and with the same leftovers: nothing changed, and nothing that Git can't
@@ -320,5 +321,117 @@ fn two_edits_of_one_name_are_invalid_like_in_git() -> TestResult {
         "it is a mistake of the caller, which can't be fixed by trying again: {err:?}"
     );
     assert_eq!(dump(&fork_repo)?, dump(&git_repo)?, "nothing is left behind by either");
+    Ok(())
+}
+
+#[test]
+fn creating_an_existing_reference_is_refused_even_with_its_own_value_like_in_git() -> TestResult {
+    let root = gix_testtools::tempfile::tempdir()?;
+    for (idx, packed) in [false, true].into_iter().enumerate() {
+        let (git_repo, id) = repo(root.path(), &format!("git-{idx}"))?;
+        let (fork_repo, _) = repo(root.path(), &format!("fork-{idx}"))?;
+        for repo in [&git_repo, &fork_repo] {
+            prepare_state(repo, id, &[("refs/heads/a", packed)], &[])?;
+        }
+        let before = dump(&fork_repo)?;
+
+        let (code, git_message) = git_transaction(&git_repo, id, &["refs/heads/a"])?;
+        assert_eq!(
+            code,
+            Some(128),
+            "Git refuses to create what exists, with the same value too"
+        );
+        assert!(
+            git_message.contains("reference already exists"),
+            "packed={packed}: Git says why: {git_message}"
+        );
+
+        let err = fork_transaction(&fork_repo, id, &["refs/heads/a"])
+            .expect_err("creation is for references that don't exist, whatever they point to");
+        let exists = err
+            .downcast_any_ref::<gix_ref::view::transaction::MustNotExist>()
+            .expect("the failure is identifiable");
+        assert_eq!(
+            exists.actual,
+            Target::Object(id),
+            "packed={packed}: it tells what is there"
+        );
+        assert!(err.is_conflict(), "packed={packed}: {err:?}");
+        assert_eq!(dump(&fork_repo)?, before, "packed={packed}: nothing was changed");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_reference_that_cannot_be_read_is_not_treated_as_absent() -> TestResult {
+    struct Broken {
+        existing: &'static [(&'static str, bool)],
+        edit: &'static str,
+        description: &'static str,
+    }
+    let cases = [
+        Broken {
+            existing: &[],
+            edit: "refs/heads/g",
+            description: "creating over garbage",
+        },
+        Broken {
+            existing: &[("refs/heads/g", true)],
+            edit: "refs/heads/g",
+            description: "updating a packed reference that garbage in a loose file hides",
+        },
+        Broken {
+            existing: &[],
+            edit: "-refs/heads/g",
+            description: "deleting garbage",
+        },
+    ];
+    let root = gix_testtools::tempfile::tempdir()?;
+    for (idx, case) in cases.iter().enumerate() {
+        let (git_repo, id) = repo(root.path(), &format!("git-{idx}"))?;
+        let (fork_repo, _) = repo(root.path(), &format!("fork-{idx}"))?;
+        for repo in [&git_repo, &fork_repo] {
+            prepare_state(repo, id, case.existing, &["refs/heads/g"])?;
+        }
+        let before = dump(&fork_repo)?;
+        assert_eq!(
+            before,
+            dump(&git_repo)?,
+            "{}: both start out the same",
+            case.description
+        );
+
+        let (code, git_message) = git_transaction(&git_repo, id, &[case.edit])?;
+        assert_eq!(code, Some(128), "{}: Git refuses: {git_message}", case.description);
+        assert!(
+            git_message.contains("reference broken"),
+            "{}: Git names the reason: {git_message}",
+            case.description
+        );
+
+        let err = fork_transaction(&fork_repo, id, &[case.edit])
+            .expect_err("garbage isn't a value that edits can replace, delete or compare against");
+        assert!(
+            err.is_corrupted(),
+            "{}: the failure says the reference is corrupt, not that it is missing: {err:?}",
+            case.description
+        );
+        assert!(
+            !err.is_not_found(),
+            "{}: and that it isn't absent: {err:?}",
+            case.description
+        );
+        assert!(
+            format!("{err:?}").contains("reference broken"),
+            "{}: the reason is Git's: {err:?}",
+            case.description
+        );
+        assert_eq!(
+            dump(&fork_repo)?,
+            before,
+            "{}: nothing was changed, and no lock is left",
+            case.description
+        );
+    }
     Ok(())
 }

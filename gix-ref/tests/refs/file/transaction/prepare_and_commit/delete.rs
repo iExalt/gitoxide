@@ -305,11 +305,12 @@ fn delete_broken_ref_that_must_exist_fails_as_it_is_no_valid_ref() -> TestResult
     Could not prepare reference edit, reference="HEAD"
 
     Caused by:
-        0: The reference to delete must exist
+        0: Unable to resolve reference 'HEAD': reference broken
+        1: Reference content could not be parsed, input="broken"
     "#);
     assert!(
-        err.is_not_found(),
-        "delete broken ref that must exist fails as it is no valid ref"
+        err.is_corrupted(),
+        "delete broken ref that must exist fails as it is no valid ref, and says so instead of claiming it is absent"
     );
     Ok(())
 }
@@ -336,23 +337,27 @@ fn non_existing_can_be_deleted_with_the_may_exist_match_constraint() -> TestResu
 }
 
 #[test]
-/// Based on https://github.com/git/git/blob/master/refs/files-backend.c#L514:L515
-fn delete_broken_ref_that_may_not_exist_works_even_in_deref_mode() -> TestResult {
+fn delete_broken_ref_that_may_not_exist_fails_even_in_deref_mode_like_in_git() -> TestResult {
     let (_keep, store) = empty_store()?;
     std::fs::write(store.git_dir().join("HEAD"), b"broken")?;
     assert!(store.try_find_loose("HEAD").is_err(), "the ref is truly broken");
 
-    let edits = store
+    let err = store
         .transaction()
         .prepare(
             Some(RefEdit::delete("HEAD".try_into()?, PreviousValue::Any).with_deref(true)),
             Fail::Immediately,
             Fail::Immediately,
-        )?
-        .commit(committer().to_ref(&mut TimeBuf::default()))?;
-
-    assert!(store.try_find_loose("HEAD")?.is_none(), "the ref was deleted");
-    assert_eq!(edits, vec![RefEdit::delete("HEAD".try_into()?, PreviousValue::Any,)]);
+        )
+        .map(|_| ())
+        .expect_err("Git doesn't delete what it can't resolve, so a broken reference isn't absent");
+    assert!(err.is_corrupted(), "it is corrupt: {err:?}");
+    assert!(!err.is_not_found(), "and not absent: {err:?}");
+    assert_eq!(
+        std::fs::read(store.git_dir().join("HEAD"))?,
+        b"broken",
+        "the broken reference remains for somebody to look at"
+    );
     Ok(())
 }
 
