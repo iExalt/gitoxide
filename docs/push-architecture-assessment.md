@@ -800,12 +800,48 @@ Established so far, with the measurement that is still missing named beside each
 | --- | --- | --- |
 | Fork routine and thorough budgets | The plan's "Execution threads" section records a 120 s routine-check budget against a warm 94–109 s baseline and a 12 minute thorough-check budget against 530 s; `FORK.md:224` separately targets five minutes with warm caches for its planner-selected run | Whether new code keeps within them; to be tracked per thread |
 | Consumer budget | The plan requires the consumer's warm routine check to stay under 60 s; its historical value of about 45 s has not been refreshed | Everything, until P10 |
-| Release variants | `AGENTS.md` documents about 2.5, 1.5 and 0.8 minutes for the default, lean and small release builds | Current values on the shared host |
+| Release variants | `AGENTS.md` documents about 2.5, 1.5 and 0.8 minutes for the default, lean and small release builds. Measured on the shared host (P11 below): 151 s, 147 s and 65 s | Load-free values; the lean and small builds ran slower than documented |
 | Reftable dependency surface | A reftable crate adds a workspace crate (the upstream branch's is about 3.4k lines) whose third-party dependencies `crc32fast`, `flate2` and `thiserror` already appear in `Cargo.lock`; no new third-party crate is implied | Compatible versions; compile time of the new first-party code |
 | Receiver dependency surface | Pack writing, object access, connectivity and hooks exist in the tree; the new code is first-party (server protocol, quarantine, policy, strict fsck). Signed pushes and hooks run external programs the consumer already provides | Compile-time and binary-size impact |
-| Network features | `blocking-network-client` and several `blocking-http-transport-*` variants already exist in `gix/Cargo.toml` (`:220-261`); the HTTPS choice, not the receiver, decides the third-party cost | Per-variant duplication, size and latency |
-| Hash support | The `sha1` and `sha256` features exist (`gix/Cargo.toml:102-110`) | Cost of enabling both for the consumer |
+| Network features | `blocking-network-client` and several `blocking-http-transport-*` variants already exist in `gix/Cargo.toml` (`:220-261`); the HTTPS choice, not the receiver, decides the third-party cost. P11 below measured build time, binary size and duplication per variant | Latency |
+| Hash support | The `sha1` and `sha256` features exist (`gix/Cargo.toml:102-110`). Enabling both costs about 7 more crates and 6 KB in a consumer binary, with no measurable build time (P11 below) | The consumer's own figures (P10) |
 | First-party growth | Planning sizes below imply roughly 10–14k new lines for reftable and 10–15k for the receiver, including tests (inferred from Git's own sizes, section 9) | Compile time per added kloc |
+
+**Probe P11 result (ran 2026-11-04 between 13:57 and 14:23 UTC, fork `dev` at `1bc6fd610`, Rust 1.99, `CARGO_BUILD_JOBS=4`).**
+A scratch consumer crate outside the repository depends on `gix` by path with `default-features = false` and
+`sha1` plus one feature set. It opens a repository and lists references, and with the network features it also
+calls `remote_at(..).connect(Fetch)` and `ref_map()`, so that the transports are linked and not discarded.
+Each row is one cold `cargo build --release` into an empty target directory (`strip = true`, crates already in the
+cargo cache, so no download time), run under the station's shared build lock. The 1-minute load average before each
+build was 2.5 to 4.0 because other workers were running, so these are not load-free figures. One run per row; the
+`reqwest-rustls` figure includes a load spike to 9.8 and is probably high, as `reqwest-native-tls` has about the same
+number of crates and took half as long.
+
+| Feature set | Cold build | Crates compiled | Binary | Crates with several versions |
+| --- | --- | --- | --- | --- |
+| `sha1` only | 27 s | 90 | 1.97 MB | `hashbrown` |
+| `sha1` and `sha256` | 26 s | 97 | 1.98 MB | `hashbrown` |
+| `blocking-network-client` | 36 s | 110 | 3.08 MB | `hashbrown` |
+| `blocking-http-transport-curl` | 45 s | 121 | 4.12 MB | `hashbrown` |
+| `blocking-http-transport-curl-rustls` | 68 s | 141 | 7.97 MB | `hashbrown` |
+| `blocking-http-transport-curl-openssl` | 44 s | 123 | 4.22 MB | `hashbrown` |
+| `blocking-http-transport-reqwest-rust-tls` | 89 s | 195 | 9.45 MB | `base64`, `hashbrown`, `syn` |
+| `blocking-http-transport-reqwest-native-tls` | 45 s | 190 | 5.74 MB | `base64`, `hashbrown`, `syn` |
+
+The `gix` binary built from the repository (`cargo build --release`, cold, load 2.5 to 3.9): `small` 65 s and
+16.6 MB, `lean` 147 s and 37.9 MB, default 151 s and 38.5 MB.
+
+What this says for the plan:
+
+- Pushing needs `blocking-network-client` only, which costs about 9 s, 20 crates and 1.1 MB over the plain consumer.
+  `sha256` is practically free.
+- The HTTPS choice decides the third-party cost. The curl variants add 11 to 31 crates and 1 to 5 MB over the
+  network client. The reqwest variants add about 80 crates and 2.7 to 6.4 MB, and bring `base64` and `syn` in two
+  versions. `curl` with the system TLS library is the cheapest; `curl-rustls` avoids a system library for about 3.9 MB more.
+- The documented `AGENTS.md` figure matches for the default build. The measured `lean` build took about 1.6 times,
+  and the `small` build about 1.4 times, the documented time, at a load of 2.5 to 3.9.
+- Not measured: incremental and edited-core builds, the reftable crate and the receiver, as neither is linked into `gix`
+  yet, and the consumer's own figures (P10).
 
 The early baseline does not close the plan's final cost gate; the actual receiver,
 storage, reftable and HTTPS features are re-measured before cutover.
