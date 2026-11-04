@@ -12,7 +12,9 @@ use crate::{
     FullName, FullNameRef, Namespace, Target,
     file::transaction::prepare::{MustNotExist, ReferenceOutOfDate},
     store::WriteReflog,
-    transaction::{Change, ExistingRefs, LogChange, PreviousValue, RefEdit, RefLog, verify_available},
+    transaction::{
+        Change, ExistingRefs, LogChange, PreviousValue, RefEdit, RefLog, normalize_reflog_message, verify_available,
+    },
 };
 
 /// What a transaction can ask about the references as they are, using their names as stored, so with their namespace.
@@ -127,22 +129,9 @@ impl RefEdit {
     }
 }
 
-/// Collapse runs of whitespace into single spaces and trim the result, which is how Git cleans a reflog message,
-/// and keep at most `limit` bytes of it.
+/// Clean a reflog message like Git does, which is the same for every kind of storage, and keep at most `limit` bytes of it.
 pub(super) fn normalize_message(message: &BStr, limit: usize) -> BString {
-    let mut out = BString::default();
-    let mut was_space = true;
-    for byte in message.iter().copied() {
-        let is_space = byte.is_ascii_whitespace() || byte == 0x0b;
-        if was_space && is_space {
-            continue;
-        }
-        was_space = is_space;
-        out.push(if is_space { b' ' } else { byte });
-    }
-    while out.last() == Some(&b' ') {
-        out.pop();
-    }
+    let mut out = normalize_reflog_message(message);
     out.truncate(limit);
     out
 }
