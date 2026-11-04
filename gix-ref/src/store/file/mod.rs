@@ -42,6 +42,20 @@ pub struct Store {
     unsupported_backend: Option<String>,
 }
 
+impl Store {
+    /// See [`crate::Store::with_locations()`].
+    ///
+    /// It starts out from a clone so that state added to the store later is retained as well, and only replaces the places
+    /// and the cache of `packed-refs`, which must not be shared between locations.
+    pub(crate) fn with_locations(&self, git_dir: PathBuf, common_dir: Option<PathBuf>) -> Store {
+        let mut store = self.clone();
+        store.git_dir = git_dir;
+        store.common_dir = common_dir;
+        store.packed = gix_fs::SharedFileSnapshotMut::new().into();
+        store
+    }
+}
+
 mod access {
     use std::path::Path;
 

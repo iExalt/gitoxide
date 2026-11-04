@@ -165,7 +165,7 @@ where
         let alternates = repo.objects.store_ref().alternate_db_paths()?;
         let mut negotiate = Negotiate {
             objects: &graph_repo.objects,
-            refs: &graph_repo.refs,
+            refs: graph_repo.ref_store(),
             graph: &mut graph,
             alternates,
             ref_map,
@@ -268,7 +268,7 @@ where
 
 struct Negotiate<'a, 'b, 'c> {
     objects: &'a crate::OdbHandle,
-    refs: &'a gix_ref::file::Store,
+    refs: gix_ref::StoreRef<'a>,
     graph: &'a mut gix_negotiate::Graph<'b, 'c>,
     alternates: Vec<PathBuf>,
     ref_map: &'a gix_protocol::fetch::RefMap,

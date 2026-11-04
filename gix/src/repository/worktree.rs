@@ -41,7 +41,7 @@ impl crate::Repository {
             .or_raise(|| message("Failed to read or iterate worktree directories"))?
         {
             let mut repo = repo.or_raise(|| message("Could not open a worktree repository"))?;
-            repo.refs.namespace = namespace.cloned();
+            repo.refs.set_namespace(namespace.cloned());
             if repo.workdir().is_some() {
                 match repo.find_reference("HEAD") {
                     Ok(_) => insert_head(Some(repo.head()?), &mut map)?,

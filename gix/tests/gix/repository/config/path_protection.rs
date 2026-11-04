@@ -50,7 +50,8 @@ fn repository_sources_respect_the_section_filter() -> TestResult {
                     "{source}-{value}: only eligible settings can replace platform defaults"
                 );
                 assert_eq!(
-                    repo.refs.prohibit_windows_device_names, expected.windows,
+                    repo.refs.as_file().expect("files store").prohibit_windows_device_names,
+                    expected.windows,
                     "{source}-{value}: ref-store initialization must use the same section filter"
                 );
                 for (name, mode, rejected) in [
@@ -94,7 +95,7 @@ fn repository_sources_respect_the_section_filter() -> TestResult {
                 "{source}: trusted API overrides remain usable under reduced trust"
             );
             assert_eq!(
-                repo.refs.prohibit_windows_device_names,
+                repo.refs.as_file().expect("files store").prohibit_windows_device_names,
                 value == "true",
                 "{source}: trusted API overrides also configure the reference store"
             );
@@ -123,7 +124,7 @@ fn safe_directory_promotion_updates_reference_protection() -> TestResult {
                 "the system safe.directory promotes trust"
             );
             assert_eq!(
-                repo.refs.prohibit_windows_device_names,
+                repo.refs.as_file().expect("files store").prohibit_windows_device_names,
                 value == "true",
                 "{source}: reference protection uses the final section trust"
             );

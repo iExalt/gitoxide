@@ -48,22 +48,8 @@ impl crate::Repository {
         let work_tree = self.workdir().map(anchor).transpose()?;
 
         let refs = if self.refs.git_dir().is_relative() || self.refs.common_dir().is_some_and(Path::is_relative) {
-            let options = gix_ref::store::init::Options {
-                write_reflog: self.refs.write_reflog,
-                precompose_unicode: self.refs.precompose_unicode,
-                prohibit_windows_device_names: self.refs.prohibit_windows_device_names,
-            };
-            let mut refs = match self.refs.common_dir() {
-                Some(common_dir) => {
-                    crate::RefStore::for_linked_worktree_opts(git_dir, anchor(common_dir)?, self.object_hash(), options)
-                }
-                None => crate::RefStore::at_opts(git_dir, self.object_hash(), options),
-            };
-            refs.namespace.clone_from(&self.refs.namespace);
-            refs.set_unsupported_backend(self.refs.unsupported_backend().map(ToOwned::to_owned));
-            let threshold = self.refs.clone().set_packed_buffer_mmap_threshold(0);
-            refs.set_packed_buffer_mmap_threshold(threshold);
-            Some(refs)
+            let common_dir = self.refs.common_dir().map(anchor).transpose()?;
+            Some(self.refs.with_locations(git_dir, common_dir))
         } else {
             None
         };

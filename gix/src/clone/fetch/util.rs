@@ -206,12 +206,7 @@ pub(super) fn update_remote_head(
         },
     ))
     .or_raise(|| message("Failed to record the remote default branch"))?;
-    if repo
-        .find_reference(head_name.as_ref())?
-        .log_iter()
-        .all()
-        .or_error()?
-        .is_none()
+    if repo.find_reference(head_name.as_ref())?.log_iter().all()?.is_none()
         && let Some(commit_id) = mapping.remote.as_id()
     {
         // shortcut: symref reflogs lose the previous OID on HEAD-name collisions; fix in gix-ref when it supports symbolic logging.

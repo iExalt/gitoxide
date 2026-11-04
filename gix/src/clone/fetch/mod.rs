@@ -304,7 +304,9 @@ impl PrepareFetch {
         };
         // Git clone writes its initial packed refs without creating reflogs.
         let mut receiving_repo = repo.clone();
-        receiving_repo.refs.write_reflog = gix_ref::store::WriteReflog::Disable;
+        receiving_repo
+            .refs
+            .set_write_reflog(gix_ref::store::WriteReflog::Disable);
         let outcome = pending_pack
             .with_write_packed_refs_only(true)
             .with_reflog_message(RefLogMessage::Override {

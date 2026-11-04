@@ -1,7 +1,6 @@
 //!
 #![allow(clippy::empty_docs)]
 use gix_object::commit::MessageRef;
-use gix_ref::file::ReferenceExt;
 
 use crate::{
     Reference,
@@ -10,8 +9,8 @@ use crate::{
 
 impl Reference<'_> {
     /// Return a platform for obtaining iterators over reference logs.
-    pub fn log_iter(&self) -> gix_ref::file::log::iter::Platform<'_, '_> {
-        self.inner.log_iter(&self.repo.refs)
+    pub fn log_iter(&self) -> gix_ref::view::ReflogPlatform<'_, '_> {
+        self.repo.ref_store().reflog(self.inner.name.as_ref())
     }
 
     /// Return true if a reflog is present for this reference.

@@ -4,10 +4,6 @@ use std::path::PathBuf;
 
 use crate::file;
 
-#[expect(
-    dead_code,
-    reason = "callers still initialize file::Store directly while the general store awaits ref-table support"
-)]
 impl crate::Store {
     /// Create a new store at the given location, typically the `.git/` directory.
     /// Use [`at_opts()`](Self::at_opts) to adjust options.
@@ -30,7 +26,7 @@ impl crate::Store {
         std::fs::read_dir(&git_dir)
             .or_raise(|| Message::new("Could not access reference store").with("path", git_dir.as_path()))?;
         Ok(crate::Store {
-            inner: crate::store::State::Loose {
+            inner: crate::store::State::Files {
                 store: file::Store::at_opts(git_dir, object_hash, opts),
             },
         })
