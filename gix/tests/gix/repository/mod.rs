@@ -31,6 +31,8 @@ mod open;
 mod pathspec;
 mod ref_storage;
 mod reference;
+#[cfg(feature = "hook")]
+mod reference_hook;
 mod remote;
 mod shallow;
 mod state;
