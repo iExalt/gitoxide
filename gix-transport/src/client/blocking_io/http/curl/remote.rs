@@ -3,7 +3,8 @@ use std::{
     io::{Read, Write},
     sync::{
         Arc,
-        mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
     time::Duration,
@@ -72,6 +73,10 @@ struct Handler {
     continuing_authentication_header: bool,
     /// Last non-success status reported to the caller, or `200` for a successful transfer.
     last_status: usize,
+    /// `true` once the headers of a response were passed on completely, after which the consumer waits for the body.
+    headers_done: bool,
+    /// Set from another thread to abort the transfer in flight, and every later one.
+    interrupted: Arc<AtomicBool>,
     /// The failure of a `407` response that is being received, which curl retries with credentials if it has any, so it
     /// is reported only if no other response follows, and neither its headers nor its body reach the consumer.
     proxy_refusal: Option<Error>,
@@ -94,12 +99,17 @@ impl Handler {
         self.authentication.www_authenticate.clear();
         self.continuing_authentication_header = false;
         self.last_status = 0;
+        self.headers_done = false;
         self.proxy_refusal = None;
         self.follow = FollowRedirects::default();
         self.redirect_action = RedirectAction::Stop;
     }
 
     fn transfer_error(&mut self, err: curl::Error) -> io::Error {
+        if self.interrupted.load(Ordering::SeqCst) {
+            self.io_error = None;
+            return crate::client::interrupted_error();
+        }
         match self.io_error.take() {
             Some(source) => io::Error::new(source.kind(), source.and_raise(err)),
             None => io::Error::new(
@@ -113,24 +123,23 @@ impl Handler {
         }
     }
 
-    /// Send `failure` to the consumer, which waits for the headers first and for the body if these arrived already.
+    /// Send `failure` to the consumer, which waits for the headers first and for the body once these arrived, so both are told.
+    /// The one that is waited on at the time keeps the error as it is, and the other gets a copy of its message.
     ///
     /// The body is told by waiting for room in its pipe if it is full, as dropping the failure there makes the consumer see
     /// a body that ended early instead of the reason. The wait ends once the consumer reads or drops its end.
     fn report(&mut self, failure: io::Error) {
-        match (self.send_header.take(), self.send_data.take()) {
-            (Some(header), mut data) => {
-                if let Err(TrySendError::Disconnected(failure) | TrySendError::Full(failure)) =
-                    header.channel.try_send(Err(failure))
-                    && let Some(body) = data.take()
-                {
-                    body.channel.send(failure).ok();
-                }
-            }
-            (None, Some(body)) => {
-                body.channel.send(Err(failure)).ok();
-            }
-            (None, None) => {}
+        let copy = io::Error::new(failure.kind(), failure.to_string());
+        let (for_headers, for_body) = if self.headers_done {
+            (copy, failure)
+        } else {
+            (failure, copy)
+        };
+        if let Some(header) = self.send_header.take() {
+            header.channel.try_send(Err(for_headers)).ok();
+        }
+        if let Some(body) = self.send_data.take() {
+            body.channel.send(Err(for_body)).ok();
         }
     }
 
@@ -334,6 +343,10 @@ impl curl::easy::Handler for Handler {
             None => Ok(0), // nothing more to receive, reader is done
         }
     }
+    fn progress(&mut self, _download_total: f64, _downloaded: f64, _upload_total: f64, _uploaded: f64) -> bool {
+        !self.interrupted.load(Ordering::SeqCst)
+    }
+
     fn read(&mut self, data: &mut [u8]) -> std::result::Result<usize, curl::easy::ReadError> {
         match self.receive_body.as_mut() {
             Some(StreamOrBuffer::Stream(reader)) => reader.read(data),
@@ -368,6 +381,7 @@ impl curl::easy::Handler for Handler {
                         .ok();
                 }
                 writer.write_all(data).ok();
+                self.headers_done = true;
             }
             self.checked_status = false;
             self.current_status = None;
@@ -450,13 +464,18 @@ type Worker = (
     SharedRedirectedBaseUrl,
 );
 
-pub fn new() -> Worker {
+pub fn new(interrupted: Arc<AtomicBool>) -> Worker {
     let redirected_base_url_shared = Arc::new(Mutex::new(None));
     let redirected_base_url_shared_out = redirected_base_url_shared.clone();
     let (req_send, req_recv) = sync_channel(0);
     let (res_send, res_recv) = sync_channel(0);
     let handle = std::thread::spawn(gix_trace::in_thread(move || -> Result {
-        let mut handle = Easy2::new(Handler::default());
+        let mut handle = Easy2::new(Handler {
+            interrupted,
+            ..Default::default()
+        });
+        // The progress callback is how an interrupt reaches a transfer that waits for the server.
+        curl!(handle.progress(true));
         // We don't wait for the possibility for pipelining to become clear, and curl tries to reuse connections by default anyway.
         curl!(handle.pipewait(false));
         curl!(handle.tcp_keepalive(true));
@@ -608,6 +627,10 @@ pub fn new() -> Worker {
                 let (send, receive_headers) = pipe::unidirectional(1);
                 handler.send_header = Some(send);
                 let (send_body, receive_body) = pipe::unidirectional(0);
+                // `curl` asks for the body in a callback that blocks, and doesn't look at the progress callback meanwhile,
+                // so waiting for the caller to write has to end with an interrupt on its own.
+                let receive_body =
+                    receive_body.fail_when_set(handler.interrupted.clone(), crate::client::interrupted_error);
                 (receive_data, receive_headers, send_body, receive_body)
             };
 
@@ -658,13 +681,14 @@ pub fn new() -> Worker {
             if let Err(err) = handle.perform() {
                 let handler = handle.get_mut();
                 let err = handler.transfer_error(err);
-                handler.reset();
 
                 if let Some((action, authenticate)) = proxy_auth_action {
                     authenticate.lock().expect("no panics in other threads")(action.erase()).ok();
                 }
                 handler.receive_body.take();
+                // Before resetting, which forgets whether the headers arrived, so the failure goes to whoever waits for it.
                 handler.report(err);
+                handler.reset();
             } else {
                 let actual_url = curl!(handle.effective_url()).expect("effective url is present and valid UTF-8");
                 if actual_url != effective_url {
@@ -682,11 +706,12 @@ pub fn new() -> Worker {
                     .or_raise(|| message("Could not update proxy credentials"))?;
                 }
                 // Only now, so that credentials are forgotten by the time the consumer sees the failure.
+                // The upload source goes first, so that a caller that is blocked writing is released before it is told.
+                handler.receive_body.take();
                 if let Some(refusal) = handler.proxy_refusal.take() {
                     handler.report(io::Error::other(refusal));
                 }
                 handler.reset();
-                handler.receive_body.take();
                 handler.send_header.take();
                 handler.send_data.take();
             }

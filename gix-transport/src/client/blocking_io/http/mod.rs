@@ -370,6 +370,10 @@ impl<H: Http> client::TransportWithoutIO for Transport<H> {
     fn configure(&mut self, config: &dyn Any) -> Result {
         self.http.configure(config)
     }
+
+    fn interrupt_handle(&self) -> Option<client::InterruptHandle> {
+        self.http.interrupt_handle()
+    }
 }
 
 impl<H: Http> Transport<H> {
