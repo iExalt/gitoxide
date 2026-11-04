@@ -55,3 +55,4 @@ fn db(kind: DbKind, object_hash: gix_hash::Kind) -> Result<gix_odb::HandleArc> {
 }
 
 mod count_and_entries;
+mod missing;
