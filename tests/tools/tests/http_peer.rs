@@ -12,11 +12,12 @@ fn git_supports_http() -> bool {
     let supported = gix_path::env::core_dir_program("git-remote-http").is_some();
     assert!(
         supported || !gix_testtools::is_ci::cached(),
-        "CI has a git that can use http, but {:?} doesn't have git-remote-http",
+        "The `git` on `PATH` has no `git-remote-http` in its exec path {:?}, which means it was built without `curl` and can't use HTTP. \
+         CI has a `git` that can, so put one that has it first in `PATH`",
         gix_path::env::core_dir()
     );
     if !supported {
-        eprintln!("SKIPPED: the git in use has no support for http, run with one that has");
+        eprintln!("SKIPPED: the `git` on `PATH` has no `git-remote-http`, run with one that has");
     }
     supported
 }
