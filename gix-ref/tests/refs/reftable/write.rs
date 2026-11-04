@@ -219,7 +219,7 @@ fn updating_the_branch_head_points_to_logs_it_for_head_as_well_even_if_nothing_c
     let head_log_before = reflog_messages(&f, "repo", "HEAD")?.len();
     let main_log_before = reflog_messages(&f, "repo", "refs/heads/main")?.len();
 
-    commit(
+    let outcome = commit(
         &store,
         vec![update(
             "refs/heads/main",
@@ -228,6 +228,24 @@ fn updating_the_branch_head_points_to_logs_it_for_head_as_well_even_if_nothing_c
             "reset: moving to c2",
         )],
     )?;
+    assert_eq!(
+        outcome.edits.len(),
+        1,
+        "the log-only edit of HEAD is not reported back, as it isn't by the files store"
+    );
+    let rolled_back = gix_ref::Store::from(store.clone())
+        .as_ref()
+        .transaction()
+        .prepare(
+            vec![update("refs/heads/main", f.c3, PreviousValue::Any, "never written")],
+            lock(),
+        )?
+        .rollback();
+    assert_eq!(
+        rolled_back.len(),
+        1,
+        "a rollback leaves out the log-only edit of HEAD as well"
+    );
     assert_eq!(
         reflog_messages(&f, "repo", "HEAD")?[0],
         "reset: moving to c2",
