@@ -197,17 +197,13 @@ fn check_expected(edit: &RefEdit, existing: Option<&Target>) -> Result<()> {
             | (PreviousValue::MustExist, Some(_))
             | (PreviousValue::MustNotExist | PreviousValue::ExistingMustMatch(_), None) => Ok(()),
             (PreviousValue::MustExist, None) => bail!(not_found("The reference to update must exist")),
-            (PreviousValue::MustNotExist, Some(actual)) => {
-                if actual == new {
-                    Ok(())
-                } else {
-                    Err(MustNotExist {
-                        full_name: name(),
-                        actual: actual.clone(),
-                    }
-                    .and_raise(message!("Expected the reference not to exist when writing {new}")))
-                }
+            // Even a reference that has the new value exists, and creating it is a duplicate write that the caller
+            // wants to know about, as Git does.
+            (PreviousValue::MustNotExist, Some(actual)) => Err(MustNotExist {
+                full_name: name(),
+                actual: actual.clone(),
             }
+            .and_raise(message!("Expected the reference not to exist when writing {new}"))),
             (PreviousValue::MustExistAndMatch(previous) | PreviousValue::ExistingMustMatch(previous), Some(actual)) => {
                 if previous == actual {
                     Ok(())
@@ -584,12 +580,16 @@ mod tests {
             &world,
         ));
         assert!(err.downcast_any_ref::<MustNotExist>().is_some());
-        plan(
+        let err = failure(plan(
             vec![update("refs/heads/a", ID_A, PreviousValue::MustNotExist)],
             &s,
             &world,
-        )
-        .expect("creating what is there already is fine");
+        ));
+        assert_eq!(
+            err.downcast_any_ref::<MustNotExist>().expect("exists").actual,
+            Target::Object(id(ID_A)),
+            "creating what is there already is refused, as in Git, and the error tells what is there"
+        );
 
         for edit in [
             update("refs/heads/missing", ID_B, PreviousValue::MustExist),
