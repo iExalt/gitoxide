@@ -23,9 +23,13 @@ required-features = ["gix-parallel/parallel"]
 
 [features]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
-sha1 = ["gix-hash/sha1"]
+sha1 = ["gix-hash/sha1", "gix-reftable?/sha1"]
 ## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
-sha256 = ["gix-hash/sha256"]
+sha256 = ["gix-hash/sha256", "gix-reftable?/sha256"]
+## Read and write references that are stored in reftables, which Git selects with `extensions.refStorage = reftable`.
+##
+## This adds the dependencies of `gix-reftable`, none of which are in use otherwise.
+reftable = ["dep:gix-reftable"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-actor/serde", "gix-object/serde"]
 
@@ -43,6 +47,7 @@ gix-utils = { path = "../gix-utils" }
 gix-validate = { path = "../gix-validate" }
 gix-actor = { path = "../gix-actor" }
 gix-lock = { path = "../gix-lock" }
+gix-reftable = { path = "../gix-reftable", optional = true }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",

@@ -22,6 +22,8 @@ enum Inner<'a> {
         store: &'a file::Store,
         packed: Option<file::packed::SharedBufferSnapshot>,
     },
+    #[cfg(feature = "reftable")]
+    Reftable(crate::reftable::Snapshot<'a>),
 }
 
 impl<'a> Snapshot<'a> {
@@ -32,11 +34,22 @@ impl<'a> Snapshot<'a> {
     }
 }
 
+#[cfg(feature = "reftable")]
+impl<'a> Snapshot<'a> {
+    pub(crate) fn new_reftable(snapshot: crate::reftable::Snapshot<'a>) -> Self {
+        Snapshot {
+            inner: Inner::Reftable(snapshot),
+        }
+    }
+}
+
 impl<'a> Snapshot<'a> {
     /// Return the store this is a snapshot of.
     pub fn store(&self) -> StoreRef<'a> {
         match &self.inner {
             Inner::File { store, .. } => StoreRef::from(*store),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => StoreRef::from(snapshot.store()),
         }
     }
 
@@ -48,6 +61,8 @@ impl<'a> Snapshot<'a> {
     {
         match &self.inner {
             Inner::File { store, packed } => store.try_find_packed(partial, packed.as_ref().map(|b| &***b)),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => snapshot.try_find(partial),
         }
     }
 
@@ -60,6 +75,8 @@ impl<'a> Snapshot<'a> {
     {
         match &self.inner {
             Inner::File { store, packed } => store.find_packed(partial, packed.as_ref().map(|b| &***b)),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => snapshot.find(partial),
         }
     }
 
@@ -67,6 +84,8 @@ impl<'a> Snapshot<'a> {
     pub fn iter(&self) -> Platform<'a> {
         match &self.inner {
             Inner::File { store, packed } => Platform::new_file(store.platform_with_snapshot(packed.clone())),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => Platform::new_reftable(snapshot.platform()),
         }
     }
 
@@ -82,6 +101,8 @@ impl<'a> Snapshot<'a> {
             Inner::File { store, packed } => {
                 reference.peel_to_id_packed(store, objects, packed.as_ref().map(|b| &***b))
             }
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => snapshot.peel_to_id(reference, objects),
         }
     }
 
@@ -92,6 +113,8 @@ impl<'a> Snapshot<'a> {
     pub fn follow_to_object(&self, reference: &mut Reference) -> Result<ObjectId> {
         match &self.inner {
             Inner::File { store, packed } => reference.follow_to_object_packed(store, packed.as_ref().map(|b| &***b)),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => snapshot.follow_to_object(reference),
         }
     }
 
@@ -101,6 +124,8 @@ impl<'a> Snapshot<'a> {
     pub fn follow(&self, reference: &Reference) -> Option<Result<Reference>> {
         match &self.inner {
             Inner::File { store, packed } => reference.follow_packed(store, packed.as_ref().map(|b| &***b)),
+            #[cfg(feature = "reftable")]
+            Inner::Reftable(snapshot) => snapshot.follow(reference),
         }
     }
 }

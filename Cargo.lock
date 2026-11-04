@@ -2456,6 +2456,7 @@ dependencies = [
  "gix-odb",
  "gix-parallel",
  "gix-path",
+ "gix-reftable",
  "gix-testtools",
  "gix-utils",
  "gix-validate",

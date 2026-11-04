@@ -14,6 +14,8 @@ pub struct Platform<'s> {
 
 enum PlatformInner<'s> {
     File(file::iter::Platform<'s>),
+    #[cfg(feature = "reftable")]
+    Reftable(crate::reftable::Platform<'s>),
 }
 
 impl<'s> Platform<'s> {
@@ -23,10 +25,19 @@ impl<'s> Platform<'s> {
         }
     }
 
+    #[cfg(feature = "reftable")]
+    pub(crate) fn new_reftable(platform: crate::reftable::Platform<'s>) -> Self {
+        Platform {
+            inner: PlatformInner::Reftable(platform),
+        }
+    }
+
     /// Return an iterator over all references sorted by their name.
     pub fn all<'p>(&'p self) -> Result<Iter<'p, 's>> {
         match &self.inner {
             PlatformInner::File(platform) => platform.all().map(Iter::new_file).or_error(),
+            #[cfg(feature = "reftable")]
+            PlatformInner::Reftable(platform) => platform.all().map(Iter::new_reftable),
         }
     }
 
@@ -38,6 +49,8 @@ impl<'s> Platform<'s> {
     pub fn prefixed<'p>(&'p self, prefix: &RelativePath) -> Result<Iter<'p, 's>> {
         match &self.inner {
             PlatformInner::File(platform) => platform.prefixed(prefix).map(Iter::new_file).or_error(),
+            #[cfg(feature = "reftable")]
+            PlatformInner::Reftable(platform) => platform.prefixed(prefix).map(Iter::new_reftable),
         }
     }
 
@@ -46,6 +59,8 @@ impl<'s> Platform<'s> {
     pub fn pseudo<'p>(&'p self) -> Result<Iter<'p, 's>> {
         match &self.inner {
             PlatformInner::File(platform) => platform.pseudo().map(Iter::new_file).or_error(),
+            #[cfg(feature = "reftable")]
+            PlatformInner::Reftable(platform) => platform.pseudo().map(Iter::new_reftable),
         }
     }
 }
@@ -57,6 +72,8 @@ pub struct Iter<'p, 's> {
 
 enum IterInner<'p, 's> {
     File(file::iter::LooseThenPacked<'p, 's>),
+    #[cfg(feature = "reftable")]
+    Reftable(crate::reftable::Iter<'p>),
 }
 
 impl<'p, 's> Iter<'p, 's> {
@@ -67,12 +84,23 @@ impl<'p, 's> Iter<'p, 's> {
     }
 }
 
+#[cfg(feature = "reftable")]
+impl<'p> Iter<'p, '_> {
+    fn new_reftable(iter: crate::reftable::Iter<'p>) -> Self {
+        Iter {
+            inner: IterInner::Reftable(iter),
+        }
+    }
+}
+
 impl Iterator for Iter<'_, '_> {
     type Item = gix_error::Result<Reference>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
             IterInner::File(iter) => iter.next(),
+            #[cfg(feature = "reftable")]
+            IterInner::Reftable(iter) => iter.next(),
         }
     }
 }
