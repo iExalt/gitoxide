@@ -1,5 +1,5 @@
 //! Reading reflogs.
-use gix_error::{Result, ResultExt, message};
+use gix_error::{ErrorExt, Result, ResultExt, message};
 use gix_object::bstr::BString;
 use gix_reftable::{
     record::{LogRecord, LogValue},
@@ -117,4 +117,88 @@ pub(super) fn line_from_record(record: LogRecord) -> Option<Line> {
         },
         message,
     })
+}
+
+impl Store {
+    /// Return the names of all references that have a reflog, even an empty one, in the order of their names.
+    ///
+    /// See [`StoreRef::reflog_names()`](crate::StoreRef::reflog_names()) for which reflogs these are. The stacks are read
+    /// again to see what others wrote since.
+    pub(crate) fn reflog_names_inner(&self) -> Result<Vec<crate::FullName>> {
+        use super::stacks::{StackId, is_current_worktree_ref};
+        self.assure_backend_supported()?;
+        let is_linked = self.common_dir.is_some();
+        let mut names = std::collections::BTreeSet::new();
+        let mut add = |prefix: &[u8], local: BString| {
+            let mut name = BString::from(prefix);
+            name.extend_from_slice(&local);
+            if let Ok(name) = crate::FullName::try_from(name) {
+                names.insert(name);
+            }
+        };
+
+        for local in log_names(&self.stack_snapshot(&StackId::Main, true)?)? {
+            // Those private to a worktree are the main worktree's, which Git doesn't list from a linked worktree.
+            if !(is_linked && is_current_worktree_ref(&local)) {
+                add(b"", local);
+            }
+        }
+        if is_linked {
+            for local in log_names(&self.stack_snapshot(&StackId::Worktree, true)?)? {
+                add(b"", local);
+            }
+        } else {
+            let worktrees = self.common_dir().unwrap_or(&self.git_dir).join("worktrees");
+            let entries = match std::fs::read_dir(&worktrees) {
+                Ok(entries) => Some(entries),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                Err(err) => {
+                    return Err(err.and_raise(message("Could not list linked worktrees").with("path", worktrees)));
+                }
+            };
+            for entry in entries.into_iter().flatten() {
+                let entry = entry.or_raise(|| {
+                    message("Could not read an entry of the linked worktrees").with("path", worktrees.as_path())
+                })?;
+                if !entry.path().join("reftable").is_dir() {
+                    continue;
+                }
+                let id = gix_path::os_str_into_bstr(&entry.file_name())
+                    .map_err(|_| message("A linked worktree has a name that isn't valid UTF-8"))?
+                    .to_owned();
+                let snapshot = self.stack_snapshot(&StackId::Other(id.to_owned()), true)?;
+                let mut prefix = BString::from("worktrees/");
+                prefix.extend_from_slice(id.as_ref());
+                prefix.push(b'/');
+                for local in log_names(&snapshot)? {
+                    if is_current_worktree_ref(&local) {
+                        add(&prefix, local);
+                    }
+                }
+            }
+        }
+        Ok(names.into_iter().collect())
+    }
+}
+
+/// Return the names of the references in `tables` that have a log, which may be empty but for a marker, in their order.
+fn log_names(tables: &Tables) -> Result<Vec<BString>> {
+    use gix_reftable::record::Record;
+    let mut names: Vec<BString> = Vec::new();
+    let mut iter = tables
+        .merged()
+        .log_iter()
+        .or_raise(|| message("Could not read the reflogs"))?;
+    while let Some(record) = iter.next_record().or_raise(|| message("Could not read a reflog"))? {
+        if let Record::Log(LogRecord {
+            refname,
+            value: LogValue::Update { .. },
+            ..
+        }) = record
+            && names.last() != Some(&refname)
+        {
+            names.push(refname);
+        }
+    }
+    Ok(names)
 }

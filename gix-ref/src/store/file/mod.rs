@@ -177,6 +177,7 @@ pub mod transaction;
 pub mod packed;
 
 mod reflog_edit;
+mod reflog_names;
 mod unsupported;
 
 mod raw_ext;
