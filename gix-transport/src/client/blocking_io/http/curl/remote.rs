@@ -72,6 +72,9 @@ struct Handler {
     continuing_authentication_header: bool,
     /// Last non-success status reported to the caller, or `200` for a successful transfer.
     last_status: usize,
+    /// The failure of a `407` response that is being received, which curl retries with credentials if it has any, so it
+    /// is reported only if no other response follows, and neither its headers nor its body reach the consumer.
+    proxy_refusal: Option<Error>,
     /// Redirect policy configured for the current request sequence.
     follow: FollowRedirects,
     /// Per-request redirect behavior.
@@ -91,6 +94,7 @@ impl Handler {
         self.authentication.www_authenticate.clear();
         self.continuing_authentication_header = false;
         self.last_status = 0;
+        self.proxy_refusal = None;
         self.follow = FollowRedirects::default();
         self.redirect_action = RedirectAction::Stop;
     }
@@ -106,6 +110,24 @@ impl Handler {
                 },
                 err,
             ),
+        }
+    }
+
+    /// Send `failure` to the consumer, which waits for the headers first and for the body if these arrived already.
+    fn report(&mut self, failure: io::Error) {
+        match (self.send_header.take(), self.send_data.take()) {
+            (Some(header), mut data) => {
+                if let Err(TrySendError::Disconnected(failure) | TrySendError::Full(failure)) =
+                    header.channel.try_send(Err(failure))
+                    && let Some(body) = data.take()
+                {
+                    body.channel.try_send(failure).ok();
+                }
+            }
+            (None, Some(body)) => {
+                body.channel.try_send(Err(failure)).ok();
+            }
+            (None, None) => {}
         }
     }
 
@@ -297,6 +319,9 @@ fn normalize_url_path(path: &str) -> String {
 
 impl curl::easy::Handler for Handler {
     fn write(&mut self, data: &[u8]) -> std::result::Result<usize, curl::easy::WriteError> {
+        if self.proxy_refusal.is_some() {
+            return Ok(data.len());
+        }
         drop(self.send_header.take()); // signal header readers to stop trying
         match self.send_data.as_mut() {
             Some(writer) => writer.write_all(data).map(|_| data.len()).or_else(|err| {
@@ -324,6 +349,11 @@ impl curl::easy::Handler for Handler {
         }
         let header_block_is_done = matches!(data, b"\r\n" | b"\n");
         if header_block_is_done {
+            if self.proxy_refusal.is_some() {
+                self.checked_status = false;
+                self.current_status = None;
+                return true;
+            }
             if let Some(writer) = self.send_header.as_mut() {
                 if self.current_status == Some(401) {
                     writer
@@ -342,6 +372,9 @@ impl curl::easy::Handler for Handler {
             return true;
         }
         if self.checked_status {
+            if self.proxy_refusal.is_some() {
+                return true;
+            }
             self.publish_redirect_location(data);
             if self.current_status == Some(401) {
                 self.collect_authentication_header(data);
@@ -351,6 +384,7 @@ impl curl::easy::Handler for Handler {
         } else {
             self.checked_status = true;
             self.last_status = 200;
+            self.proxy_refusal = None;
             self.current_status = Handler::parse_status_inner(data).ok();
             self.authentication.www_authenticate.clear();
             self.continuing_authentication_header = false;
@@ -366,6 +400,10 @@ impl curl::easy::Handler for Handler {
             });
             if let Some((status, err)) = err {
                 self.last_status = status;
+                if status == 407 {
+                    self.proxy_refusal = Some(err);
+                    return true;
+                }
                 // A 401 needs its headers before the caller can ask a credential helper for an account.
                 if status != 401
                     && let Some(writer) = self.send_header.as_mut()
@@ -498,6 +536,12 @@ pub fn new() -> Worker {
 
             let mut proxy_auth_action = None;
             if let Some(proxy) = proxy {
+                // `curl` prefers the user in the URL over the credentials it gets below, and then has no password.
+                let proxy = if proxy_authenticate.is_some() {
+                    super::super::without_userinfo(&proxy)
+                } else {
+                    proxy
+                };
                 curl!(handle.proxy(&proxy));
                 let proxy_type = if proxy.starts_with("socks5h") {
                     curl::easy::ProxyType::Socks5Hostname
@@ -610,27 +654,14 @@ pub fn new() -> Worker {
 
             if let Err(err) = handle.perform() {
                 let handler = handle.get_mut();
-                let err = Err(handler.transfer_error(err));
+                let err = handler.transfer_error(err);
                 handler.reset();
 
                 if let Some((action, authenticate)) = proxy_auth_action {
                     authenticate.lock().expect("no panics in other threads")(action.erase()).ok();
                 }
                 handler.receive_body.take();
-                match (handler.send_header.take(), handler.send_data.take()) {
-                    (Some(header), mut data) => {
-                        if let Err(TrySendError::Disconnected(err) | TrySendError::Full(err)) =
-                            header.channel.try_send(err)
-                            && let Some(body) = data.take()
-                        {
-                            body.channel.try_send(err).ok();
-                        }
-                    }
-                    (None, Some(body)) => {
-                        body.channel.try_send(err).ok();
-                    }
-                    (None, None) => {}
-                }
+                handler.report(err);
             } else {
                 let actual_url = curl!(handle.effective_url()).expect("effective url is present and valid UTF-8");
                 if actual_url != effective_url {
@@ -646,6 +677,10 @@ pub fn new() -> Worker {
                         action.erase()
                     })
                     .or_raise(|| message("Could not update proxy credentials"))?;
+                }
+                // Only now, so that credentials are forgotten by the time the consumer sees the failure.
+                if let Some(refusal) = handler.proxy_refusal.take() {
+                    handler.report(io::Error::other(refusal));
                 }
                 handler.reset();
                 handler.receive_body.take();
