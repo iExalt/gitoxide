@@ -173,7 +173,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [ ] receive-side hooks and [`reference-transaction`](https://git-scm.com/docs/githooks#_reference_transaction)
     * **refs**
         * [ ] run transaction hooks and handle special repository states like quarantine
-        * [ ] support for different backends like `files` and `reftable`
+        * [x] support for different backends like `files` and `reftable`, with `reftable` a default feature of `gix`
     * **main or linked worktree**
         * [ ] add files with `.gitignore` handling
         * [ ] checkout with conversions like clean + smudge as in `.gitattributes`
@@ -1054,8 +1054,13 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
       * [x] find single ref by name
       * [x] iterate refs with optional prefix
       * [x] handle unsorted packed refs and those without a header
-  * [ ] **[reftable][reftable-spec]**,
+  * [x] **[reftable][reftable-spec]**, with the `reftable` feature, on top of `gix-reftable`
     * see [here for a Go/C implementation][reftable-impl]
+    * [x] read references, symbolic references, peeled values and reflogs, in the main repository and in linked worktrees
+    * [x] transactions with reflogs, tombstones and the `HEAD` reflog entry, in one table per stack and update index, like Git
+    * [x] expire and delete reflogs
+    * [ ] write peeled values of tags (they are written as one value, not a value and its peeled value)
+    * [ ] migrate between `files` and `reftable`
 * [x] API documentation
     * [ ] Some examples
 
@@ -1070,17 +1075,18 @@ Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility
     * [x] structurally invalid tables are errors that are classified as corruption, never panics or empty results
     * [ ] write and use the object index
 * [x] a merged view of several tables, with tombstones that can be hidden
-* [ ] read and write reftable stacks
+* [x] read and write reftable stacks
     * [x] read a stack from `tables.list`, reload it like Git does and share consistent snapshots of it
     * [x] fail closed on missing, damaged or foreign tables instead of reading them as empty
     * [x] add tables under the `tables.list` lock, with a view that is current once the lock is held, flushed as `core.fsync` asks, shared-repository permissions, and an outcome that says when it is uncertain whether the change was published
-* [ ] transactions and reflogs
+* [x] transactions and reflogs, in `gix-ref`
 * [x] compaction and table management
     * [x] merge tables following Git's geometric policy, or all of them, under the locks Git takes, finding the range again if others changed the stack meanwhile
     * [x] drop deletions only when nothing below the merged tables remains, and clean up tables nobody lists
     * [x] find a reference or its reflog without iterating everything
     * [ ] expire reflog entries while merging
-* [ ] backend selection and migration between `files` and `reftable`
+* [x] backend selection, with `files` as the default for new repositories unless asked otherwise, like Git
+* [ ] migration between `files` and `reftable`
 
 [reftable-spec]: https://github.com/eclipse/jgit/blob/master/Documentation/technical/reftable.md
 [reftable-impl]: https://github.com/google/reftable
