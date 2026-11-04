@@ -3,6 +3,7 @@ use gix_testtools::TestResult;
 mod capabilities;
 mod dir;
 mod file;
+mod fsync;
 mod read_dir;
 mod snapshot;
 mod stack;

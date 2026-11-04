@@ -74,7 +74,7 @@
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use std::path::PathBuf;
 
@@ -113,6 +113,9 @@ mod file;
 pub use file::clear_readonly_attribute;
 #[gix_macros::unstable(since = "2026-09-30")]
 pub use file::{FileOrSymlink, open_options_no_follow, open_read_only_no_follow};
+
+#[cfg(feature = "unstable")]
+pub mod fsync;
 
 #[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod snapshot;
