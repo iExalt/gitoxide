@@ -251,12 +251,16 @@ existing subscriptions is approved.
 
 | Thread | Scope | Depends on | Human | State |
 | --- | --- | --- | --- | --- |
-| 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | done: [assessment](push-architecture-assessment.md) delivered; owner decisions pending |
+| 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | done: [assessment](push-architecture-assessment.md) delivered; owner decisions recorded below |
 | 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | done |
 | 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks; Git 2.56 config-defined hooks, parallel jobs and per-hook stdin producers | None | None known | done |
+| 4. Ref-store abstraction and interim reftable refusal | Probe P12 first; refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while opening and object access keep working; `gix init` follows Git's ref-format precedence and refuses a requested reftable; then the staged ref-store abstraction (assessment 5.1, additive handle first) and its call-site migration; probe P11 | None | None known | ready |
+| 5. Durability plumbing and differential fault harness | Probes P1, P3, P5 and P7; `core.fsync` and `core.fsyncMethod` for objects, packs and refs, including the barrier flush; the files-store gaps in assessment 4.3; an uncertain-outcome class; a transaction observer; P1, P3 and P5 turned into differential tests against Git | None; rebases on thread 4 where both touch `gix-ref` | None known | ready |
+| 6. Reftable codecs and stack layer | Probes P6 and P4; adopt the upstream reftable codecs after a parity review, both hashes and version 2; a new stack layer following Git's lock and publication protocol, with reload, segment compaction, cleanup and flush; interoperability tests where Git reads fork-written tables and stacks and the fork reads Git's. Integration as a ref backend waits for thread 4 | None for the standalone crate | None known | ready |
 
-Later threads (reftable, durability, local backend, network, receiver, maintenance,
-cutover) wait for the owner to accept thread 1 and agree their scope.
+Later threads (reftable ref backend, local consumer backend, repository push and fetch,
+network, receiver, maintenance, cutover) follow the assessment's section 9 rows and
+sequencing; the overseer proposes each as its dependencies finish.
 
 ### Revision log
 
@@ -299,3 +303,12 @@ cutover) wait for the owner to accept thread 1 and agree their scope.
   - `mise run check` takes about 12 minutes when a change reaches `gix-pack`, as the whole workspace depends on it.
   - Parking lot: bounded reordering for a multi-threaded `write_pack()`, an atomic push that fails part-way
     through finishing on the files backend, and the failure strings of `proc-receive` hooks.
+- 2026-11-04: the owner decided the assessment's section 10 items. They accepted the
+  storage, default-format and conversion recommendations ("Accept all three"), and kept
+  the full scope as sequenced ("Full scope, as sequenced"). They authorized probes P1–P5
+  and P6, P7, P11 and P12 within the resource limits; P9 and P10 stay deferred. On the
+  reftable defect they asked: "Should we land support now? If not, we can refuse ref
+  ops." Reftable support is priced at 6.5–10 sessions and needs the ref-store abstraction
+  first, so the interim refusal lands now in thread 4. The overseer also started the
+  standalone reftable codecs and stack layer (thread 6) now, rather than after the base
+  work, so that support can land sooner.
