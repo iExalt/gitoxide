@@ -1201,3 +1201,90 @@ mod worktree {
         Ok(())
     }
 }
+
+/// A process that runs as part of another Git command, like a hook, inherits variables that redirect the repository
+/// and inject configuration. Ignoring them leaves the repository at the path with its own configuration, while other
+/// parts of the environment, like the identity, still apply.
+#[test]
+#[serial_test::serial]
+fn the_environment_that_redirects_or_injects_configuration_can_be_ignored() -> TestResult {
+    let _environment = gix_testtools::isolate_git_environment()?;
+    let _environment = _environment
+        .set("GIT_INDEX_FILE", "redirected-index")
+        .set("GIT_NAMESPACE", "redirected")
+        .set("GIT_CONFIG_COUNT", "1")
+        .set("GIT_CONFIG_KEY_0", "injected.key")
+        .set("GIT_CONFIG_VALUE_0", "from the environment")
+        .set("GIT_AUTHOR_NAME", "environment author");
+    let (repo, _keep) = crate::basic_rw_repo()?;
+    let options = || {
+        let mut options = gix::open::Options::isolated();
+        options.permissions.env.git_prefix = gix_sec::Permission::Allow;
+        options.permissions.env.identity = gix_sec::Permission::Allow;
+        options.permissions.config.env = true;
+        options
+    };
+
+    let respecting = gix::open_opts(repo.git_dir(), options())?;
+    assert_eq!(
+        respecting
+            .config_snapshot()
+            .string("injected.key")
+            .map(|value| value.to_string()),
+        Some("from the environment".to_string()),
+        "the environment injects configuration by default"
+    );
+    assert!(
+        respecting.index_path().ends_with("redirected-index"),
+        "and redirects the index"
+    );
+
+    assert_eq!(
+        respecting.namespace().map(|ns| ns.as_bstr().to_string()),
+        Some("refs/namespaces/redirected/".to_string()),
+        "and moves references into the namespace"
+    );
+    assert_eq!(
+        gix::config(Some(repo.git_dir()), &options())?
+            .string("injected.key")
+            .map(|v| v.to_string()),
+        Some("from the environment".to_string()),
+        "configuration without a repository is injected as well"
+    );
+
+    let ignoring = gix::open_opts(repo.git_dir(), options().ignore_repository_environment(true))?;
+    assert_eq!(ignoring.namespace(), None, "the namespace is ignored");
+    assert_eq!(
+        gix::config(Some(repo.git_dir()), &options().ignore_repository_environment(true))?
+            .string("injected.key")
+            .map(|v| v.to_string()),
+        None,
+        "so is the injected configuration of the configuration that is loaded without a repository"
+    );
+    let reloaded = {
+        let mut ignoring = ignoring.clone();
+        ignoring.reload()?;
+        ignoring
+    };
+    assert_eq!(
+        reloaded.config_snapshot().string("injected.key").map(|v| v.to_string()),
+        None,
+        "reloading keeps ignoring it"
+    );
+    assert_eq!(
+        ignoring.config_snapshot().string("injected.key").map(|v| v.to_string()),
+        None,
+        "injected configuration is ignored"
+    );
+    assert_eq!(
+        ignoring.index_path(),
+        repo.git_dir().join("index"),
+        "the index stays where the repository has it"
+    );
+    assert_eq!(
+        ignoring.author().transpose()?.map(|author| author.name.to_string()),
+        Some("environment author".into()),
+        "the identity from the environment still applies"
+    );
+    Ok(())
+}

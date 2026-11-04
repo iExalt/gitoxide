@@ -424,12 +424,12 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
         options.git_installation_config_path.as_deref(),
         options.system_config_path.as_deref(),
         environment,
-        options.permissions.config,
+        options.config_permissions(),
         options.lossy_config,
         options.lenient_config,
         &options.api_config_overrides,
         &options.cli_config_overrides,
-        options.use_repository_local_environment,
+        options.uses_repository_local_environment(),
     )
 }
 
