@@ -86,7 +86,8 @@ pub(crate) fn reflog_or_default(
     config_reflog.unwrap_or(if has_worktree {
         gix_ref::store::WriteReflog::Normal
     } else {
-        gix_ref::store::WriteReflog::Disable
+        // Like Git, bare repositories create no reflogs, but keep appending to the ones that exist.
+        gix_ref::store::WriteReflog::Existing
     })
 }
 

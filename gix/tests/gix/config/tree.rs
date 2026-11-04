@@ -1044,7 +1044,8 @@ mod core {
         assert!(Core::LOG_ALL_REF_UPDATES.validate("true".into()).is_ok());
         assert_eq!(
             Core::LOG_ALL_REF_UPDATES.try_into_ref_updates(Ok(Some(false)))?,
-            Some(gix_ref::store::WriteReflog::Disable)
+            Some(gix_ref::store::WriteReflog::Existing),
+            "like in Git, `false` still appends to the reflogs that exist, which `Disable` wouldn't"
         );
         assert!(Core::LOG_ALL_REF_UPDATES.validate("0".into()).is_ok());
         let boolean = |value| gix_config::Boolean::try_from(value).map(|b| Some(b.0));

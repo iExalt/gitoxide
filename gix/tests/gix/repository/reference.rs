@@ -168,6 +168,79 @@ fn failed_edits_keep_the_marker_that_tells_what_they_did_to_the_repository() -> 
     Ok(())
 }
 
+/// Git neither creates reflogs in bare repositories nor with `core.logAllRefUpdates=false`, but appends to those that exist.
+#[test]
+fn reflogs_are_only_appended_to_when_they_are_not_autocreated() -> TestResult {
+    use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
+    let committer = gix::actor::SignatureRef {
+        name: "committer".into(),
+        email: "committer@example.com".into(),
+        time: "0 +0000",
+    };
+    let update = |repo: &gix::Repository, name: &str| -> TestResult {
+        repo.edit_references_as(
+            [RefEdit {
+                change: Change::Update {
+                    log: LogChange::default(),
+                    expected: PreviousValue::Any,
+                    new: gix::refs::Target::Object(repo.empty_tree().id),
+                },
+                name: name.try_into()?,
+                deref: false,
+            }],
+            Some(committer),
+        )?;
+        Ok(())
+    };
+    let log_lines = |repo: &gix::Repository, name: &str| -> std::io::Result<Option<usize>> {
+        match std::fs::read(repo.git_dir().join("logs").join(name)) {
+            Ok(content) => Ok(Some(content.iter().filter(|b| **b == b'\n').count())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    };
+    let prepare_existing_log = |repo: &gix::Repository, name: &str| -> TestResult {
+        let path = repo.git_dir().join("logs").join(name);
+        std::fs::create_dir_all(path.parent().expect("a log is never at the root"))?;
+        std::fs::write(path, "")?;
+        Ok(())
+    };
+
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let bare = crate::util::init_repo_isolated(tmp.path(), gix::create::Kind::Bare)?.to_thread_local();
+    prepare_existing_log(&bare, "refs/heads/existing")?;
+    update(&bare, "refs/heads/existing")?;
+    update(&bare, "refs/heads/new")?;
+    assert_eq!(
+        log_lines(&bare, "refs/heads/existing")?,
+        Some(1),
+        "a bare repository appends to a reflog that exists"
+    );
+    assert_eq!(
+        log_lines(&bare, "refs/heads/new")?,
+        None,
+        "bare repositories create no reflogs by default"
+    );
+
+    let (mut repo, _tmp) = crate::basic_rw_repo()?;
+    repo.config_snapshot_mut()
+        .set_value(&gix::config::tree::Core::LOG_ALL_REF_UPDATES, "false")?;
+    prepare_existing_log(&repo, "refs/heads/existing")?;
+    update(&repo, "refs/heads/existing")?;
+    update(&repo, "refs/heads/new")?;
+    assert_eq!(
+        log_lines(&repo, "refs/heads/existing")?,
+        Some(1),
+        "`core.logAllRefUpdates=false` still appends to existing reflogs"
+    );
+    assert_eq!(
+        log_lines(&repo, "refs/heads/new")?,
+        None,
+        "`core.logAllRefUpdates=false` creates no reflogs"
+    );
+    Ok(())
+}
+
 mod iter_references {
     use crate::util::hex_to_id;
     use gix_testtools::{Result, TestResult};
