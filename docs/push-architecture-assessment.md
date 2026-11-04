@@ -1,6 +1,6 @@
 # Push support: architecture assessment
 
-Status: in progress; awaiting the owner's decisions (section 10). This is the bounded, read-only assessment that
+Status: complete, awaiting the owner's decisions (section 10). This is the bounded, read-only assessment that
 [the push support plan](push-support-plan.md) requires before storage, receiver and
 local-backend implementation. It makes no implementation decision. It builds nothing,
 runs no probe and measures nothing; every "not run" and "source observation" label below
@@ -17,6 +17,34 @@ launch to the last review handoff (01:43 to 02:00 UTC on 2026-11-04), including 
 reviewer rounds, not independently verified; read-only, no builds. The assessment ends
 with a stop and a report to the owner, who decides what follows; nothing in this document
 authorizes a build, probe, conversion or release.
+
+## Summary
+
+- **Receiving is larger than a hook-free receiver, and than the earlier estimates covered.** At Git 2.56.0, receive-pack involves
+  config-defined multi-hook execution, a quarantine with an unconditional flush barrier,
+  four `reference-transaction` states whose call sequence differs by backend, batched
+  non-atomic updates whose failure handling can report applied deletions as failed, and
+  `updateInstead` updating the worktree before the ref commit (section 2).
+- **Git's own ref backends are not atomic or durable by default.** Files-backend multi-ref
+  commits are per-ref renames with partial states (including a reflog entry for a move that
+  never happened); reftable is atomic per stack but not across worktree stacks, can report a
+  published transaction as failed, and neither backend flushes refs by default (section 3).
+- **The fork has the files transaction's shape but not its durability.** It has no flush
+  anywhere, no hooks, no quarantine, no server-side protocol and no reftable; and today it
+  can open a reftable repository with the files store, an unsafe-write hazard to close
+  first (section 4).
+- **An upstream reftable port exists but covers only the format codecs.** Its stack layer
+  has no lock, no stale-view check, no flush and a compact-all compactor, so the
+  coordination layer must be built new (section 4.2).
+- **Recommendations** (section 10): an enum store reached through an additive handle,
+  reftable from adopted codecs with a new Git-protocol stack, Git's default format with
+  explicit refusal of unsupported requests, no automatic conversion, and a two-tier probe
+  authorization.
+- **Estimate** (section 9): roughly 17 to 29 sessions for the Git-free client and local
+  backend (the least reliable total), plus 6.5 to 10 for reftable and 12.5 to 18.5 for full
+  receiver parity, each priced separately; hours per implementation session are unmeasured
+  and should be calibrated from the client-protocol and hook-runner work the plan starts
+  alongside this assessment.
 
 ## Method and labels
 
@@ -716,3 +744,215 @@ for manual recovery (`refs.c:3344-3470`, `Documentation/git-refs.adoc:40-48`).
   repeating single-ref reads; reflog iteration does not reload, so a held reflog
   iterator is not a fresh view.
 
+## 7. Discriminating probe proposals
+
+None of these has been run. Each is proposed with its setup, build, execution and analysis
+cost, in agent effort (a fraction of one worker session) and machine time. The resource
+limits in the plan's "Execution threads" section apply (`cargo -j4`, one thorough check at
+a time, no spending beyond existing subscriptions). P1 to P5 are temporary investigative
+probes, not retained tests: plain shell scripts in disposable directories with an isolated
+Git environment (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `HOME` and
+`XDG_CONFIG_HOME` pointed into the scratch directory, no inherited `GIT_DIR` or similar
+variables). They need no cargo build, only a Git 2.56 binary on the host (the CI runners ship
+it; the host's version has not been checked). Their outputs become retained tests later,
+at which point `AGENTS.md` requires `gix-testtools` fixtures and its isolated Git helpers.
+
+| ID | Question it settles | Setup | Build | Execution | Analysis | Authority needed |
+| --- | --- | --- | --- | --- | --- | --- |
+| P1 | Which `reference-transaction` events fire, in which order, per backend, for create, update, delete, lock conflict, stale old value and a veto at `preparing`/`prepared`, including inside receive-pack (2.5, 3.5 unchecked cells) | 0.25 session: a scripted fixture with a logging hook, both backends | None | Seconds | 0.25 session: a golden event table | Run Git in disposable fixtures |
+| P2 | Golden receive-pack transcripts: advertisement, status, ordering, quarantine environment, hook arguments and stdin, for the hook-free and hooked cases, atomic and not, delete-only, stale lease, hidden refs, namespaces | 0.5–1 session: fixtures that drive `git receive-pack` over pipes and record packet lines and hook captures | None | Minutes | 0.5 session | Same |
+| P3 | Files backend failure classes (3.2, 3.5): partial state when a ref rename fails after an earlier rename, reflog entry without the move, deletion interrupted between `packed-refs` and loose removal | 0.5 session: unprivileged triggers, relabeled by the phase they should hit and unvalidated until run: a directory at the **reflog** path of the second ref should fail in the commit phase after the first rename (`refs/files-backend.c:3355-3381`), giving the "first applied, rest not" state; a non-empty directory at a ref path most likely fails earlier, in prepare's availability check, giving no partial state; a pre-held `*.lock` file tests lock conflict in prepare, not partial state | None | Seconds | 0.25 session | Run Git in disposable fixtures |
+| P4 | Reftable failure classes (3.3, 3.5): multi-stack partial commit, listed table missing with unchanged and changed `tables.list`, lock held beyond 100 ms, corrupt `tables.list` | 0.5 session: linked-worktree fixture, permission changes on the worktree stack (ineffective when run as root, so the probe must not run as root), hand-edited list | None | Seconds | 0.25 session | Same |
+| P5 | Flush ordering: which `fsync` calls Git issues, in which order, for `update-ref` and receive-pack under `core.fsync` and `core.fsyncMethod` settings | 0.25 session: `strace -f` on the Linux host so index-pack, unpack-objects and hook children are followed (not available on macOS; the host's `strace` and ptrace policy are unchecked) | None | Seconds | 0.5 session: ordering table to diff the fork against later | Run Git under `strace` in disposable fixtures |
+| P6 | Are the upstream reftable codecs byte-compatible and sound? Build the crate at `94793bb6f` in a scratch worktree, run its tests, have Git read tables it writes and it read tables Git writes, SHA-1 and SHA-256 | 0.25 session | A cold build of one crate and its dependencies: minutes at `-j4` (not measured) | Minutes | 0.5–0.75 session | Cargo build on the shared host; resolves R1 versus R2 and the reftable codec price |
+| P7 | Fork files-store failure classes under the P3 triggers, and the reflog-deletion, missing-committer and `~pid.lock` deltas in 4.3 | 0.5 session | `gix-ref` tests: incremental builds | Seconds | 0.25 session | Cargo build on the shared host |
+| P8 | Mixed Git and fork reftable writers racing, including compaction versus writer | Needs the new stack layer | Needs the implementation | Minutes | 0.5 session | Not proposed now; first gate of the reftable thread |
+| P9 | Power-loss flush correctness | A device-level fault-injection environment (a privileged virtual machine) | n/a | n/a | n/a | Not proposed: likely needs spending or a disruptive environment. Without it, power-loss claims stay "unproven" and P5 supplies ordering evidence only |
+| P10 | Consumer warm routine check (under 60 s) and cold, edited-core, duplication, size and latency measurements | Needs the consumer's repository, which the fork cannot read | Consumer builds | Hours of machine time | 0.5 session | Owner or consumer-side action; measured under comparable load |
+| P12 | The unsafe-write hazard (4.1): open a reftable clone with `gix` and attempt `refs/heads/x` and `refs/tags/x` updates; does anything land as a loose file Git never reads? | 0.1 session: reuse the existing reftable fixture script (`gix/tests/fixtures/make_reftable_repo.sh`) | One incremental `gix` test build at `-j4` | Seconds | 0.1 session | Cargo build on the shared host; cheapest first cargo probe |
+| P11 | Fork-side cost of the candidate features: cold build, release size and duplication for the plain, `sha256` and each HTTP transport feature set | 0.25 session | Several cold builds at `-j4`; `AGENTS.md` documents about 2.5, 1.5 and 0.8 minutes for the default, lean and small release variants (documented, not measured here) | Minutes each | 0.5 session | Cargo builds on the shared host |
+
+Recommended order and tiers: authorize P1 to P5 first (Git only, disposable fixtures,
+about 2 to 3 sessions of effort in total, no cargo); then P6, P7 and P11 (cargo builds,
+about 1.5 to 2 sessions); keep P8 as the entry gate of the reftable thread; P10 needs the
+owner; P9 is not recommended.
+
+## 8. Initial dependency and cost baseline (source observations)
+
+Established so far, with the measurement that is still missing named beside each.
+
+| Item | Observation | Not measured |
+| --- | --- | --- |
+| Fork routine and thorough budgets | The plan's "Execution threads" section records a 120 s routine-check budget against a warm 94–109 s baseline and a 12 minute thorough-check budget against 530 s; `FORK.md:224` separately targets five minutes with warm caches for its planner-selected run | Whether new code keeps within them; to be tracked per thread |
+| Consumer budget | The plan requires the consumer's warm routine check to stay under 60 s; its historical value of about 45 s has not been refreshed | Everything, until P10 |
+| Release variants | `AGENTS.md` documents about 2.5, 1.5 and 0.8 minutes for the default, lean and small release builds | Current values on the shared host |
+| Reftable dependency surface | A reftable crate adds a workspace crate (the upstream branch's is about 3.4k lines) whose third-party dependencies `crc32fast`, `flate2` and `thiserror` already appear in `Cargo.lock`; no new third-party crate is implied | Compatible versions; compile time of the new first-party code |
+| Receiver dependency surface | Pack writing, object access, connectivity and hooks exist in the tree; the new code is first-party (server protocol, quarantine, policy, strict fsck). Signed pushes and hooks run external programs the consumer already provides | Compile-time and binary-size impact |
+| Network features | `blocking-network-client` and several `blocking-http-transport-*` variants already exist in `gix/Cargo.toml` (`:220-261`); the HTTPS choice, not the receiver, decides the third-party cost | Per-variant duplication, size and latency |
+| Hash support | The `sha1` and `sha256` features exist (`gix/Cargo.toml:102-110`) | Cost of enabling both for the consumer |
+| First-party growth | Planning sizes below imply roughly 10–14k new lines for reftable and 10–15k for the receiver, including tests (inferred from Git's own sizes, section 9) | Compile time per added kloc |
+
+The early baseline does not close the plan's final cost gate; the actual receiver,
+storage, reftable and HTTPS features are re-measured before cutover.
+
+## 9. Revised implementation estimate
+
+### 9.1 Units and basis
+
+- A **session** is one worker session of two to four reviewer-checked chunks, with one
+  persistent reviewer agent, as this assessment was run. A **review round** is one
+  author-to-reviewer handoff with its findings fixed; this assessment needed two per
+  chunk. Both are estimates, not measurements, for implementation work.
+- **Wall-clock, calibrated once.** This assessment was budgeted at 5 to 8 hours and ran about
+  17 minutes by the sandbox clock (01:43 to 02:00 UTC on 2026-11-04, from the recorded
+  worker launch time and the commit timestamps), including two review rounds per chunk;
+  not independently verified. It was read-only and built nothing, so that number
+  calibrates reading and writing work only. Implementation sessions add builds, the
+  repository's checks (the plan's "Execution threads" section records a 120 s routine
+  and a 12 minute thorough budget) and real review loops, none observed yet. The planning
+  assumption is therefore 0.5 to 2 hours of wall-clock per implementation session,
+  unmeasured. The client-protocol and hook-runner work that the plan starts alongside
+  this assessment supplies the first observed implementation figures at no extra cost.
+- Sizes come from Git's own code, which the Rust work must match behavior for, counted with
+  `wc -l` at the pin: the reftable library (7,113 C lines and 2,123 header lines), its unit
+  tests (9 files, 4,832 lines), the reftable ref backend (2,891 lines), the files backend
+  (4,114), `receive-pack` (2,636), `fsck.c` and `fsck.h` (1,488 and 292 lines, with 76
+  message ids), Git's maintenance code (`builtin/gc.c`, `builtin/repack.c`, `repack*.c`,
+  `builtin/prune.c` and `reachable.c`: 6,622 lines), and 10,828 lines of oracle shell tests
+  (`t5410`, `t5411` and `t5411/*`, `t5534`, `t5546`, `t5516`, `t5504`, `t5571`, `t1400`,
+  `t1416`, `t0610`, `t0613`, `t0614`; a representative set, not a complete one). The
+  assumption is 1,000 to 1,500 reviewed lines of Rust including tests per session. That
+  assumption is the largest single driver and is not measured.
+- Estimates assume the plan's structure: up to three workers on disjoint crates, one
+  thorough check at a time.
+
+### 9.2 Base: Git-free client and local backend (excluding reftable and full receiver)
+
+Rows marked "Low, placeholder" have no source audit and no size basis beyond the number of
+operation families in the consumer inventory; they are order-of-magnitude placeholders, so
+the base total is the least reliable total here.
+
+| Package | Sessions | Review rounds | Confidence |
+| --- | --- | --- | --- |
+| Client protocol and bounded packs (started alongside this assessment) | 1–2 | 3–6 | Medium |
+| Hook runner including config-defined hooks (started alongside this assessment) | 1–1.5 | 2–4 | Medium |
+| Durability plumbing: `core.fsync`, `core.fsyncMethod`, barrier flush, files-store gaps (4.3), uncertain-outcome class, transaction observer | 2–3 | 5–8 | Medium |
+| Ref-store abstraction (5.1, staged) and call-site migration, including the interim refusal of non-`files` repositories (decision 7) | 1–2.5 | 3–6 | Medium |
+| Differential durability and fault harness against Git (P3–P5 as tests) | 1–2 | 3–5 | Medium |
+| Local consumer backend: discovery, configuration, init, readiness, objects, refs, `reference-transaction` | 3–4 | 8–12 | Low, placeholder |
+| Repository push API, leases, fetch pruning, reconciliation | 2–3 | 5–8 | Low, placeholder |
+| SSH, HTTPS, authentication, direct credential helpers, client hooks, low-speed policy | 2–3 | 5–8 | Low, placeholder |
+| Native maintenance (Git's comparable code is 6.6k lines, about 4.4 to 6.6 sessions at the stated throughput before tests; reduced because scheduling and cron code is not needed; plus grace, keep, in-flight-root and interrupted-reclamation safety) | 3–6 | 7–12 | Low |
+| Cutover, packaging, verification | 1–2 | 3–5 | Low, placeholder |
+| **Base total** | **17–29** | **44–74** | |
+
+### 9.3 Reftable (priced separately)
+
+| Package | Sessions | Review rounds | Confidence |
+| --- | --- | --- | --- |
+| Codec parity review and adoption, both hashes, version 2 | 1–1.5 | 3–4 | Medium (P6 narrows it) |
+| Stack layer: lock protocol, reload, publication, segment compaction, cleanup, flush | 2–3 | 6–9 | Low |
+| Ref backend: transactions with logs, symrefs, `HEAD` reflog, tombstones, worktree stacks, iteration, reflog read and expiry | 2–3 | 6–9 | Low |
+| Interoperability and differential tests: Git reads fork, fork reads Git, mixed writers, corruption, both hashes | 1.5–2.5 | 4–7 | Low |
+| **Reftable total** | **6.5–10** | **19–29** | |
+| Optional: explicit migration tool (6.2) | 0.5–1 | 2–3 | Medium |
+
+Derivation: about 10 to 14k new lines of Rust including tests (the Rust equivalent of Git's library, backend and the tests that matter), minus about 3.4k lines adopted from the upstream codecs under R1, at 1.0 to 1.5k reviewed lines per session gives roughly 4.4 to 10.6 sessions of writing, and the 6.5 to 10 priced here puts the adoption review and Git interoperability testing on top of the low end and trims the high end where codec reuse also removes test-porting. The row sizes are judgment, not measurement.
+
+If the codec parity review (P6) fails and the codecs are rewritten (R2), add 1.5 to 2.5
+sessions. If upstream lands a usable store first (R3), the first and second rows shrink;
+this is not planned for.
+
+### 9.4 Full receiver parity (priced separately)
+
+| Package | Sessions | Review rounds | Confidence |
+| --- | --- | --- | --- |
+| Server-side protocol: advertisement, command, certificate and option parsing, report v1/v2, sideband and keepalive | 1–1.5 | 3–4 | Medium |
+| Object ingestion: quarantine, unpack-or-keep, thin-pack fixing, migration with the barrier flush, strict fsck (76 message ids, skip list), size limits | 2.5–3.5 | 7–10 | Low |
+| Policy and ref planning: deny rules, hidden refs, namespaces, aliased updates, atomic and batched execution with Git's rejection semantics, shallow updates, certificates through an external signer, reflogs | 2–3 | 6–8 | Low |
+| Hook integration: `pre-receive`, `update`, `post-*`, `proc-receive`, `reference-transaction` states | 1.5–2 | 4–6 | Medium |
+| `updateInstead` and `push-to-checkout` without Git subprocesses (see decision 4) | 1.5–2.5 | 4–7 | Low |
+| Native local transport: listing, fetch and receive in process | 2–3 | 5–8 | Low |
+| Receiver differential matrix against Git (selected oracle tests, golden transcripts from P2) | 2–3 | 5–8 | Medium |
+| **Receiver total** | **12.5–18.5** | **34–51** | |
+
+Derivation: about 10 to 15k new lines including tests at 1.0 to 1.5k per session is 6.7 to 15 sessions; the 12.5 to 18.5 priced here adds integration with the hook runner, the ref store and the transport, and the differential matrix against Git, which are the larger part of receiver risk. The row sizes are judgment, not measurement.
+
+Hook-free bare-repository receiving alone (server protocol, ingestion, policy subset,
+native local transport, differential matrix) is about 8 to 12 sessions; the plan states
+that this subset does not satisfy the chosen endpoint, so it is a sequencing step and not
+a scope cut.
+
+### 9.5 Totals and sequencing
+
+| Scope | Sessions | Review rounds |
+| --- | --- | --- |
+| Base | 17–29 | 44–74 |
+| Base plus reftable | 23.5–39 | 63–103 |
+| Base plus full receiver | 29.5–47.5 | 78–125 |
+| Everything | 36–57.5 | 97–154 |
+
+At the planning assumption of 0.5 to 2 hours per implementation session (9.1), the totals
+are roughly 9 to 58 agent-hours for the base, 3 to 20 for reftable and 6 to 37 for the
+receiver, 18 to 115 for everything in series. With up to three lanes on disjoint crates the
+elapsed span is roughly a half to a third of that, before the owner's decision gates, review
+stalls and rework, which the figures do not include. These hours are derived from an
+unmeasured assumption and should be replaced by the observed figures from the running
+threads. The earlier human-effort estimates (8 to 15 engineer-weeks for a smaller scope,
+3 to 6 engineer-weeks for blocking client push) are superseded and are not converted.
+
+Sequencing implied by the dependencies: durability, abstraction and local backend first;
+then reftable and the receiver on separate lanes once the abstraction lands (both need
+it); maintenance after both; cutover last. The reftable lane's first gate is P6 and P8.
+
+### 9.6 Remaining uncertainty and the smallest next investigation
+
+| Uncertainty | Smallest next investigation | Cost |
+| --- | --- | --- |
+| Sessions per kloc and hours per implementation session | Read the elapsed times and sizes of the client-protocol and hook-runner work when it ends | None |
+| Reftable codec quality and R1 versus R2 | P6 | About 1 session, one small cold build |
+| Files and reftable failure classes in Git | P3 and P4 | About 1 session, no build |
+| `reference-transaction` call sequences per backend | P1 | About 0.5 session |
+| Whether any consumer receiver is non-bare or uses `updateInstead` | Ask the consumer; no investigation | None |
+| Real consumer cost impact | P10 | Owner action |
+
+## 10. Decisions for the owner
+
+| # | Decision | Recommendation | Why |
+| --- | --- | --- | --- |
+| 1 | Storage selection | An enum store reached through an additive handle first (5.1 A staged through C), reftable from adopted codecs with a new stack layer (5.2 R1), Git's lock and publication protocols for both backends | Fits the existing scaffolding, keeps the first step non-breaking, and puts the new effort where the interoperability risk is |
+| 2 | Default ref format | Follow Git's precedence (`--ref-format`, `GIT_DEFAULT_REF_FORMAT`, `init.defaultRefFormat`, `feature.experimental`, default `files` at the pin); until reftable exists, refuse an explicit or configured reftable request rather than fall back to `files`; reftable opt-in per repository until the differential matrix passes. Separately, **now**: make the fork refuse writes to any repository whose `extensions.refStorage` is not `files` (4.1), a small independent fix | Matches the compatibility target; Git itself makes Gitoxide support a prerequisite for its own reftable default |
+| 3 | Conversion policy | Never convert by default; offer an explicit, consumer-invoked migration only after reftable passes its differential tests, refusing worktrees as Git does; no automatic conversion | The plan forbids conversion without an authorized policy; Git's own conversion is non-atomic and assumes no concurrent writers |
+| 4 | Revised scope and estimate | Accept the ranges in section 9 as planning inputs, not commitments, and decide: (a) `updateInstead`/non-bare receiving native versus an explicit refusal (recommend asking the consumer first; if every receiver is bare, refuse explicitly and price it later); (b) reproduce Git's backend-dependent `reference-transaction` call sequences versus a named divergence (recommend reproducing only if the consumer's hooks depend on it); (c) sequencing: base first, then reftable and receiver on separate lanes | These are the scope items that move the estimate most |
+| 5 | Experiment authority | Authorize P1 to P5 now (Git only, disposable directories, no cargo); authorize P12, P6, P7 and P11 as a second tier within the plan's resource limits; keep P8 as a thread gate; take P10 as an owner or consumer action; do not authorize P9 | The first tier answers most open Git-behavior cells for no build cost; P9 likely needs spending or disruption |
+| 6 | Upstream coordination | None proposed; reading the upstream branch is enough for now, and no posting or contact is authorized | The plan makes upstream acceptance a non-dependency; recheck upstream status before the reftable thread starts |
+| 7 | Reftable repositories opened by the fork today (4.1) | Refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while leaving the open and object access working; and make `gix init` refuse a requested reftable format instead of creating `files`. Options: (a) refuse the open, which is safest but also blocks object-only use that works today and conflicts with the plan's readiness requirement to "support mapped reftable clones" (`docs/push-support-plan.md`, consumer operation inventory); (b) refuse writes only, which prevents a loose-file write Git never sees but still lets reference reads return "missing" for references that exist; (c) refuse all reference operations, recommended, an interim state that meets the mapped-reftable-clone requirement only once the reftable store lands; (d) warn only, which leaves both hazards. Effort: about 0.5 to 0.75 session and 2 to 3 review rounds (a guard set at open from the configuration, the init refusal, tests on the existing reftable fixtures; probe P12 confirms the write case first). Upstream `main` has the same behavior, so this is not fork-specific and could be offered upstream, which is not authorized | The reads-return-missing case is silent wrong data, and the write case is probably repository corruption as seen by Git; both exist now, independent of this plan |
+
+## 11. Evidence limits
+
+- Every statement about Git is a source or documentation reading at tag
+  `v2.56.0` (`a018953688f1b10bddf91bff8747068f5f4746a4`); none was exercised against a
+  running Git. Every statement about the fork is a source reading at `b592770fc`. The only
+  commands run were `rg`, `wc`, `git show`, `git log`, `git merge-base` and `date`, all
+  read-only, and `git clone --depth 1` of the Git tag into an ignored scratch directory.
+- The receiving matrix is a closed enumeration of the code paths and keys read, derived
+  by reading; behavioral proof is absent for every row. Internals of `fsck` message
+  handling, shallow-update computation, signature verification and `unpack-objects`
+  flushing inside the quarantine are named but not traced.
+- The estimates rest on size analogies and an unmeasured throughput assumption; hours
+  per implementation session are unmeasured (9.1). The base rows marked placeholder were
+  not audited in source. Credentials, SSH, HTTP low-speed handling, repository discovery,
+  configuration persistence and the consumer's readiness and ancestry operations were
+  not audited at all; they appear only as estimate rows.
+- Inferred hazards (the reftable write case, the P3 triggers, linked-worktree `HEAD`
+  reflogs) were not run, and whether the shared host has Git 2.56 or `strace` was not
+  checked. Downstream consumers of the public `gix` fields were not read.
+- The unmerged upstream branch was inspected only at the commit named in 4.2; its status
+  can change, and a newer upstream state was not examined.
+- Power-loss behavior is unproven for both backends; only ordering evidence (P5) is
+  proposed.
+
+## 12. Stop
+
+This is the end of the assessment. It selects nothing, builds nothing and authorizes
+nothing. The next step is the owner's decision on section 10.
