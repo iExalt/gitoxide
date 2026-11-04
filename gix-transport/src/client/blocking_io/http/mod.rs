@@ -219,6 +219,8 @@ pub struct Transport<H: Http> {
     http: H,
     service: Option<Service>,
     line_provider: Option<StreamingPeekableIter<H::ResponseBody>>,
+    /// The advertisement of `git-receive-pack`, which is read in full to free the connection for the probe.
+    buffered_advertisement: Option<StreamingPeekableIter<std::io::Cursor<Vec<u8>>>>,
     identity: Option<gix_sec::identity::Account>,
     trace: bool,
 }
@@ -244,6 +246,7 @@ impl<H: Http> Transport<H> {
             service: None,
             http,
             line_provider: None,
+            buffered_advertisement: None,
             identity,
             trace,
         }
@@ -366,6 +369,53 @@ impl<H: Http> client::TransportWithoutIO for Transport<H> {
     }
 }
 
+impl<H: Http> Transport<H> {
+    /// Find out if the server lets us push, with the request that `git` sends for the same purpose when its `POST` is too large to buffer:
+    /// a `POST` of just a flush packet to `git-receive-pack`, which servers answer without doing anything.
+    ///
+    /// Servers that make reading public and writing private tend to challenge only the `POST`, and `info/refs` is
+    /// what comes first, so without this a push would learn that it needs credentials only after
+    /// it has started to send its pack, at which point it can't try again with credentials.
+    /// A `401` is reported like that of `info/refs`, so credentials are obtained and the handshake is tried again with them.
+    /// Credentials the server accepts for reading but not for writing are rejected here, instead of being remembered.
+    ///
+    /// Like `git`, this happens after `info/refs`, and so with the credentials that it needed, and at the location that it was redirected to.
+    fn probe_receive_pack_access(&mut self) -> std::result::Result<(), client::Error> {
+        use std::io::Write;
+        let url = append_url(&self.url, Service::ReceivePack.as_str());
+        let mut headers = vec![
+            Cow::Borrowed(self.user_agent_header),
+            Cow::Borrowed("Content-Type: application/x-git-receive-pack-request"),
+            Cow::Borrowed("Accept: application/x-git-receive-pack-result"),
+        ];
+        self.add_basic_auth_if_present(&mut headers)?;
+        let PostResponse {
+            mut post_body,
+            mut headers,
+            body,
+        } = self
+            .http
+            .post(
+                &url,
+                &self.url,
+                headers.iter(),
+                PostBodyDataKind::BoundedAndFitsIntoMemory,
+            )
+            .map_err(|err| {
+                self.sync_redirected_base_url();
+                client::Error::Http(err)
+            })?;
+        self.sync_redirected_base_url();
+        post_body.write_all(b"0000")?;
+        drop(post_body); // the response can only be read once the request is complete
+        // The status of the response is reported when reading its headers.
+        std::io::copy(&mut headers, &mut std::io::sink())?;
+        const MAX_PROBE_BODY_DRAIN_BYTES: u64 = 1024 * 1024;
+        std::io::copy(&mut body.take(MAX_PROBE_BODY_DRAIN_BYTES), &mut std::io::sink())?;
+        Ok(())
+    }
+}
+
 impl<H: Http> blocking_io::Transport for Transport<H> {
     fn handshake<'a>(
         &mut self,
@@ -417,38 +467,38 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
         }
         self.sync_redirected_base_url();
 
-        let line_reader = self
-            .line_provider
-            .get_or_insert_with(|| StreamingPeekableIter::new(body, &[PacketLineRef::Flush], self.trace));
-
-        // the service announcement is only sent sometimes depending on the exact server/protocol version/used protocol (http?)
-        // eat the announcement when its there to avoid errors later (and check that the correct service was announced).
-        // Ignore the announcement otherwise.
-        let line_ = line_reader
-            .peek_line()
-            .ok_or(client::Error::ExpectedLine("capabilities, version or service"))???;
-        let line = line_.as_text().ok_or(client::Error::ExpectedLine("text"))?;
-
-        if let Some(announced_service) = line.as_bstr().strip_prefix(b"# service=") {
-            if announced_service != service.as_str().as_bytes() {
-                return Err(client::Error::Http(
-                    message!(
-                        "Expected to see service {:?}, but got {:?}",
-                        service.as_str(),
-                        announced_service
-                    )
-                    .raise(),
-                ));
-            }
-
-            line_reader.as_read().read_to_end(&mut Vec::new())?;
-        }
-
         let Handshake {
             capabilities,
             refs,
             protocol: actual_protocol,
-        } = Handshake::from_lines_with_version_detection(line_reader)?;
+        } = if service == Service::ReceivePack {
+            // Read the advertisement, which `git` does as well, to be able to send the probe on the same connection
+            // after `info/refs` was fetched, when redirects have been followed and credentials are known.
+            const MAX_ADVERTISEMENT_BYTES: u64 = 512 * 1024 * 1024;
+            let mut advertisement = Vec::new();
+            body.by_ref()
+                .take(MAX_ADVERTISEMENT_BYTES + 1)
+                .read_to_end(&mut advertisement)?;
+            if advertisement.len() as u64 > MAX_ADVERTISEMENT_BYTES {
+                return Err(client::Error::Http(
+                    message!("The advertisement of references is larger than {MAX_ADVERTISEMENT_BYTES} bytes").raise(),
+                ));
+            }
+            // Responses to following requests are read through this, which also is the place that holds the body for as long as it is valid.
+            self.line_provider = Some(StreamingPeekableIter::new(body, &[PacketLineRef::Flush], self.trace));
+            self.probe_receive_pack_access()?;
+            let reader = self.buffered_advertisement.insert(StreamingPeekableIter::new(
+                std::io::Cursor::new(advertisement),
+                &[PacketLineRef::Flush],
+                self.trace,
+            ));
+            parse_advertisement(reader, service)?
+        } else {
+            let line_reader = self
+                .line_provider
+                .get_or_insert_with(|| StreamingPeekableIter::new(body, &[PacketLineRef::Flush], self.trace));
+            parse_advertisement(line_reader, service)?
+        };
         self.actual_version = actual_protocol;
         self.service = Some(service);
         Ok(SetServiceResponse {
@@ -518,6 +568,36 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             trace,
         ))
     }
+}
+
+/// Check the service announcement of an advertisement if there is one, and turn the rest of it into a handshake.
+fn parse_advertisement<R: Read>(
+    line_reader: &mut StreamingPeekableIter<R>,
+    service: Service,
+) -> std::result::Result<Handshake<'_>, client::Error> {
+    // the service announcement is only sent sometimes depending on the exact server/protocol version/used protocol (http?)
+    // eat the announcement when its there to avoid errors later (and check that the correct service was announced).
+    // Ignore the announcement otherwise.
+    let line_ = line_reader
+        .peek_line()
+        .ok_or(client::Error::ExpectedLine("capabilities, version or service"))???;
+    let line = line_.as_text().ok_or(client::Error::ExpectedLine("text"))?;
+
+    if let Some(announced_service) = line.as_bstr().strip_prefix(b"# service=") {
+        if announced_service != service.as_str().as_bytes() {
+            return Err(client::Error::Http(
+                message!(
+                    "Expected to see service {:?}, but got {:?}",
+                    service.as_str(),
+                    announced_service
+                )
+                .raise(),
+            ));
+        }
+
+        line_reader.as_read().read_to_end(&mut Vec::new())?;
+    }
+    Handshake::from_lines_with_version_detection(line_reader)
 }
 
 struct HeadersThenBody<H: Http, B: Unpin> {
