@@ -103,6 +103,7 @@ sha1 = [
     "gix-hash/sha1",
     "gix-pack/sha1",
     "gix-note?/sha1",
+    "gix-hook?/sha1",
     "gix-worktree-stream?/sha1",
 ]
 
@@ -112,6 +113,7 @@ sha256 = [
     "gix-object/sha256",
     "gix-pack/sha256",
     "gix-note?/sha256",
+    "gix-hook?/sha256",
     "gix-worktree-stream?/sha256",
 ]
 
@@ -122,6 +124,9 @@ sha256 = [
 
 ## Provide a top-level `command` module that helps with spawning commands similarly to `git`.
 command = ["dep:gix-command", "gix-object/signature"]
+
+## Locate and run Git hooks, including those from `hook.*` configuration, with a top-level `hook` module and `Repository::hook()`.
+hook = ["dep:gix-hook", "command"]
 
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
@@ -411,6 +416,7 @@ gix-status = { path = "../gix-status", optional = true, features = [
     "worktree-rewrites",
 ] }
 gix-command = { path = "../gix-command", optional = true }
+gix-hook = { path = "../gix-hook", optional = true }
 
 gix-worktree-stream = { path = "../gix-worktree-stream", optional = true }
 gix-archive = { path = "../gix-archive", default-features = false, optional = true }
@@ -448,6 +454,7 @@ gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-lock = { path = "../gix-lock", features = ["unstable"] }
 gix-tempfile = { path = "../gix-tempfile", default-features = false, features = ["unstable"] }
 gix = { path = ".", default-features = false, features = [
+    "hook",
     "merge",
     "tree-error",
 ] }

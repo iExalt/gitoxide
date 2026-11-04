@@ -143,6 +143,8 @@ pub use gix_fs as fs;
 pub use gix_glob as glob;
 pub use gix_hash as hash;
 pub use gix_hashtable as hashtable;
+#[cfg(feature = "hook")]
+pub use gix_hook as hook;
 #[cfg(feature = "excludes")]
 pub use gix_ignore as ignore;
 #[doc(inline)]
