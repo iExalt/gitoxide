@@ -5,7 +5,7 @@ use gix_reftable::{MergedTable, record::Record};
 
 use crate::{
     Result,
-    util::{self, HASHES, git, git_ref_lines, git_written_tables, merged, ref_lines, reflog},
+    util::{self, HASHES, git, git_ref_lines, git_written_tables, log_section_offset, merged, ref_lines, reflog},
 };
 
 #[test]
@@ -218,13 +218,6 @@ fn seeking_finds_every_reference_through_single_and_multi_level_indices() -> Res
         }
     }
     Ok(())
-}
-
-/// Where the log blocks start according to the footer of `table`, which is also where the blocks of references end.
-fn log_section_offset(table: &[u8]) -> usize {
-    let (header_len, footer_len) = if table[4] == 2 { (28, 72) } else { (24, 68) };
-    let at = table.len() - footer_len + header_len + 3 * 8;
-    usize::try_from(u64::from_be_bytes(table[at..at + 8].try_into().expect("8 bytes"))).expect("fits")
 }
 
 #[test]

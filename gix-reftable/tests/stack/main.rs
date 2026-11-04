@@ -6,5 +6,6 @@ use gix_testtools::Result;
 #[allow(dead_code)]
 mod util;
 
+mod compact;
 mod read;
 mod write;

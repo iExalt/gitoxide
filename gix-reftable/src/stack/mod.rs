@@ -10,6 +10,14 @@
 //! Tables that were read already are reused if the list still names them. A [`Snapshot`] is the stack as it was read, which
 //! stays valid and cheap to share, no matter what is published afterwards.
 //!
+//! ## Changing
+//!
+//! [`Stack::addition()`] locks the stack and adds tables to it, which is how changes are published. Tables pile up that
+//! way, so [`Stack::auto_compact()`] merges them following Git's geometric policy, and [`Stack::compact_all()`] merges all
+//! of them, which also drops the deletions that nothing remains to be hidden from. Compaction is separate from adding on
+//! purpose: a failure to compact never means that a published change failed, and the errors that say somebody else is busy
+//! are the ones to ignore. [`Stack::clean()`] removes tables that nobody lists any longer.
+//!
 //! Where Git reads a stack whose list names a missing or unreadable table as if it had no references, which can make a
 //! repository look empty, this crate returns an error. The only exception is a table that disappears because a writer
 //! replaced the list while it was read, in which case the new list is read, like Git does. The same goes for a list that keeps
@@ -31,11 +39,15 @@ use gix_hash::Kind;
 use crate::{BlockSource, MergedTable, Table, basics::corrupt};
 
 mod addition;
+mod compaction;
 mod files;
 mod list;
+mod lookup;
 mod reload;
 
 pub use addition::{Addition, UncertainAfterPublish};
+pub use compaction::{Compaction, DEFAULT_GEOMETRIC_FACTOR, suggest_segment};
+pub use lookup::Reflog;
 
 /// The name of the file that lists the tables of a stack.
 pub const LIST_FILE_NAME: &str = "tables.list";
@@ -55,6 +67,9 @@ pub struct Options {
     pub fsync: gix_fs::fsync::Options,
     /// The layout of the tables that are written.
     pub write: crate::writer::Options,
+    /// How much larger each table is supposed to be than the one above it, which is `reftable.geometricFactor`. A value
+    /// of 0 stands for [`DEFAULT_GEOMETRIC_FACTOR`].
+    pub geometric_factor: u8,
 }
 
 impl Default for Options {
@@ -64,6 +79,7 @@ impl Default for Options {
             shared_repository_permissions: 0,
             fsync: gix_fs::fsync::Options::default(),
             write: crate::writer::Options::default(),
+            geometric_factor: DEFAULT_GEOMETRIC_FACTOR,
         }
     }
 }
@@ -77,6 +93,8 @@ pub struct Stack {
     snapshot: Snapshot,
     #[cfg(test)]
     inject: Option<files::Inject>,
+    #[cfg(test)]
+    hook: Option<compaction::Hook>,
 }
 
 /// The tables of a stack as they were when the stack was read.
@@ -148,6 +166,8 @@ impl Stack {
             snapshot: Snapshot::new(list, tables)?,
             #[cfg(test)]
             inject: None,
+            #[cfg(test)]
+            hook: None,
         })
     }
 

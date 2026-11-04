@@ -1075,7 +1075,11 @@ Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility
     * [x] fail closed on missing, damaged or foreign tables instead of reading them as empty
     * [x] add tables under the `tables.list` lock, with a view that is current once the lock is held, flushed as `core.fsync` asks, shared-repository permissions, and an outcome that says when it is uncertain whether the change was published
 * [ ] transactions and reflogs
-* [ ] compaction and table management
+* [x] compaction and table management
+    * [x] merge tables following Git's geometric policy, or all of them, under the locks Git takes, finding the range again if others changed the stack meanwhile
+    * [x] drop deletions only when nothing below the merged tables remains, and clean up tables nobody lists
+    * [x] find a reference or its reflog without iterating everything
+    * [ ] expire reflog entries while merging
 * [ ] backend selection and migration between `files` and `reftable`
 
 [reftable-spec]: https://github.com/eclipse/jgit/blob/master/Documentation/technical/reftable.md

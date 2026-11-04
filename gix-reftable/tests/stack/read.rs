@@ -134,3 +134,12 @@ fn reloading_picks_up_what_git_published_and_snapshots_stay_as_they_were() -> Re
     }
     Ok(())
 }
+
+#[test]
+fn stacks_and_their_snapshots_can_be_moved_and_shared_between_threads() {
+    // A store that is cloned and used from several threads needs this, which is checked at compile time.
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Stack>();
+    assert_send_sync::<gix_reftable::stack::Snapshot>();
+    assert_send_sync::<gix_reftable::stack::Options>();
+}
