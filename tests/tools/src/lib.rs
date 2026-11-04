@@ -55,6 +55,15 @@ pub mod repository;
 
 pub mod strace;
 
+/// A synthetic HTTP peer that serves repositories with `git http-backend`, with authentication and faults.
+pub mod http_peer;
+
+/// A fake `ssh` program that runs commands locally and records how it was invoked.
+#[cfg(unix)]
+pub mod fake_ssh;
+#[cfg(unix)]
+pub mod sshd;
+
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 const BASH_FIXTURE_PRELUDE: &str = include_str!("scripted_fixture_prelude.sh");
 
@@ -2402,7 +2411,7 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
 /// Isolate the Git environment of a test subprocess, including commands that invoke Git indirectly.
 ///
-/// Removes inherited and previously configured `GIT_*` variables, disables external configuration,
+/// Removes inherited and previously configured `GIT_*` variables and proxy variables, sets `NO_PROXY=*`, disables external configuration,
 /// and sets deterministic fixture defaults. `current_dir` scopes the replacement XDG configuration
 /// directory, which is made absolute so scripts can change directories without relocating it.
 /// This does not change the command's arguments, working directory, or standard I/O.
@@ -2429,6 +2438,18 @@ pub fn configure_git_environment(
     let mut msys_for_git_bash_on_windows = env::var_os("MSYS").unwrap_or_default();
     msys_for_git_bash_on_windows.push(" winsymlinks:nativestrict");
     prefer_git_in_path(cmd, gix_path::env::exe_invocation());
+    // Test traffic goes to local peers; it must never be sent to a proxy that the machine happens to be configured with.
+    for name in [
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+    ] {
+        cmd.env_remove(name);
+    }
+    cmd.env("NO_PROXY", "*").env("no_proxy", "*");
     cmd.env_remove("SSH_ASKPASS")
         .env_remove("BASH_ENV")
         .env_remove("ENV")
