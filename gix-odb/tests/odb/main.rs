@@ -36,6 +36,7 @@ mod error;
 pub mod find;
 pub mod header;
 pub mod memory;
+mod quarantine;
 pub mod regression;
 pub mod sink;
 pub mod store;

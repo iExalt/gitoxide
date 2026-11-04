@@ -77,6 +77,10 @@ pub use store_impls::{dynamic as store, loose};
 
 pub mod alternate;
 
+/// Receive packs like `git receive-pack` does, see the module documentation.
+#[cfg(feature = "quarantine")]
+pub mod quarantine;
+
 /// A way to access objects along with pre-configured thread-local caches for packed base objects as well as objects themselves.
 ///
 /// By default, no cache will be used.
@@ -184,6 +188,8 @@ pub struct Store {
     loose_compression: gix_zlib::Compression,
     /// What to flush when writing loose objects.
     fsync: gix_fs::fsync::Options,
+    /// Object directories to use in addition to those named by `info/alternates` files, which are read-only like them.
+    extra_alternates: Vec<PathBuf>,
 }
 
 /// Create a new cached handle to the object store with support for additional options.
