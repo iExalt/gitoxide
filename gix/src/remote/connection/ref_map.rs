@@ -102,35 +102,14 @@ where
         {
             extra_refspecs.push(tag_spec);
         }
-        let mut credentials_storage;
-        let url = self.transport.inner.to_url();
-        let authenticate = match self.authenticate.as_mut() {
-            Some(f) => f,
-            None => {
-                credentials_storage = self.configured_credentials_for_current_url(repo);
-                &mut credentials_storage
-            }
-        };
-
-        if self.transport_options.is_none() {
-            self.transport_options = repo
-                .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
-                .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
-        }
-        if let Some(config) = self.transport_options.as_ref() {
-            self.transport
-                .inner
-                .configure(&**config)
-                .or_raise(|| message("Failed to configure the transport layer"))?;
-        }
-        let mut handshake = gix_protocol::handshake(
-            &mut self.transport.inner,
-            gix_transport::Service::UploadPack,
-            authenticate,
-            handshake_parameters,
-            &mut progress,
-        )
-        .await?;
+        let mut handshake = self
+            .handshake_with(
+                repo,
+                gix_transport::Service::UploadPack,
+                handshake_parameters,
+                &mut progress,
+            )
+            .await?;
 
         let context = fetch::refmap::init::Context {
             fetch_refspecs: self.remote.fetch_specs.clone(),
@@ -153,5 +132,50 @@ where
 
         self.handshake = Some(handshake);
         Ok(ref_map)
+    }
+}
+
+impl<T> ConnectionDetached<'_, T>
+where
+    T: Transport,
+{
+    /// Configure the transport, then perform the handshake for `service`, authenticating as needed.
+    #[gix_protocol::bisync::bisync]
+    pub(crate) async fn handshake_with(
+        &mut self,
+        repo: &crate::Repository,
+        service: gix_transport::Service,
+        handshake_parameters: Vec<(String, Option<String>)>,
+        progress: &mut impl Progress,
+    ) -> Result<gix_protocol::Handshake> {
+        let mut credentials_storage;
+        let url = self.transport.inner.to_url();
+        let authenticate = match self.authenticate.as_mut() {
+            Some(f) => f,
+            None => {
+                credentials_storage = self.configured_credentials_for_current_url(repo);
+                &mut credentials_storage
+            }
+        };
+
+        if self.transport_options.is_none() {
+            self.transport_options = repo
+                .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
+                .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
+        }
+        if let Some(config) = self.transport_options.as_ref() {
+            self.transport
+                .inner
+                .configure(&**config)
+                .or_raise(|| message("Failed to configure the transport layer"))?;
+        }
+        gix_protocol::handshake(
+            &mut self.transport.inner,
+            service,
+            authenticate,
+            handshake_parameters,
+            progress,
+        )
+        .await
     }
 }
