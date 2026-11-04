@@ -46,6 +46,7 @@ default = ["max"]
 ## default dependencies and specify the features yourself.
 max = [
     "hashes",
+    "reftable",
     "max-control",
     "fast",
     "gitoxide-core-tools-query",
@@ -63,6 +64,7 @@ max = [
 ## As fast as possible, with progress line rendering and auto-configuration, all transports available but less mature pure Rust HTTP implementation, all `ein` tools, CLI colors and local-time support, JSON output, regex support for rev-specs.
 max-pure = [
     "hashes",
+    "reftable",
     "max-control",
     "http-client-reqwest",
     "gitoxide-core-blocking-client",
@@ -86,6 +88,7 @@ max-control = [
 ## As fast as possible, progress line rendering, all transports based on their most mature implementation (HTTP), all `ein` tools, CLI colors and local-time support, JSON output.
 lean = [
     "hashes",
+    "reftable",
     "fast",
     "tracing",
     "pretty-cli",
@@ -116,6 +119,7 @@ small = ["hashes", "pretty-cli", "prodash-render-line"]
 ## It uses, however, a fully asynchronous networking implementation which can serve a real-world example on how to implement custom async transports.
 lean-async = [
     "hashes",
+    "reftable",
     "fast",
     "tracing",
     "pretty-cli",
@@ -143,7 +147,9 @@ hashes = ["sha1", "sha256"]
 sha1 = ["gix/sha1", "gix-tix?/sha1"]
 ## Enable support for the SHA-256 hash throughout the `gix` crate.
 sha256 = ["gix/sha256", "gix-tix?/sha256"]
-## Read the references of repositories that store them as reftables.
+## Read and edit the references of repositories that store them as reftables, and create such repositories if asked to like Git does.
+##
+## The `small` preset leaves it out to stay small, and so can any other build.
 reftable = ["gix/reftable"]
 
 ## Enable the interactive commit graph. This requires Rust 1.91 or newer.
