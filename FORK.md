@@ -390,6 +390,11 @@ available and no check was removed to meet a time target. The 120-minute CI
 timeout is a runaway guard, not a performance budget. Review growth against the
 same task, tool versions, platform, and cache state.
 
+The `network` test target of `gix` (35 tests, `curl` and `reqwest` backends, both hashes, real `sshd` where installed) ran in 9.1 s,
+and 7.1 s with `reqwest` and `rustls` only, on the shared build host at a load of 4 to 5, one run each. It generates its TLS
+certificates with `rcgen` and serves them with `rustls`, both unix-only development dependencies that use `ring`, so they add
+no C code to the build. The longest tests wait for a stall to be given up on, about three seconds each, and run in parallel.
+
 Full QA, final runtime receipts, review, and the infrastructure merge are tracked
 in [fork PR #1](https://github.com/iExalt/gitoxide/pull/1). At that time, the checks were
 `Fork QA` and `Fork MSRV`; `Fork CI required` has since replaced them as the merge gate. At setup, the repository had no branch
