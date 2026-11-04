@@ -34,7 +34,7 @@ pub mod curl;
 ///
 /// It performs requests with the asynchronous client of `reqwest` on a thread of its own, so it can be used from blocking code, but
 /// *not* from code that runs on a `tokio` runtime thread, where it panics; use `spawn_blocking()` there. It applies the connect timeout,
-/// the user agent and the HTTP version of the shared options, and has no total timeout, like `curl`.
+/// the user agent, the HTTP version and the low-speed limits of the shared options, and has no total timeout, like `curl`.
 #[cfg(feature = "http-client-reqwest")]
 pub mod reqwest;
 
