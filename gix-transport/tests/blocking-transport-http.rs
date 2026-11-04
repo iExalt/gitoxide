@@ -1,3 +1,5 @@
+// The blocking variants of tests that are shared with the async ones keep what only the async variants need.
+#![allow(clippy::while_let_on_iterator, clippy::drop_non_drop)]
 extern crate core;
 
 pub mod bisync {
