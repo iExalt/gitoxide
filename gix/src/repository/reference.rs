@@ -9,6 +9,14 @@ use crate::{Reference, Result, bstr::BString, ext::ReferenceExt, reference};
 
 /// Obtain and alter references comfortably
 impl crate::Repository {
+    /// Return a backend-neutral view of the store that holds this repository's references, to find, iterate and
+    /// edit them without depending on how they are stored.
+    ///
+    /// The view borrows the repository, so it reflects its namespace and reflog settings.
+    pub fn ref_store(&self) -> gix_ref::StoreRef<'_> {
+        gix_ref::StoreRef::from(&self.refs)
+    }
+
     /// Create a lightweight tag with given `name` (and without `refs/tags/` prefix) pointing to the given `target`, and return it as reference.
     ///
     /// It will be created with `constraint` which is most commonly to [only create it](PreviousValue::MustNotExist)

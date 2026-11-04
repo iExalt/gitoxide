@@ -59,6 +59,11 @@ mod access {
 
     /// Access
     impl file::Store {
+        /// Return the kind of hash that is assumed to be used by the objects references point to.
+        pub fn object_hash(&self) -> gix_hash::Kind {
+            self.object_hash
+        }
+
         /// Return the `.git` directory at which all references are loaded.
         ///
         /// For worktrees, this is the linked work-tree private ref location,
