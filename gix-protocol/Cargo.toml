@@ -54,6 +54,12 @@ fetch = [
     "dep:gix-trace",
 ]
 
+#! ### Server I/O modes
+#! The _server_ portion, receiving a push like `git receive-pack` does, is available without I/O. The following adds drivers for it.
+
+## If set, blocking functions to read requests and write advertisements and reports are available in the `receive` module.
+blocking-server = []
+
 #! ### Other
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
@@ -65,7 +71,7 @@ serde = ["dep:serde", "bstr/serde", "gix-transport/serde", "gix-hash/serde", "gi
 [[test]]
 name = "blocking"
 path = "tests/blocking-protocol.rs"
-required-features = ["blocking-client"]
+required-features = ["blocking-client", "blocking-server"]
 
 [[test]]
 name = "async"
@@ -75,6 +81,7 @@ required-features = ["async-client"]
 [dependencies]
 gix-error = { path = "../gix-error" }
 gix-transport = { path = "../gix-transport" }
+gix-packetline = { path = "../gix-packetline" }
 gix-hash = { path = "../gix-hash" }
 gix-shallow = { path = "../gix-shallow" }
 gix-date = { path = "../gix-date" }
@@ -110,23 +117,23 @@ document-features = { version = "0.2.0", optional = true }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 insta = "1.46.3"
 async-std = { version = "1.9.0", features = ["attributes"] }
-gix-packetline = { path = "../gix-packetline"}
 gix-pack = { path = "../gix-pack", features = ["generate", "sha1"] }
 gix-odb = { path = "../gix-odb", features = ["sha1"] }
 gix-protocol = { path = "../gix-protocol", features = ["sha1"] }
 
 [package.metadata.docs.rs]
-features = ["sha1", "blocking-client", "document-features", "serde"]
+features = ["sha1", "blocking-client", "blocking-server", "document-features", "serde"]
 
 [package.metadata.qa]
 checks = [
     { args = ["--all-features"] },
     { args = ["--features", "sha1,blocking-client"] },
+    { args = ["--features", "sha1,blocking-server"] },
     { args = ["--features", "sha1,async-client"] },
 ]
 tests = [
-    { args = ["--features", "blocking-client"] },
-    { args = ["--features", "blocking-client,sha256"] },
+    { args = ["--features", "blocking-client,blocking-server"] },
+    { args = ["--features", "blocking-client,blocking-server,sha256"] },
     { args = ["--features", "async-client"] },
     { args = ["--features", "async-client,sha256"] },
 ]
