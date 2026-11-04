@@ -123,6 +123,9 @@ pub struct Config {
     /// If set, `GET` requests below the old name are redirected to the new one with a `301`, like services do for repositories
     /// that were renamed, and all other requests to the old name fail with a `404`.
     pub moved: Option<Moved>,
+    /// If set, connections are kept alive for further requests, and closed from the side of the peer after being idle for this long.
+    /// By default, each connection serves one request and is closed right after, which is something that clients cannot trip over.
+    pub keep_alive_idle: Option<Duration>,
     /// How to treat requests that look like they are meant for a proxy.
     pub proxy_mode: ProxyMode,
     /// The credentials to expect in `Proxy-Authorization` if `proxy_mode` is [`ProxyMode::Forward`].
@@ -138,6 +141,8 @@ pub struct Request {
     pub target: String,
     /// Headers with lower-case names, in the order in which they were received.
     pub headers: Vec<(String, String)>,
+    /// The number of the connection that the request arrived on, starting at `0`, which shows if clients reuse connections.
+    pub connection: usize,
     /// The size of the (de-chunked) request body.
     pub body_len: usize,
     /// The status code of the response, or `0` if there was none.
@@ -164,6 +169,7 @@ struct Shared {
     config: Config,
     requests: Mutex<Vec<Request>>,
     shutdown: AtomicBool,
+    connections: std::sync::atomic::AtomicUsize,
     git_http_backend: Option<PathBuf>,
     acceptor: Option<Acceptor>,
 }
@@ -196,6 +202,7 @@ impl HttpPeer {
             config,
             requests: Mutex::default(),
             shutdown: AtomicBool::new(false),
+            connections: std::sync::atomic::AtomicUsize::new(0),
             // Resolved now, so a changed `PATH` of the test can't affect what the peer runs.
             git_http_backend: gix_path::env::core_dir_program("git-http-backend"),
             acceptor,
@@ -261,14 +268,36 @@ fn wait_for_shutdown(shared: &Shared) {
 }
 
 fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    let control = stream.try_clone()?;
     let mut stream: Box<dyn Stream> = match &shared.acceptor {
         Some(acceptor) => acceptor(stream)?,
         None => Box::new(stream),
     };
-    let mut reader = BufReader::new(&mut stream);
+    let connection = shared.connections.fetch_add(1, Ordering::Relaxed);
+    let reusable = std::cell::Cell::new(false);
+    loop {
+        reusable.set(false);
+        handle_request(shared, &mut stream, &control, &reusable, connection)?;
+        if !reusable.get() {
+            return Ok(());
+        }
+    }
+}
+
+/// Serve a single request, and set `reusable` if the connection can serve another one.
+fn handle_request(
+    shared: &Shared,
+    stream: &mut Box<dyn Stream>,
+    control: &TcpStream,
+    reusable: &std::cell::Cell<bool>,
+    connection: usize,
+) -> std::io::Result<()> {
+    // Waiting for the next request on an idle connection can be limited, to have the connection closed from this side.
+    control.set_read_timeout(Some(shared.config.keep_alive_idle.unwrap_or(Duration::from_secs(30))))?;
+    let mut reader = BufReader::new(&mut *stream);
     let mut line = String::new();
     reader.read_line(&mut line)?;
+    control.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut parts = line.split_whitespace();
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return Ok(());
@@ -292,6 +321,7 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
             method: method.clone(),
             target: target.clone(),
             headers: headers.clone(),
+            connection,
             body_len: 0,
             status: 0,
         });
@@ -321,10 +351,12 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
             .to_owned(),
         None => target.clone(),
     };
+    let keep_alive = shared.config.keep_alive_idle.is_some();
     let respond = |stream: &mut Box<dyn Stream>, status: u16, extra: &[String], body: &[u8]| -> std::io::Result<()> {
         shared.requests.lock()[index].status = status;
         let mut head = format!(
-            "HTTP/1.1 {status} X\r\nConnection: close\r\nContent-Length: {}\r\n",
+            "HTTP/1.1 {status} X\r\nConnection: {}\r\nContent-Length: {}\r\n",
+            if keep_alive { "keep-alive" } else { "close" },
             body.len()
         );
         for header in extra {
@@ -334,7 +366,9 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
         head.push_str("\r\n");
         stream.write_all(head.as_bytes())?;
         stream.write_all(body)?;
-        stream.flush()
+        stream.flush()?;
+        reusable.set(keep_alive);
+        Ok(())
     };
 
     if shared.config.proxy_mode == ProxyMode::Forward
@@ -344,7 +378,7 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
     {
         drain_unread_body(&mut reader, &headers);
         return respond(
-            &mut stream,
+            stream,
             407,
             &["Proxy-Authenticate: Basic realm=\"gix-test-proxy\"".into()],
             b"proxy authentication required",
@@ -355,11 +389,11 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
         && let Some(rest) = path_and_query.strip_prefix(&format!("/{}/", moved.from))
     {
         if method != "GET" {
-            return respond(&mut stream, 404, &[], b"not found");
+            return respond(stream, 404, &[], b"not found");
         }
         let host = header("host").unwrap_or_default();
         return respond(
-            &mut stream,
+            stream,
             301,
             &[format!("Location: http://{host}/{}/{rest}", moved.to)],
             b"moved permanently",
@@ -395,7 +429,7 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
         if !valid || rejects_even_if_valid {
             drain_unread_body(&mut reader, &headers);
             return respond(
-                &mut stream,
+                stream,
                 401,
                 &["WWW-Authenticate: Basic realm=\"gix-test\"".into()],
                 b"authentication required",
@@ -415,7 +449,7 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
     let body = match read_body(&mut reader, header("transfer-encoding"), header("content-length")) {
         Ok(body) => body,
         Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
-            return respond(&mut stream, 400, &[], b"malformed request body");
+            return respond(stream, 400, &[], b"malformed request body");
         }
         Err(err) => return Err(err),
     };
@@ -423,7 +457,7 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
     drop(reader);
 
     let Some(backend) = &shared.git_http_backend else {
-        return respond(&mut stream, 500, &[], b"git-http-backend is not available");
+        return respond(stream, 500, &[], b"git-http-backend is not available");
     };
     let (path, query) = path_and_query.split_once('?').unwrap_or((&path_and_query, ""));
     let mut cmd = Command::new(backend);
@@ -510,7 +544,7 @@ fn handle_connection(shared: &Shared, stream: TcpStream) -> std::io::Result<()> 
             wait_for_shutdown(shared);
             Ok(())
         }
-        Fault::None | Fault::StopReadingRequestBody | Fault::Silent => respond(&mut stream, status, &extra, body),
+        Fault::None | Fault::StopReadingRequestBody | Fault::Silent => respond(stream, status, &extra, body),
     }
 }
 
