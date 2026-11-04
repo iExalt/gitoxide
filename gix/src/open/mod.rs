@@ -13,6 +13,21 @@ pub struct Permissions {
     pub attributes: permissions::Attributes,
 }
 
+/// How much of the environment that redirects a repository or injects configuration into it is applied.
+///
+/// It is one value so that the repository stays as small as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RepositoryEnvironment {
+    /// Everything applies, like `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_CONFIG_COUNT`.
+    #[default]
+    Used,
+    /// Variables that redirect the repository are ignored, injected configuration still applies, as when entering another
+    /// repository like a worktree or submodule.
+    NestedRepository,
+    /// Variables that redirect the repository and those that inject configuration are ignored.
+    Ignored,
+}
+
 /// The options used in [`ThreadSafeRepository::open_opts()`][crate::ThreadSafeRepository::open_opts()].
 ///
 /// ### Replacement Objects for the object database
@@ -42,7 +57,7 @@ pub struct Options {
     pub(crate) system_config_path: Option<Box<std::path::Path>>,
     /// Whether repository-local environment variables like `GIT_WORK_TREE` and `GIT_INDEX_FILE` may be applied.
     /// This is disabled when reusing these options to enter another repository.
-    pub(crate) use_repository_local_environment: bool,
+    pub(crate) repository_environment: RepositoryEnvironment,
     /// Whether to treat the input path as a git directory without first trying `<path>/.git`.
     /// This only controls how the current call's input is interpreted, so it is reset after path resolution.
     /// Retaining it would make later submodule or worktree opens that clone these options skip their normal
@@ -90,7 +105,7 @@ mod tests {
             "checkout retention is a one-shot policy"
         );
         assert!(
-            !copied.use_repository_local_environment,
+            !copied.uses_repository_local_environment(),
             "another repository must not inherit environment redirection"
         );
         Ok(())

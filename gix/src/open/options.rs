@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::Options;
+use super::{Options, RepositoryEnvironment};
 use crate::{Result, ThreadSafeRepository, bstr::BString, config, open::Permissions};
 
 impl Default for Options {
@@ -18,7 +18,7 @@ impl Default for Options {
             cli_config_overrides: Vec::new(),
             git_installation_config_path: None,
             system_config_path: None,
-            use_repository_local_environment: true,
+            repository_environment: Default::default(),
             retain_inferred_worktree_when_bare: false,
             current_dir: None,
         }
@@ -47,7 +47,7 @@ impl Options {
             cli_config_overrides: self.cli_config_overrides.clone(),
             git_installation_config_path: self.git_installation_config_path.clone(),
             system_config_path: self.system_config_path.clone(),
-            use_repository_local_environment: self.use_repository_local_environment,
+            repository_environment: self.repository_environment,
             open_path_as_is: self.open_path_as_is,
             retain_inferred_worktree_when_bare: self.retain_inferred_worktree_when_bare,
             current_dir: self.current_dir.clone(),
@@ -213,12 +213,48 @@ impl Options {
 }
 
 impl Options {
+    /// Ignore the environment variables that redirect the repository or inject configuration into it, or stop ignoring them.
+    ///
+    /// Opening a repository by path doesn't consult `GIT_DIR` and its relatives, but the environment of a process that runs
+    /// as part of another Git command, like a hook, can still redirect the repository that is opened, which is the case
+    /// for `GIT_WORK_TREE`, `GIT_NAMESPACE`, `GIT_SHALLOW_FILE` and `GIT_INDEX_FILE`. It can inject configuration with
+    /// `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` as well. Setting `ignore` makes the repository
+    /// that is opened independent of these, so that the repository at `path` is opened with its own configuration.
+    ///
+    /// Everything else of the environment keeps being used as the [`permissions`](Self::permissions()) allow, including
+    /// the identity, `HOME`, `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL`, so that the configuration of the user and the system
+    /// applies as it does for Git. Nested repositories, like worktrees and submodules, are opened without the redirecting
+    /// variables regardless of this setting.
+    pub fn ignore_repository_environment(mut self, ignore: bool) -> Self {
+        self.repository_environment = if ignore {
+            RepositoryEnvironment::Ignored
+        } else {
+            RepositoryEnvironment::Used
+        };
+        self
+    }
+
     /// Prevent repository-local environment overrides from being inherited when opening another repository.
     ///
     /// To be used when opening a nested repository, like worktrees or submodules.
     pub(crate) fn without_repository_environment_overrides(mut self) -> Self {
-        self.use_repository_local_environment = false;
+        if self.repository_environment == RepositoryEnvironment::Used {
+            self.repository_environment = RepositoryEnvironment::NestedRepository;
+        }
         self
+    }
+
+    /// Whether variables like `GIT_WORK_TREE` and `GIT_INDEX_FILE`, which redirect the repository, are applied.
+    pub(crate) fn uses_repository_local_environment(&self) -> bool {
+        self.repository_environment == RepositoryEnvironment::Used
+    }
+
+    /// The permissions for configuration, with the use of configuration from the environment taken away if it is ignored.
+    pub(crate) fn config_permissions(&self) -> crate::open::permissions::Config {
+        crate::open::permissions::Config {
+            env: self.permissions.config.env && self.repository_environment != RepositoryEnvironment::Ignored,
+            ..self.permissions.config
+        }
     }
 
     pub(crate) fn current_dir_or_empty(&self) -> &std::path::Path {
@@ -243,7 +279,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 cli_config_overrides: Vec::new(),
                 git_installation_config_path: None,
                 system_config_path: None,
-                use_repository_local_environment: true,
+                repository_environment: Default::default(),
                 current_dir: None,
             },
             gix_sec::Trust::Reduced => Options {
@@ -260,7 +296,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 cli_config_overrides: Vec::new(),
                 git_installation_config_path: None,
                 system_config_path: None,
-                use_repository_local_environment: true,
+                repository_environment: Default::default(),
                 current_dir: None,
             },
         }
