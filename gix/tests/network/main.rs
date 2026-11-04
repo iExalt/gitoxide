@@ -28,6 +28,7 @@ mod http_connections;
 mod http_fetch;
 mod http_low_speed;
 mod http_proxy;
+mod http_push;
 mod http_tls;
 mod interrupt;
 mod ssh;
