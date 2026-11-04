@@ -2,19 +2,22 @@
 //! thread, as promptly as the transport can tell, whatever the transport is.
 use std::time::{Duration, Instant};
 
+use std::io::{Read, Write};
+
 use gix::protocol::transport::{
     Protocol, Service,
     client::{
-        TransportWithoutIO,
-        blocking_io::{Transport, ssh},
+        MessageKind, TransportWithoutIO, WriteMode,
+        blocking_io::{Transport, http, ssh},
     },
 };
 use gix_testtools::{
     TestResult,
     fake_ssh::{Behavior, FakeSsh},
+    http_peer::{Config, Fault, HttpPeer},
 };
 
-use crate::isolated;
+use crate::{Setup, for_each_backend, isolated, transport};
 
 /// The time that a stalled peer is given to end what its client does, which is far less than the time that it would otherwise keep it.
 const PROMPTLY: Duration = Duration::from_secs(10);
@@ -128,5 +131,135 @@ fn an_interrupt_ends_the_handshake_with_a_daemon_that_says_nothing() -> TestResu
         "the socket was closed when interrupted: {:?}",
         start.elapsed()
     );
+    Ok(())
+}
+
+fn peer_with(setup: &Setup, fault: Fault, posts_only: bool) -> TestResult<HttpPeer> {
+    Ok(HttpPeer::start(Config {
+        project_root: setup.path("."),
+        fault,
+        fault_posts_only: posts_only,
+        ..Default::default()
+    })?)
+}
+
+fn is_cancelled(err: &dyn std::error::Error) -> bool {
+    format!("{err:?}").contains("interrupted")
+}
+
+fn an_interrupt_ends_the_wait_for_a_server_that_doesnt_respond<H: http::Http + Default + 'static>() -> TestResult {
+    let setup = Setup::new("sha1")?;
+    let peer = peer_with(&setup, Fault::Silent, false)?;
+    let mut transport = transport::<H>(&peer.url("remote.git"))?;
+    let interrupter = interrupt_after(
+        transport.interrupt_handle().expect("requests can be ended"),
+        Duration::from_millis(300),
+    );
+    let start = Instant::now();
+    let result = transport.handshake(Service::UploadPack, &[]).map(|_| ());
+    interrupter.join().expect("the thread doesn't panic");
+    let err = result.expect_err("a server that never responds can't have been shaken hands with");
+    assert!(
+        start.elapsed() < PROMPTLY,
+        "the wait ended when interrupted: {:?}",
+        start.elapsed()
+    );
+    assert!(
+        is_cancelled(&err),
+        "the failure says that the transport was interrupted: {err:?}"
+    );
+    // The transport can't be used anymore.
+    assert!(
+        transport.handshake(Service::UploadPack, &[]).is_err(),
+        "an interrupted transport stays interrupted"
+    );
+    Ok(())
+}
+
+fn an_interrupt_ends_the_wait_for_a_response_body_that_stalls<H: http::Http + Default + 'static>() -> TestResult {
+    let setup = Setup::new("sha1")?;
+    let peer = peer_with(&setup, Fault::StallAfterHeaders, true)?;
+    let mut transport = transport::<H>(&peer.url("remote.git"))?;
+    let interrupter = interrupt_after(
+        transport.interrupt_handle().expect("requests can be ended"),
+        Duration::from_millis(300),
+    );
+    // The advertisement is served normally, and the response to the first request that follows has headers and then nothing.
+    transport.handshake(Service::UploadPack, &[])?;
+    let mut writer = transport.request(WriteMode::Binary, MessageKind::Flush, false)?;
+    writer.write_all(b"0014command=ls-refs\n0000")?;
+    let (_writer, mut reader) = writer.into_parts();
+    let start = Instant::now();
+    let mut sink = Vec::new();
+    let result = reader.read_to_end(&mut sink);
+    interrupter.join().expect("the thread doesn't panic");
+    let err = result.expect_err("the response never completes");
+    assert!(
+        start.elapsed() < PROMPTLY,
+        "the read ended when interrupted: {:?}",
+        start.elapsed()
+    );
+    assert!(
+        is_cancelled(&err),
+        "the failure says that the transport was interrupted: {err:?}"
+    );
+    Ok(())
+}
+
+fn an_interrupt_ends_an_upload_that_the_server_doesnt_take<H: http::Http + Default + 'static>() -> TestResult {
+    let setup = Setup::new("sha1")?;
+    let peer = peer_with(&setup, Fault::StopReadingRequestBody, true)?;
+    let mut transport = transport::<H>(&peer.url("remote.git"))?;
+    let interrupter = interrupt_after(
+        transport.interrupt_handle().expect("requests can be ended"),
+        Duration::from_millis(1500),
+    );
+    // The upload of a push has the same shape. Its handshake isn't used here as it ends with a `POST`, which this peer doesn't answer.
+    transport.handshake(Service::UploadPack, &[])?;
+    let mut writer = transport.request(WriteMode::Binary, MessageKind::Flush, false)?;
+    let start = Instant::now();
+    // More than the kernel buffers on both sides, so the upload has to wait for the server that doesn't read.
+    let chunk = vec![0u8; 1024 * 1024];
+    let mut written = 0usize;
+    let err = loop {
+        match writer.write_all(&chunk) {
+            Ok(()) => written += chunk.len(),
+            Err(err) => break err,
+        }
+        assert!(
+            written < 512 * 1024 * 1024,
+            "the server takes this much only if it reads, which it doesn't"
+        );
+    };
+    interrupter.join().expect("the thread doesn't panic");
+    assert!(
+        start.elapsed() < PROMPTLY,
+        "the upload ended when interrupted: {:?}",
+        start.elapsed()
+    );
+    // The pipe to the worker closed, which is all that the writer of a request can tell. The reason is told by the response.
+    assert!(
+        err.kind() == std::io::ErrorKind::BrokenPipe || is_cancelled(&err),
+        "the upload failed as its connection ended: {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_interrupt_ends_requests_that_wait_for_the_server_with_each_backend() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for_each_backend!(an_interrupt_ends_the_wait_for_a_server_that_doesnt_respond());
+    for_each_backend!(an_interrupt_ends_the_wait_for_a_response_body_that_stalls());
+    Ok(())
+}
+
+#[test]
+fn an_interrupt_ends_uploads_that_the_server_doesnt_take_with_each_backend() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for_each_backend!(an_interrupt_ends_an_upload_that_the_server_doesnt_take());
     Ok(())
 }

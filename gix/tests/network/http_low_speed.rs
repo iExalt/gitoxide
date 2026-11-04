@@ -1,8 +1,20 @@
 //! Transfers that are too slow are ended by the low-speed limits, wherever the server stops: before it sends headers, in the
 //! middle of the body, or by trickling it. The same cases run with each backend, as they have to agree.
-use std::time::{Duration, Instant};
+use std::{
+    io::Read,
+    time::{Duration, Instant},
+};
 
-use gix::{protocol::transport::client::blocking_io::http, remote::Direction};
+use gix::{
+    protocol::transport::{
+        Service,
+        client::{
+            MessageKind, TransportWithoutIO, WriteMode,
+            blocking_io::{Transport, http},
+        },
+    },
+    remote::Direction,
+};
 use gix_testtools::{
     TestResult,
     http_peer::{Config, Fault, HttpPeer},
@@ -85,6 +97,54 @@ fn a_trickle_is_judged_by_its_speed<H: http::Http + Default + 'static>() -> Test
     Ok(())
 }
 
+#[cfg(feature = "blocking-http-transport-reqwest")]
+fn upload_stall_is_given_up_on<H: http::Http + Default + 'static>() -> TestResult {
+    use std::io::Write as _;
+    let setup = Setup::new("sha1")?;
+    // Only the `POST` stalls, so that the advertisement arrives.
+    let peer = HttpPeer::start(Config {
+        project_root: setup.path("."),
+        fault: Fault::StopReadingRequestBody,
+        fault_posts_only: true,
+        receive_buffer: Some(4096),
+        ..Default::default()
+    })?;
+    let mut transport = transport::<H>(&peer.url("remote.git"))?;
+    transport.configure(&http::Options {
+        low_speed_limit_bytes_per_second: 1000,
+        low_speed_time_seconds: 1,
+        ..Default::default()
+    })?;
+    transport.handshake(Service::UploadPack, &[])?;
+    let mut writer = transport.request(WriteMode::Binary, MessageKind::Flush, false)?;
+    let started = Instant::now();
+    // More than what the kernel buffers on both sides, so that the upload has to wait for the server, which doesn't read.
+    let chunk = vec![0u8; 1024 * 1024];
+    let mut written = 0usize;
+    loop {
+        if writer.write_all(&chunk).is_err() {
+            break;
+        }
+        written += chunk.len();
+        assert!(
+            written < 512 * 1024 * 1024,
+            "a server that doesn't read can't take this much"
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the upload ended long before the 30 s of the old timeouts: {:?}",
+        started.elapsed()
+    );
+    let (_writer, mut reader) = writer.into_parts();
+    let err = reader.read_to_end(&mut Vec::new()).expect_err("the request failed");
+    assert!(
+        is_low_speed_error(&gix::Error::from_error(err)),
+        "the reason that the upload ended is the speed of the transfer"
+    );
+    Ok(())
+}
+
 /// Run each case with one backend as tests of their own, which lets them run in parallel.
 macro_rules! backend_tests {
     ($module:ident, $backend:ty, $feature:literal) => {
@@ -121,3 +181,18 @@ macro_rules! backend_tests {
 
 backend_tests!(curl, http::curl::Curl, "blocking-http-transport-curl");
 backend_tests!(reqwest, http::reqwest::Remote, "blocking-http-transport-reqwest");
+
+/// A server that doesn't read the request ends an upload by the speed limits, as with the downloads above.
+///
+/// This runs with `reqwest` only. A stalled upload doesn't stop on loopback: the kernel keeps accepting about 64 KiB a second of what
+/// `curl` sends, which is far above the limits, for tens of seconds with the defaults and for at least 20 with the smallest receive
+/// buffer. `curl` ends such an upload when the connection ends, as the interruption test of this target shows, but only
+/// a real network stalls it in a way that its speed check sees.
+#[cfg(feature = "blocking-http-transport-reqwest")]
+#[test]
+fn an_upload_that_the_server_doesnt_take_is_given_up_on() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    upload_stall_is_given_up_on::<http::reqwest::Remote>()
+}
