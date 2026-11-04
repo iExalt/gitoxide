@@ -683,6 +683,20 @@ pub fn connect<H: Http + Default>(url: gix_url::Url, desired_version: Protocol, 
     Transport::new(url, desired_version, trace)
 }
 
+/// Remove the user name and password from `url`, which clients are given separately, as the ones in a URL take precedence
+/// in some of them, and are incomplete if the password has to come from a credential helper.
+#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
+fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.into();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+        None => url.into(),
+    }
+}
+
 ///
 pub mod redirect;
 
@@ -771,6 +785,19 @@ mod tests {
                 gix_error::classify(&err).can_retry_lenient(),
                 "retryable backend causes survive conversion: {err:?}"
             );
+        }
+    }
+
+    #[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
+    #[test]
+    fn userinfo_is_removed_from_the_authority_only() {
+        for (url, expected) in [
+            ("http://user:pass@proxy:3128", "http://proxy:3128"),
+            ("socks5h://user@proxy:1080/", "socks5h://proxy:1080/"),
+            ("http://proxy:3128/path@here", "http://proxy:3128/path@here"),
+            ("proxy:3128", "proxy:3128"),
+        ] {
+            assert_eq!(super::without_userinfo(url), expected);
         }
     }
 }
