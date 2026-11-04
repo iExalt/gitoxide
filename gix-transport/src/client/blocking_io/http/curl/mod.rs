@@ -1,6 +1,7 @@
 use std::{
     sync::{
         Arc,
+        atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, SyncSender},
     },
     thread,
@@ -43,6 +44,8 @@ pub struct Curl {
     handle: Option<thread::JoinHandle<Result>>,
     config: http::Options,
     redirected_base_url: Arc<Mutex<Option<String>>>,
+    /// Set to make the transfer in flight, and all later ones, fail.
+    interrupted: Arc<AtomicBool>,
 }
 
 impl Curl {
@@ -54,7 +57,7 @@ impl Curl {
             .join()
             .expect("handler thread should never panic")
             .expect_err("something should have gone wrong with curl (we join on error only)");
-        let (handle, req, res, redirected_base_url) = remote::new();
+        let (handle, req, res, redirected_base_url) = remote::new(self.interrupted.clone());
         self.handle = Some(handle);
         self.req = req;
         self.res = res;
@@ -112,13 +115,15 @@ impl Curl {
 
 impl Default for Curl {
     fn default() -> Self {
-        let (handle, req, res, redirected_base_url) = remote::new();
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let (handle, req, res, redirected_base_url) = remote::new(interrupted.clone());
         Curl {
             handle: Some(handle),
             req,
             res,
             config: http::Options::default(),
             redirected_base_url,
+            interrupted,
         }
     }
 }
@@ -127,6 +132,14 @@ impl http::Http for Curl {
     type Headers = io::pipe::Reader;
     type ResponseBody = io::pipe::Reader;
     type PostBody = io::pipe::Writer;
+
+    /// The transfer is aborted from the progress callback of `curl`, which it calls at least once a second.
+    fn interrupt_handle(&self) -> Option<crate::client::InterruptHandle> {
+        let interrupted = self.interrupted.clone();
+        Some(crate::client::InterruptHandle::new(move || {
+            interrupted.store(true, Ordering::SeqCst);
+        }))
+    }
 
     fn get(
         &mut self,

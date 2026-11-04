@@ -95,6 +95,12 @@ pub trait Http {
     /// The caller must know how that `config` data looks like for the intended implementation.
     fn configure(&mut self, config: &dyn std::any::Any) -> Result;
 
+    /// Return a handle that ends the requests of this backend that are in flight, and makes later ones fail, from another thread,
+    /// or `None` if the backend can't. The default is `None`.
+    fn interrupt_handle(&self) -> Option<crate::client::InterruptHandle> {
+        None
+    }
+
     /// Return the effective base URL after a backend accepted a redirect, if available.
     fn redirected_base_url(&self) -> Option<String> {
         None
