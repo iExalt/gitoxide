@@ -7,6 +7,8 @@ mod commit;
 mod config;
 #[cfg(feature = "blob-diff")]
 mod diff;
+#[cfg(target_os = "linux")]
+mod durability;
 mod error;
 mod head;
 mod id;

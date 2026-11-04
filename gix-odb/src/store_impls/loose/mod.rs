@@ -15,6 +15,9 @@ pub struct Options {
     /// Git uses [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED) unless configured otherwise with
     /// `core.looseCompression` or `core.compression`.
     pub compression: gix_zlib::Compression,
+    /// What to flush to disk when writing loose objects, which is nothing by default like in Git, except for loose objects on Windows.
+    /// Only [`LOOSE_OBJECT`](gix_fs::fsync::Components::LOOSE_OBJECT) is looked at.
+    pub fsync: gix_fs::fsync::Options,
 }
 
 impl Default for Options {
@@ -22,6 +25,7 @@ impl Default for Options {
         Options {
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
+            fsync: Default::default(),
         }
     }
 }
@@ -37,6 +41,8 @@ pub struct Store {
     pub(crate) alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     pub(crate) compression: gix_zlib::Compression,
+    /// What to flush when writing loose objects.
+    pub(crate) fsync: gix_fs::fsync::Options,
 }
 
 /// Initialization
@@ -62,12 +68,14 @@ impl Store {
         let Options {
             alloc_limit_bytes,
             compression,
+            fsync,
         } = options;
         Store {
             path: objects_directory.into(),
             object_hash,
             alloc_limit_bytes,
             compression,
+            fsync,
         }
     }
 

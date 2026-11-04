@@ -164,6 +164,10 @@ impl Store {
             }
         }
         let file = file.into_inner();
+        // Like Git, flush the data before it can be found by its name, or never lose the object after it is.
+        self.fsync
+            .flush(file.as_file(), gix_fs::fsync::Components::LOOSE_OBJECT)
+            .or_raise(|| Message::new("Could not flush loose object").with("path", object_path.as_path()))?;
         let res = file.persist(&object_path);
         // On windows, we assume that such errors are due to its special filesystem semantics,
         // on any other platform that would be a legitimate error though.
