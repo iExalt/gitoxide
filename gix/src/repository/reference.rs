@@ -150,10 +150,15 @@ impl crate::Repository {
                  milliseconds to wait for locks or negative to wait forever",
             )
         })?;
-        self.refs
+        Ok(self
+            .ref_store()
             .transaction()
-            .prepare(edits, file_lock_fail, packed_refs_lock_fail)?
-            .commit(committer)
+            .prepare(
+                edits,
+                gix_ref::view::transaction::LockOptions::new(file_lock_fail, packed_refs_lock_fail),
+            )?
+            .commit(committer)?
+            .edits)
     }
 
     /// Return the repository head, an abstraction to help dealing with the `HEAD` reference.
@@ -313,7 +318,7 @@ impl crate::Repository {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        Ok(Reference::from_ref(self.refs.find(name)?, self))
+        Ok(Reference::from_ref(self.ref_store().find(name)?, self))
     }
 
     /// Return a platform for iterating references.
@@ -337,7 +342,7 @@ impl crate::Repository {
     /// ```
     pub fn references(&self) -> Result<reference::iter::Platform<'_>> {
         Ok(reference::iter::Platform {
-            platform: self.refs.iter()?,
+            platform: self.ref_store().iter()?,
             repo: self,
         })
     }
@@ -351,6 +356,6 @@ impl crate::Repository {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        Ok(self.refs.try_find(name)?.map(|r| Reference::from_ref(r, self)))
+        Ok(self.ref_store().try_find(name)?.map(|r| Reference::from_ref(r, self)))
     }
 }

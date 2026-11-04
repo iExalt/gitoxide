@@ -305,7 +305,7 @@ impl ThreadSafeRepository {
             }
         };
         refs.set_unsupported_backend(unsupported_ref_storage);
-        let head = refs.find("HEAD").ok();
+        let head = gix_ref::StoreRef::from(&refs).find("HEAD").ok();
         let git_install_dir = crate::path::install_dir().ok();
         let home = gix_path::env::home_dir().and_then(|home| env.home.check_opt(home));
 
@@ -561,7 +561,7 @@ impl ThreadSafeRepository {
 
                 Some(prefix).and_then(|prefix| {
                     let _span = gix_trace::detail!("find replacement objects");
-                    let platform = refs.iter().ok()?;
+                    let platform = gix_ref::StoreRef::from(&refs).iter().ok()?;
                     let iter = platform.prefixed(prefix).ok()?;
                     let replacements = iter
                         .filter_map(std::result::Result::ok)

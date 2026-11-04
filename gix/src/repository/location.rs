@@ -337,6 +337,6 @@ impl crate::Repository {
         let default_branch_ref_name = gix_ref::Category::LocalBranch
             .to_full_name(name.as_bstr())
             .unwrap_or_else(|_| gix_ref::FullName::try_from("refs/heads/master").expect("known to be valid"));
-        self.refs.is_pristine(default_branch_ref_name.as_ref())
+        self.ref_store().is_pristine(default_branch_ref_name.as_ref())
     }
 }

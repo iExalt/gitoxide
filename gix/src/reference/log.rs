@@ -16,7 +16,7 @@ impl Reference<'_> {
 
     /// Return true if a reflog is present for this reference.
     pub fn log_exists(&self) -> crate::Result<bool> {
-        self.inner.log_exists(&self.repo.refs)
+        self.repo.ref_store().reflog_exists(self.inner.name.as_ref())
     }
 }
 

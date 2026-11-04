@@ -52,7 +52,7 @@ impl std::fmt::Display for CandidateInfo {
 
 /// Attach a parser-owned recovery signal without confusing missing objects with missing references.
 pub(crate) fn with_missing_reference(err: Exn) -> Exn {
-    match err.downcast_any_ref::<gix_ref::file::find::NotFound>() {
+    match err.downcast_any_ref::<gix_ref::view::NotFound>() {
         Some(not_found) => {
             let context = Error::MissingReference {
                 name: not_found.name.clone(),
