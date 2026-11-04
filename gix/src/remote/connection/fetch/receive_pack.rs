@@ -181,6 +181,7 @@ where
             iteration_mode: gix_pack::data::input::Mode::Verify,
             alloc_limit_bytes: repo.config.alloc_limit_bytes,
             compression: repo.config.loose_compression,
+            fsync: repo.config.fsync_options()?,
         };
         let mut write_pack_bundle = None;
 

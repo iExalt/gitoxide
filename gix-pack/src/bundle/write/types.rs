@@ -23,6 +23,12 @@ pub struct Options {
     /// these with the same level it uses for loose objects, which is `core.looseCompression` or
     /// `core.compression`, or level 1 if neither is set.
     pub compression: gix_zlib::Compression,
+    /// What to flush to disk, which is the pack and its index like Git does by default.
+    ///
+    /// The pack is flushed as [`PACK`](gix_fs::fsync::Components::PACK) before it is made visible, and its index as
+    /// [`PACK_METADATA`](gix_fs::fsync::Components::PACK_METADATA) before that, so that a pack that can be found
+    /// by its index is complete.
+    pub fsync: gix_fs::fsync::Options,
 }
 
 impl Default for Options {
@@ -34,6 +40,7 @@ impl Default for Options {
             index_version: Default::default(),
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
+            fsync: Default::default(),
         }
     }
 }
