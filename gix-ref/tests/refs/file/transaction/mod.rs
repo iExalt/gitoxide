@@ -80,4 +80,5 @@ pub(crate) mod prepare_and_commit {
     mod name_conflicts;
     mod observe;
     mod reflog_message;
+    mod write_reflog;
 }

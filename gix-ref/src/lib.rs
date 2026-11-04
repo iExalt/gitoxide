@@ -93,13 +93,18 @@ pub mod store {
     }
     /// The way a file store handles the reflog
     #[derive(Default, Debug, PartialOrd, PartialEq, Ord, Eq, Hash, Clone, Copy)]
+    #[non_exhaustive]
     pub enum WriteReflog {
         /// Always write the reflog for all references for ref edits, unconditionally.
         Always,
-        /// Write a ref log for ref edits according to the standard rules.
+        /// Write a ref log for ref edits according to the standard rules: create the reflog of branches, remote-tracking
+        /// branches, notes and `HEAD` if there is none, and append to the ones that exist.
         #[default]
         Normal,
-        /// Never write a ref log.
+        /// Append to the reflogs that exist, but create none unless an edit forces it, which is what Git does with
+        /// `core.logAllRefUpdates=false`.
+        Existing,
+        /// Never write a ref log, not even to the reflogs that exist, which is for stores that are initialised.
         Disable,
     }
 

@@ -16,7 +16,7 @@ use gix_ref::{
 use gix_testtools::TestResult;
 
 /// A repository that Git initialised on `main`, and ids of two commits in it, one the child of the other.
-fn repo(root: &Path, name: &str) -> TestResult<(PathBuf, [ObjectId; 2])> {
+pub(super) fn repo(root: &Path, name: &str) -> TestResult<(PathBuf, [ObjectId; 2])> {
     let repo = root.join(name);
     std::fs::create_dir_all(&repo)?;
     gix_testtools::git(&repo, "init -q -b main")?;
@@ -42,7 +42,7 @@ fn repo(root: &Path, name: &str) -> TestResult<(PathBuf, [ObjectId; 2])> {
 }
 
 /// Make Git use the identity and time of [`committer()`](super::committer()).
-fn identity(mut cmd: std::process::Command) -> std::process::Command {
+pub(super) fn identity(mut cmd: std::process::Command) -> std::process::Command {
     for who in ["AUTHOR", "COMMITTER"] {
         cmd.env(format!("GIT_{who}_NAME"), "committer")
             .env(format!("GIT_{who}_EMAIL"), "committer@example.com")
@@ -51,7 +51,7 @@ fn identity(mut cmd: std::process::Command) -> std::process::Command {
     cmd
 }
 
-fn git_update_ref(repo: &Path, args: &[&str]) -> TestResult<std::process::Output> {
+pub(super) fn git_update_ref(repo: &Path, args: &[&str]) -> TestResult<std::process::Output> {
     let mut cmd = gix_testtools::git_command(repo);
     cmd.arg("update-ref").args(args);
     Ok(identity(cmd).output()?)
@@ -71,7 +71,7 @@ fn fork_with(repo: &Path, edits: impl IntoIterator<Item = RefEdit>, head_log: He
     Ok(())
 }
 
-fn update(name: &str, to: ObjectId, deref: bool) -> RefEdit {
+pub(super) fn update(name: &str, to: ObjectId, deref: bool) -> RefEdit {
     RefEdit::update(
         name.try_into().expect("valid"),
         Target::Object(to),
@@ -82,7 +82,7 @@ fn update(name: &str, to: ObjectId, deref: bool) -> RefEdit {
 }
 
 /// The reflogs that exist below `logs/`, with their content, as the reference that these edits can change.
-fn reflogs(repo: &Path) -> TestResult<Vec<(String, String)>> {
+pub(super) fn reflogs(repo: &Path) -> TestResult<Vec<(String, String)>> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) -> std::io::Result<()> {
         if !dir.exists() {
             return Ok(());
