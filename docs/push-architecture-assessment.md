@@ -263,3 +263,235 @@ Stated so they are not mistaken for completeness:
   configuration is not enumerated.
 - No row has been exercised against a running Git; each is a differential-test candidate.
 
+## 3. Git reference-backend behavior
+
+Scope: what Git itself does at the pin when a ref transaction fails, persists, is read
+concurrently, or races an external writer, per backend. It is written to be turned into
+differential tests; every row is a source observation, none was run.
+
+### 3.1 Contract shared by both backends
+
+- A transaction moves through `OPEN` → `PREPARED` → `CLOSED`. `prepare` runs the
+  `reference-transaction` hook at `preparing`, then the backend's prepare, then `prepared`
+  (`refs.c:2681-2730`). `commit` runs the backend's finish and then the `committed` hook
+  only on success (`refs.c:2759-2787`). Duplicate ref names in one transaction are rejected
+  (`refs.c:2709`, via `ref_update_reject_duplicates`).
+- Ref updates are refused while `GIT_QUARANTINE_PATH` is set (`refs.c:2702-2706`).
+- `REF_TRANSACTION_ALLOW_FAILURE` lets a backend reject individual updates (not generic
+  I/O errors) at prepare time and apply the rest (`refs.c:1276-1300`; used by non-atomic
+  receive-pack, `builtin/receive-pack.c:1924-1951`). Without the flag a single rejected
+  update fails the whole prepare.
+- An expected old value is verified against the state read *under the backend's lock*:
+  existing value, expected absence (null id) and expected symref target are distinguished,
+  with distinct error classes `CREATE_EXISTS`, `NONEXISTENT_REF` and
+  `INCORRECT_OLD_VALUE` (`refs/files-backend.c:2615-2666`). Git documents that on a
+  complete lock set with matching old values all modifications are performed, otherwise
+  none, but that a concurrent reader may see a subset
+  (`Documentation/git-update-ref.adoc:158-163`). Git's own list of files-backend
+  disadvantages says the same (`Documentation/BreakingChanges.adoc:146-149`).
+
+### 3.2 Files backend
+
+**Locking.** One `<ref>.lock` per updated ref, taken while preparing, with a wait of
+`core.filesRefLockTimeout` (100 ms default; `refs/files-backend.c:846-848`, `refs.c:992-1006`).
+`packed-refs.lock` is taken only if the transaction deletes refs, with
+`core.packedRefsTimeout` (1000 ms default; `refs/files-backend.c:3084-3090`,
+`refs/packed-backend.c:1236-1250`). No repository-wide lock exists
+(`refs/files-backend.c:3063-3076`). A symref update is split into a log-only update of the
+symref plus an update of the referent; an update of the branch `HEAD` points at also gets
+a `HEAD` reflog entry, guarded by a "HEAD has been racily updated" check that Git itself
+says is incomplete (`:2499-2613`, `:2735-2757`). Lock-file cleanup runs from `atexit` and
+signal handlers (`tempfile.c:66-118`); a killed process (for example `SIGKILL`) therefore
+leaves stale `*.lock` files, optionally with a `~pid.lock` sibling under
+`core.lockfilePid` (`lockfile.c:105-135`).
+
+**Prepare, all or nothing.** Prepare locks every ref, verifies old values under the lock,
+and writes each new value into its lock file (`refs/files-backend.c:3020-3061`,
+`:2857-2887`). Any failure releases all locks and changes no ref (`:3123-3132`,
+`:2911-2947`), except per-ref rejections under `ALLOW_FAILURE`. An update whose new value
+equals the current value writes nothing and gets no reflog entry (`:2857-2866`).
+
+**Commit order and partial application.** Finish performs, in this order
+(`refs/files-backend.c:3321-3475`):
+
+1. For every non-rejected update: append the reflog entry, then rename the lock file over
+   the ref (`:3347-3387`).
+2. For deletions: delete the reflog first (a ref without a log is "less bad" than a log
+   without a ref, per the code comment), ignoring unlink failures (`:3389-3412`).
+3. Commit the `packed-refs` transaction that removes the deleted refs, while still
+   holding its lock (`:3414-3427`).
+4. Unlink the loose files of deleted refs, then remove empty parent directories
+   (`:3429-3471`).
+
+An error at any step jumps to cleanup, so earlier steps stay applied; no rollback is
+attempted (`:3455-3456`). The gitoxide analogue documents the same property
+(`gix-ref/src/store/file/transaction/commit.rs:17`). Reachable partial states:
+some updates renamed and others not; a reflog entry recording a move the ref never made,
+because step 1 appends the reflog before the rename and a failed rename jumps to cleanup
+(`:3355-3381`; this includes the log-only `HEAD` entry); updates applied with deletions
+not applied; a packed entry deleted while the loose file remains (the deletion is then
+not visible: the loose file holds the pre-transaction value and takes precedence over any
+packed entry, and the reflog is already gone); stale lock files after a kill.
+
+**Name-conflict race.** The directory/file conflict check against `packed-refs` runs
+before `packed-refs` is locked, and Git states that it accepts the race
+(`refs/files-backend.c:3063-3080`), so a concurrent `packed-refs` writer can create a
+conflict that goes undetected.
+
+**Worktrees.** Per-worktree refs (`HEAD`, `refs/bisect/*`, `refs/worktree/*`,
+`refs/rewritten/*`) are routed to the worktree's git directory, `worktrees/<id>/...` to
+`<commondir>/worktrees/<id>/`, and shared refs to the common directory
+(`refs/files-backend.c:266-290`). A transaction spanning directories is still per-ref
+lock and rename, so it adds no new partial-state class. Both backends consult only the
+`HEAD` of the ref store's own git directory when deciding to write a `HEAD` reflog entry
+(`refs/files-backend.c:3004-3010`, `refs/reftable-backend.c:1104-1128`); a push to a
+branch checked out in a *linked* worktree is therefore inferred, not checked, to write no
+entry to that worktree's `HEAD` reflog.
+
+**Persistence.** The new loose value is flushed before the lock file closes only if
+`core.fsync` includes the `reference` component, which the default does not
+(`refs/files-backend.c:2058-2073`, `write-or-die.h:34-39`). `packed-refs` is flushed the
+same way (`refs/packed-backend.c:1570`). Reflog appends are `O_APPEND` writes with no flush
+(`refs/files-backend.c:1905-2056`). No directory flush follows any rename: a search for
+`fsync` in `lockfile.c`, `tempfile.c` and `refs/files-backend.c` finds exactly one call, the
+component-gated loose-ref flush at `refs/files-backend.c:2069`; the `packed-refs` call is in
+`refs/packed-backend.c:1570` (`rg -n fsync lockfile.c tempfile.c refs/files-backend.c`, ran
+at the pin). In the fork, `rg` finds no `fsync` or `sync_all` in `gix-ref`, `gix-lock` or
+`gix-tempfile` at `b592770fc` (ran by the reviewer).
+
+**Reader view and snapshots.** A loose ref read is one file read with a retry loop for
+file/directory/symlink races (`refs/files-backend.c:537-560`). Iteration reads all loose
+refs of the subtree before taking or refreshing the `packed-refs` snapshot, so a
+concurrent move of a loose ref into `packed-refs` is never missed (`:1080-1094`). The
+`packed-refs` file is read as a reference-counted snapshot (memory-mapped where the
+platform allows) that is revalidated against file status (`refs/packed-backend.c:22-120`,
+`:174-190`). There is no snapshot across loose refs: a reader racing a multi-ref commit
+can see some refs updated and others not. A single iteration is not a snapshot either:
+loose refs are primed into a cache before `packed-refs` is checked, so a loose ref changed
+mid-iteration is stale, but consistently so for that ref.
+
+**External writers.** Fork and Git writers interoperate only if they use the same lock
+file names and exclusive-create semantics, the same directory/file conflict handling
+(`raceproof_create_file`, `try_remove_empty_parents`; `refs/files-backend.c:1128-1200`,
+`:2925`), the same `packed-refs` protocol (lock, rewrite via tempfile, rename), and tolerate
+`~pid.lock` files.
+
+### 3.3 Reftable backend
+
+**Storage.** Tables live in `$GIT_DIR/reftable/`, ordered by `tables.list`. Every
+transaction is one new immutable table (refs and log records, one `update_index`) appended
+to the list (`Documentation/technical/reftable.adoc:884-960`). A repository selects the
+format with `extensions.refStorage = reftable` and `repositoryformatversion = 1`, and keeps
+dummy files (`HEAD` containing `ref: refs/heads/.invalid`, `refs/`, a regular file
+`refs/heads`) so older clients still recognize it (`:858-912`). SHA-256 repositories
+use table version 2 (`:235-252`). Linked worktrees have their own stack
+(`<commondir>/worktrees/<name>/reftable`); per-worktree refs (`HEAD`, `refs/bisect/*`
+and similar) go to that stack and everything else to the main stack
+(`refs/reftable-backend.c:185-317`).
+
+**Publication.** The single writer lock is `tables.list.lock`, waited on for
+`reftable.lockTimeout` (100 ms default; `refs/reftable-backend.c:347-353`, `:375`). A
+writer holding it reloads a stale in-memory view instead of failing, so old values are
+verified against the locked state (`reftable/stack.c:677-718`). It writes the new table
+and renames it to its final name, writes the new list to `tables.list.lock`, flushes that
+file, and renames it over `tables.list` (`reftable/stack.c:775-813`, `:952`); that rename
+is the publication point. The flush is gated like refs: the library's `fsync` is redefined
+to `fsync_component(REFERENCE)` (`reftable/reftable-system.h:16`, `reftable/system.c:137-139`),
+so the default `core.fsync` skips it. No directory flush follows.
+
+**Atomicity.** Within one stack a transaction is atomic against kill and against
+readers: it either appears in `tables.list` or not. A transaction touching more than one
+stack (main plus a worktree stack) commits one stack at a time
+(`refs/reftable-backend.c:1673-1684`), so a failure on the second stack leaves the first
+published. Validation failures reject the whole transaction before publication
+(`refs/reftable-backend.c:1340-1415`), except per-ref rejections under `ALLOW_FAILURE`.
+
+**Reported failure after publication.** After the rename, commit reloads the stack and
+runs auto-compaction (`reftable/stack.c:823-843`). A reload error or a compaction error
+other than lock contention or an outdated stack returns failure although the refs are
+already published, so the backend reports `transaction failure`
+(`refs/reftable-backend.c:1681-1695`) and the `committed` hook is skipped
+(`refs.c:2784`). Git itself can therefore report a committed reftable transaction as
+failed; the fork must treat that class as uncertain, never as rolled back.
+
+**Readers.** A reader opens `tables.list`, opens every table it lists, and restarts if a
+table is missing (`reftable.adoc:915-925`). The implementation
+(`reftable_stack_reload_maybe_reuse`, `reftable/stack.c:369-440`) retries only when a
+listed table is missing **and** `tables.list` changed between the read and a re-read
+(`:410-426`); with growing random sleeps, and the 3-second deadline is consulted only after
+three attempts (`:384-386`, `:433-434`). If the list is unchanged and a table is
+missing, the load fails immediately with a not-exist error: corruption, not a race.
+Up-to-date detection compares the device and inode of `tables.list`, which assumes writers
+always replace the file by rename (`reftable/stack.c:576-604`). The fork must never rewrite
+`tables.list` in place.
+
+Per-operation snapshot behavior (`refs/reftable-backend.c`): single-ref and symref reads
+reload the stack on every call (`:895`, `:921`, reload at `:292-293`); a ref iterator
+reloads once at start and then iterates over the tables it opened, a consistent snapshot
+for that iteration (`:828`); reflog iteration does **not** reload, which Git marks as a TODO
+(`:2209-2212`, `:2260-2263`), so reflog reads can be stale relative to refs; and prepare
+reads the `HEAD` stack without reload or lock when the transaction does not touch it, which
+Git calls "dubious" (`:1357-1367`). That an open iterator survives a concurrent
+compaction's unlink on POSIX, and fails to delete on Windows leaving it to the cleanup pass
+(`reftable/stack.c:1787-1863`), is inferred, not checked.
+
+**Compaction.** Auto-compaction runs after every commit unless disabled, keeps table sizes
+in a geometric sequence (factor `reftable.geometricFactor`) and ignores lock or
+outdated-stack contention (`reftable/stack.c:828-843`, `:1550-1650`). The explicit maintenance entry point is
+`refs/reftable-backend.c:1699-1730`: `auto` runs the same segment logic, otherwise it
+compacts everything, then cleans obsolete tables, which is the hook for native maintenance.
+The compactor takes `tables.list.lock`, locks each table in its range with a zero-wait
+lock, **releases** `tables.list.lock` while it merges, then re-acquires it, verifies the
+range is unchanged and publishes the result (`reftable/stack.c:1166-1520`;
+`reftable.adoc:960-1000`). Obsolete tables are deleted afterwards or by a cleanup pass
+(`stack.c:1818-1863`). A fork compactor that held `tables.list.lock` throughout would stay
+safe but could starve Git writers past their 100 ms wait.
+
+**Reflogs and deletions.** Refs and log records of one transaction are written into the same
+table and published by one rename, so a ref and its reflog entry are atomic together,
+unlike the files backend (`refs/reftable-backend.c:1463-1660`). Log records carry the update
+index of their transaction. Deleting a ref writes a deletion record plus a log tombstone
+for every existing log entry of that ref, in the same table, "to match the files backend"
+(`:1505-1545`); reflog expiry writes a new table of tombstones and existence dummies
+through a normal addition, followed by auto-compaction (`:2575-2735`); tombstones are
+dropped only by a compaction that includes the bottom of the stack (`reftable.adoc:958-1000`).
+Updating the branch `HEAD` points at enqueues a log-only `HEAD` update; if `HEAD` itself is
+also in the transaction it fails as a name conflict (`refs/reftable-backend.c:1104-1128`).
+Whether a reflog is created follows `core.logAllRefUpdates` through the same rule in both
+backends: unset means off in bare and on in non-bare repositories
+(`refs/reftable-backend.c:1443-1461`, `refs.c:1062-1076`).
+
+### 3.4 Durability comparison
+
+| Component | Files backend | Reftable backend | Flushed by default? |
+| --- | --- | --- | --- |
+| New ref value | Lock file contents, before rename | New table file, before it is listed | No; `reference` is outside the default `core.fsync` set (`write-or-die.h:34-39`) |
+| Ref publication | Rename of lock file; no directory flush | Rename of `tables.list.lock`; no directory flush | No |
+| Reflog | Append, never flushed | Part of the table; flushed only as above | No |
+| `packed-refs` / list file | Tempfile flushed if `reference` enabled, then renamed | `tables.list.lock` flushed if `reference` enabled, then renamed | No |
+| Objects from a push | Barrier flush of a scratch file before migration, unconditional (`object-file.c:1259-1294`); packs and derived metadata flushed by default; the default component set excludes loose objects, but pushes under the unpack limit run `unpack-objects`, which starts its own object transaction inside the quarantine (`builtin/unpack-objects.c:605`); that interaction is not checked | Same | Barrier yes; loose objects: unverified |
+
+The plan's statement that objects are flushed "no earlier or later" than `core.fsync`
+requires does not hold for receive-pack: the migration barrier is unconditional, and a
+fork receiver must match it.
+
+### 3.5 What differential tests must pin per backend
+
+| Failure class | Files backend expectation | Reftable expectation |
+| --- | --- | --- |
+| Stale lease, expected absence, lock conflict, validation failure | No ref changes, locks released; outcome known | No table published; outcome known |
+| Failure while writing lock files or table | Nothing visible; known | Nothing visible; known |
+| I/O failure between per-ref renames | Some refs updated, some not; a reflog entry may exist for a move the ref never made; uncertain | Not applicable within one stack |
+| Listed table missing while `tables.list` is unchanged | Not applicable | Hard error (corruption), not retried |
+| Reflog write failure | Aborts the commit after earlier refs were renamed | Not applicable (same table) |
+| I/O failure after the first stack of a multi-stack transaction | Not applicable | First stack published, second not; uncertain |
+| Failure after publication (reload or compaction) | Not applicable | Refs published but failure reported; uncertain |
+| Deletion interrupted | Reflog gone, packed entry gone, loose file possibly present | Tombstone published atomically |
+| Process kill | Stale `*.lock` files; partial multi-ref state | Possibly an orphan table file, cleaned later; no partial state |
+| Power loss | Depends on `core.fsync` and filesystem; refs and logs not flushed by default | Same dependence; unproven here |
+| Reader during commit | May see a subset of a multi-ref transaction | Sees all or none of a single-stack transaction |
+| `reference-transaction` hook | Extra nested `packed-refs` events on deletion; no outer `aborted` on prepare failure | Single transaction; prepare-failure events unchecked |
+
+Process kill and power loss remain separate models, as the plan states. No row of this
+table has been exercised; the cheapest discriminating probes are proposed in section 7.
+
