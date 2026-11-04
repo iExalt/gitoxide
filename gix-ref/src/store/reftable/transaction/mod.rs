@@ -532,19 +532,16 @@ fn write_tables(locked: &mut [Locked], items: &[Item], committer: Option<gix_act
         (None, true) => bail!(MissingCommitter.and_raise(message("Could not update reflog"))),
         (None, false) => None,
     };
-    let max_index = u64::try_from(items.len()).expect("fewer edits than fit into 64 bits");
     for (position, stack) in locked.iter_mut().enumerate() {
-        let mine: Vec<_> = items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.stack == position)
-            .collect();
+        let mine: Vec<_> = items.iter().filter(|item| item.stack == position).collect();
         stack.addition.add_table(|writer| {
+            // Like Git does, everything of a transaction has the one update index of the table. A name appears once in a
+            // transaction, and thus once per update index, so this doesn't make records indistinguishable.
             let first = writer.limits().0;
-            writer.set_limits(first, first + max_index)?;
+            writer.set_limits(first, first)?;
             let mut refs: Vec<_> = mine
                 .iter()
-                .filter_map(|(_, item)| item.planned.record.clone().map(|value| (item.local.clone(), value)))
+                .filter_map(|item| item.planned.record.clone().map(|value| (item.local.clone(), value)))
                 .collect();
             refs.sort_by(|a, b| a.0.cmp(&b.0));
             for (refname, value) in refs {
@@ -555,8 +552,7 @@ fn write_tables(locked: &mut [Locked], items: &[Item], committer: Option<gix_act
                 })?;
             }
             let mut logs = Vec::new();
-            for (index, item) in &mine {
-                let index = u64::try_from(*index).expect("fewer edits than fit into 64 bits");
+            for item in &mine {
                 match &item.planned.log {
                     plan::Log::None => {}
                     plan::Log::Delete(indices) => logs.extend(indices.iter().map(|update_index| LogRecord {
@@ -568,7 +564,7 @@ fn write_tables(locked: &mut [Locked], items: &[Item], committer: Option<gix_act
                         let who = committer.as_ref().expect("checked above");
                         logs.push(LogRecord {
                             refname: item.local.clone(),
-                            update_index: first + index,
+                            update_index: first,
                             value: LogValue::Update {
                                 old_hash: *old,
                                 new_hash: *new,
