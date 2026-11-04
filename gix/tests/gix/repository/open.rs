@@ -142,14 +142,23 @@ fn non_bare_reftable() -> TestResult {
         return Ok(());
     };
     let repo = gix::open_opts(root.join("reftable-clone"), gix::open::Options::isolated())?;
-    let err = repo.head_id().expect_err("reftable references are not supported");
-    assert!(err.is_unsupported(), "the reference backend requires changing strategy");
-    insta::assert_debug_snapshot!(err.probable_cause(), "accessing HEAD explains that the reference storage backend is unsupported", @r#"
-    Message {
-        message: "References are stored using the unsupported `reftable` backend",
-        class: Unsupported,
+    if cfg!(feature = "reftable") {
+        let expected = gix_testtools::git(root.join("reftable-clone"), "rev-parse HEAD")?;
+        assert_eq!(
+            repo.head_id()?.to_string(),
+            expected.trim(),
+            "reftables are read like Git does"
+        );
+    } else {
+        let err = repo.head_id().expect_err("reftable references are not supported");
+        assert!(err.is_unsupported(), "the reference backend requires changing strategy");
+        insta::assert_debug_snapshot!(err.probable_cause(), "accessing HEAD explains that the reference storage backend is unsupported", @r#"
+        Message {
+            message: "References are stored using the unsupported `reftable` backend",
+            class: Unsupported,
+        }
+        "#);
     }
-    "#);
     assert!(!repo.is_bare());
     assert_eq!(repo.kind(), gix::repository::Kind::Common);
     assert_ne!(

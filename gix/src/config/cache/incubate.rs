@@ -19,12 +19,23 @@ pub(crate) struct StageOne {
     pub is_bare: Option<bool>,
     pub lossy: bool,
     pub object_hash: gix_hash::Kind,
-    /// The reference storage backend that this build can't operate on, as selected by `extensions.refStorage`.
-    /// `None` if it is the supported `files` backend.
-    pub unsupported_ref_storage: Option<String>,
+    /// The reference storage backend as selected by `extensions.refStorage`.
+    pub ref_backend: RefBackend,
     pub reflog: Option<gix_ref::store::WriteReflog>,
     pub precompose_unicode: bool,
     pub protect_windows: bool,
+}
+
+/// The way references are stored, as far as this build can use it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RefBackend {
+    /// Loose references and `packed-refs`.
+    Files,
+    /// Reftables.
+    #[cfg(feature = "reftable")]
+    Reftable,
+    /// Storage that this build can't operate on, described as `extensions.refStorage` says.
+    Unsupported(String),
 }
 
 /// Initialization
@@ -62,9 +73,9 @@ impl StageOne {
             (FormatVersion::V0 | FormatVersion::V1, None) => legacy_object_hash()?,
         };
 
-        let unsupported_ref_storage = match (repo_format_version, config.string_implicit(Extensions::REF_STORAGE)) {
+        let ref_backend = match (repo_format_version, config.string_implicit(Extensions::REF_STORAGE)) {
             // refStorage is a repository format version 1 extension.
-            (FormatVersion::V1, Some(Some(format))) => Extensions::REF_STORAGE.try_into_unsupported_backend(format)?,
+            (FormatVersion::V1, Some(Some(format))) => Extensions::REF_STORAGE.try_into_ref_backend(format)?,
             (FormatVersion::V1, Some(None)) => {
                 bail!(validation("extensions.refStorage needs a value"));
             }
@@ -73,7 +84,7 @@ impl StageOne {
                     "extensions.refStorage is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it"
                 ));
             }
-            (FormatVersion::V0 | FormatVersion::V1, None) => None,
+            (FormatVersion::V0 | FormatVersion::V1, None) => RefBackend::Files,
         };
 
         // Relative links are resolved by discovery regardless of this compatibility marker.
@@ -120,7 +131,7 @@ impl StageOne {
             is_bare,
             lossy,
             object_hash,
-            unsupported_ref_storage,
+            ref_backend,
             reflog,
             precompose_unicode,
             protect_windows,

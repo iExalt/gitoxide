@@ -17,7 +17,7 @@ use crate::{
     bstr::BString,
     config,
     config::{
-        cache::{interpolate_context, util::ApplyLeniencyDefaultValue},
+        cache::{RefBackend, interpolate_context, util::ApplyLeniencyDefaultValue},
         tree::{Core, Key, Safe, gitoxide},
     },
     open::Permissions,
@@ -285,8 +285,8 @@ impl ThreadSafeRepository {
             current_dir_ref.as_path()
         };
 
-        let unsupported_ref_storage = unsupported_ref_storage(env, repo_config.unsupported_ref_storage.clone())?;
-        let mut refs = {
+        let ref_backend = ref_backend(env, repo_config.ref_backend.clone())?;
+        let mut refs: gix_ref::Store = {
             let reflog = repo_config.reflog.unwrap_or(gix_ref::store::WriteReflog::Disable);
             let object_hash = repo_config.object_hash;
             let ref_store_init_opts = gix_ref::store::init::Options {
@@ -295,17 +295,35 @@ impl ThreadSafeRepository {
                 precompose_unicode: repo_config.precompose_unicode,
                 prohibit_windows_device_names: repo_config.protect_windows,
             };
-            match &common_dir {
-                Some(common_dir) => gix_ref::file::Store::for_linked_worktree_opts(
-                    git_dir.to_owned(),
-                    common_dir.into(),
-                    object_hash,
-                    ref_store_init_opts,
-                ),
-                None => gix_ref::file::Store::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
+            match ref_backend {
+                #[cfg(feature = "reftable")]
+                RefBackend::Reftable => match &common_dir {
+                    Some(common_dir) => gix_ref::reftable::Store::for_linked_worktree_opts(
+                        git_dir.to_owned(),
+                        common_dir.into(),
+                        object_hash,
+                        ref_store_init_opts,
+                    ),
+                    None => gix_ref::reftable::Store::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
+                }
+                .into(),
+                RefBackend::Files | RefBackend::Unsupported(_) => {
+                    let mut files = match &common_dir {
+                        Some(common_dir) => gix_ref::file::Store::for_linked_worktree_opts(
+                            git_dir.to_owned(),
+                            common_dir.into(),
+                            object_hash,
+                            ref_store_init_opts,
+                        ),
+                        None => gix_ref::file::Store::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
+                    };
+                    if let RefBackend::Unsupported(backend) = ref_backend {
+                        files.set_unsupported_backend(Some(backend));
+                    }
+                    files.into()
+                }
             }
         };
-        refs.set_unsupported_backend(unsupported_ref_storage);
         let head = gix_ref::StoreRef::from(&refs).find("HEAD").ok();
         let git_install_dir = crate::path::install_dir().ok();
         let home = gix_path::env::home_dir().and_then(|home| env.home.check_opt(home));
@@ -498,7 +516,7 @@ impl ThreadSafeRepository {
 
         // Trust promotion and trusted overrides are only available after configuration is resolved.
         let use_on_windows = cfg!(windows);
-        refs.prohibit_windows_device_names = gitoxide::Core::PROTECT_WINDOWS
+        let prohibit_windows_device_names = gitoxide::Core::PROTECT_WINDOWS
             .enrich_error(
                 config
                     .resolved
@@ -506,6 +524,9 @@ impl ThreadSafeRepository {
             )
             .with_lenient_default_value(lenient_config, Some(use_on_windows))?
             .unwrap_or(use_on_windows);
+        if let Some(files) = refs.as_file_mut() {
+            files.prohibit_windows_device_names = prohibit_windows_device_names;
+        }
 
         let index_path = match config
             .resolved
@@ -527,9 +548,14 @@ impl ThreadSafeRepository {
             worktree_dir = worktree_dir.map(|path| absolute_path(&path, current_dir)).transpose()?;
         }
 
-        refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
-        refs.fsync = config.fsync_options()?;
-        refs.namespace.clone_from(&config.refs_namespace);
+        refs.set_write_reflog(config::cache::util::reflog_or_default(
+            config.reflog,
+            worktree_dir.is_some(),
+        ));
+        if let Some(files) = refs.as_file_mut() {
+            files.fsync = config.fsync_options()?;
+        }
+        refs.set_namespace(config.refs_namespace.clone());
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
         if *git_dir_trust == gix_sec::Trust::Reduced && config.alloc_limit_bytes.is_none() {
@@ -598,7 +624,7 @@ impl ThreadSafeRepository {
                 .or_error()?,
             ),
             common_dir,
-            refs: refs.into(),
+            refs,
             work_tree: worktree_dir,
             index_path,
             config,
@@ -800,12 +826,13 @@ pub(crate) fn ref_backend_from_environment(
     key.try_into_unsupported_backend(value.as_str()).map(Some)
 }
 
-/// Combine the unsupported reference storage of the configuration with `GIT_REFERENCE_BACKEND`.
-///
-/// We don't follow an override towards `files`, as the configured backend may truly be in use, and refusing is safe.
-fn unsupported_ref_storage(
-    env: &crate::open::permissions::Environment,
-    from_config: Option<String>,
-) -> Result<Option<String>> {
-    Ok(ref_backend_from_environment(env)?.flatten().or(from_config))
+/// Combine the reference storage of the configuration with `GIT_REFERENCE_BACKEND`, which takes precedence in Git, including
+/// when it selects `files` for a repository that is configured to use something else.
+fn ref_backend(env: &crate::open::permissions::Environment, from_config: RefBackend) -> Result<RefBackend> {
+    use crate::config::tree::Extensions;
+    Ok(match ref_backend_from_environment(env)? {
+        None => from_config,
+        Some(None) => RefBackend::Files,
+        Some(Some(description)) => Extensions::REF_STORAGE.try_into_ref_backend(description.as_str())?,
+    })
 }
