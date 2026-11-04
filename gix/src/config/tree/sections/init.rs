@@ -13,6 +13,12 @@ impl Init {
         extensions::ObjectFormat::new_object_format("defaultObjectFormat", &config::Tree::INIT)
             .with_environment_override("GIT_DEFAULT_HASH")
             .with_deviation("Invalid values are an error, whereas `git` only warns about invalid configuration");
+    /// The `init.defaultRefFormat` key.
+    ///
+    /// Only `files` is supported, so that requesting `reftable` is refused when creating a repository.
+    pub const DEFAULT_REF_FORMAT: keys::Any = keys::Any::new("defaultRefFormat", &config::Tree::INIT)
+        .with_environment_override("GIT_DEFAULT_REF_FORMAT")
+        .with_deviation("Invalid values are an error, whereas `git` only warns about invalid configuration");
 }
 
 impl Section for Init {
@@ -21,6 +27,10 @@ impl Section for Init {
     }
 
     fn keys(&self) -> &[&dyn Key] {
-        &[&Self::DEFAULT_BRANCH, &Self::DEFAULT_OBJECT_FORMAT]
+        &[
+            &Self::DEFAULT_BRANCH,
+            &Self::DEFAULT_OBJECT_FORMAT,
+            &Self::DEFAULT_REF_FORMAT,
+        ]
     }
 }

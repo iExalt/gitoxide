@@ -156,6 +156,9 @@ impl PrepareFetch {
             Err(_) => false,
         };
 
+        // Refuse reference storage that can't be created, before anything is created.
+        crate::init::assure_ref_format_is_supported(&open_opts)?;
+
         // Clones adopt the remote's object format, so `init.defaultObjectFormat` doesn't apply.
         let mut repo =
             crate::ThreadSafeRepository::create_and_open(path, kind, create_opts, open_opts)?.to_thread_local();

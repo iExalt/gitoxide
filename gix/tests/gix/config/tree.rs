@@ -1235,6 +1235,32 @@ mod extensions {
     use gix_testtools::TestResult;
 
     #[test]
+    fn ref_storage_is_validated_like_git_but_only_files_works() {
+        for valid in [
+            "files",
+            "reftable",
+            "files://elsewhere",
+            "files://",
+            "reftable://elsewhere",
+        ] {
+            Extensions::REF_STORAGE
+                .validate(valid.into())
+                .unwrap_or_else(|err| panic!("{valid} is a known format: {err:?}"));
+        }
+        for invalid in ["", "Files", "REFTABLE", "bogus", "bogus://elsewhere", "://elsewhere"] {
+            let err = Extensions::REF_STORAGE
+                .validate(invalid.into())
+                .expect_err("Git only knows files and reftable, case-sensitively");
+            crate::config::key::assert_config_error(
+                &err,
+                "extensions.refStorage",
+                Some(invalid.as_bytes().into()),
+                Some("GIT_REFERENCE_BACKEND"),
+            );
+        }
+    }
+
+    #[test]
     fn object_format() -> TestResult {
         #[cfg(feature = "sha1")]
         {

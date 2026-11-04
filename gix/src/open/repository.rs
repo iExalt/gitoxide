@@ -774,14 +774,13 @@ fn check_safe_directories(
     }
 }
 
-/// Combine the unsupported reference storage of the configuration with `GIT_REFERENCE_BACKEND`, which Git lets override
-/// `extensions.refStorage`.
+/// Read `GIT_REFERENCE_BACKEND`, which Git lets override `extensions.refStorage`, if it is set and may be accessed.
 ///
-/// We don't follow an override towards `files`, as the configured backend may truly be in use, and refusing is safe.
-fn unsupported_ref_storage(
+/// Return `None` if it doesn't apply, and `Some(None)` if it selects the supported `files` storage, or `Some(Some(description))`
+/// of the unsupported storage it selects.
+pub(crate) fn ref_backend_from_environment(
     env: &crate::open::permissions::Environment,
-    from_config: Option<String>,
-) -> Result<Option<String>> {
+) -> Result<Option<Option<String>>> {
     use crate::config::tree::{Extensions, Key};
     let key = &Extensions::REF_STORAGE;
     let Some(value) = env
@@ -789,12 +788,22 @@ fn unsupported_ref_storage(
         .check_opt(key.the_environment_override())
         .and_then(std::env::var_os)
     else {
-        return Ok(from_config);
+        return Ok(None);
     };
     let value = value.into_string().map_err(|value| {
         message("GIT_REFERENCE_BACKEND is not valid unicode")
             .with("value", value.to_string_lossy().into_owned())
             .validation_error()
     })?;
-    Ok(key.try_into_unsupported_backend(value.as_str())?.or(from_config))
+    key.try_into_unsupported_backend(value.as_str()).map(Some)
+}
+
+/// Combine the unsupported reference storage of the configuration with `GIT_REFERENCE_BACKEND`.
+///
+/// We don't follow an override towards `files`, as the configured backend may truly be in use, and refusing is safe.
+fn unsupported_ref_storage(
+    env: &crate::open::permissions::Environment,
+    from_config: Option<String>,
+) -> Result<Option<String>> {
+    Ok(ref_backend_from_environment(env)?.flatten().or(from_config))
 }

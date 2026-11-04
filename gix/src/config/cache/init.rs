@@ -474,6 +474,15 @@ fn apply_environment_overrides(
             }][..],
         ),
         (
+            "init",
+            None,
+            git_prefix,
+            &[{
+                let key = &Init::DEFAULT_REF_FORMAT;
+                (env(key), key.name)
+            }][..],
+        ),
+        (
             "gitoxide",
             None,
             other,
