@@ -75,6 +75,9 @@ pub mod store {
         pub struct Options {
             /// How to write the ref-log.
             pub write_reflog: super::WriteReflog,
+            /// What to flush to disk, and how, as configured with `core.fsync` and `core.fsyncMethod`.
+            /// Only references are affected, reflogs are never flushed.
+            pub fsync: gix_fs::fsync::Options,
             /// The equivalent of `core.precomposeUnicode`.
             pub precompose_unicode: bool,
             /// If `true`, we will avoid reading from or writing to references that contains Windows device names

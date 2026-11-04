@@ -134,6 +134,7 @@ fn ref_store(git_dir: &Path, common_dir: &Path, hash: Kind) -> gix_ref::file::St
         write_reflog: gix_ref::store::WriteReflog::Disable,
         precompose_unicode: false,
         prohibit_windows_device_names: cfg!(windows),
+        ..Default::default()
     };
     if git_dir == common_dir {
         gix_ref::file::Store::at_opts(git_dir.to_owned(), hash, options)

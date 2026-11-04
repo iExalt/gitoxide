@@ -35,6 +35,9 @@ struct Edit {
 
 /// A transaction for editing packed references
 pub(crate) struct Transaction {
+    fsync: gix_fs::fsync::Options,
+    /// The number of lines written to the lock file while preparing, which is zero if all references were deleted.
+    num_written_lines: i32,
     buffer: Option<file::packed::SharedBufferSnapshot>,
     edits: Option<Vec<Edit>>,
     lock: Option<gix_lock::File>,

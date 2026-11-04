@@ -80,6 +80,38 @@ fn big_file_threshold() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn fsync_configuration_reaches_the_reference_store() -> TestResult {
+    use gix_fs::fsync::{Components, Method, Options};
+
+    let repo = repo("with-hasconfig");
+    assert_eq!(
+        repo.refs.as_file().expect("the files store").fsync,
+        Options::default(),
+        "Git's defaults apply without configuration"
+    );
+
+    let dir = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let reopened = gix::open_opts(
+        dir.join("with-hasconfig"),
+        gix::open::Options::isolated().config_overrides([
+            "core.fsync=reference,-pack",
+            "core.fsyncMethod=batch",
+            "core.fsyncObjectFiles=true",
+        ]),
+    )?;
+    assert_eq!(
+        reopened.refs.as_file().expect("the files store").fsync,
+        Options {
+            components: Components::COMMIT_GRAPH | Components::REFERENCE,
+            method: Method::Batch,
+            fsync_object_files: true,
+        },
+        "all three keys are applied, with `-pack` removing `pack-metadata` too, as names match by prefix"
+    );
+    Ok(())
+}
+
 #[cfg(feature = "index")]
 #[test]
 fn invalid_stat_boolean_is_validation_error() -> TestResult {
