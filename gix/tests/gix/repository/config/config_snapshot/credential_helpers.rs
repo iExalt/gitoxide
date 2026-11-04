@@ -312,3 +312,46 @@ fn core_askpass_interpolation_errors_are_not_ignored() -> TestResult {
     ");
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn exec_path_configuration_makes_helpers_that_are_only_there_findable_without_git() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let exec_dir = gix_testtools::tempfile::tempdir()?;
+    let helper = exec_dir.path().join("git-credential-only-in-exec-path");
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\ncase \"$1\" in get) echo username=helper; echo password=secret;; esac\n",
+    )?;
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
+
+    let identity = |overrides: Vec<String>| -> gix::Result<_> {
+        let repo = gix::open_opts(
+            remote::repo_path("empty-core-askpass"),
+            gix::open::Options::isolated().config_overrides(overrides),
+        )?;
+        let (mut cascade, action, mut prompt) = repo
+            .config_snapshot()
+            .credential_helpers("https://example.com/repo".try_into()?)?;
+        prompt.mode = gix_prompt::Mode::Disable;
+        Ok(cascade.invoke(action, prompt)?.map(|outcome| outcome.identity))
+    };
+
+    let helper_only = "credential.helper=only-in-exec-path".to_owned();
+    let err = identity(vec![helper_only.clone()]).expect_err("the helper isn't in PATH, and `git` isn't asked for it");
+    assert!(
+        err.is_unauthenticated(),
+        "a helper that can't be found fails like any helper, so no identity is available"
+    );
+
+    let identity = identity(vec![
+        helper_only,
+        format!("gitoxide.credentials.execPath={}", exec_dir.path().display()),
+    ])?
+    .expect("the helper provides an identity once its directory is configured");
+    assert_eq!(
+        (identity.username.as_str(), identity.password.as_str()),
+        ("helper", "secret")
+    );
+    Ok(())
+}
