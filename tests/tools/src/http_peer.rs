@@ -70,6 +70,13 @@ pub enum Fault {
         /// The time between sending chunks.
         interval: Duration,
     },
+    /// Send the response as it is, followed by `bytes` bytes of packet lines with four bytes of payload each, which it declares as part of its body, as fast as the client takes them.
+    ///
+    /// With enough of them, a client that doesn't read the response blocks the server rather than receiving all of it at once.
+    PaddedResponse {
+        /// The amount of bytes to add, which should be a multiple of eight to end with a complete packet line.
+        bytes: u64,
+    },
     /// Send the headers of a response, and then nothing until the peer is dropped.
     StallAfterHeaders,
     /// Receive the request headers, but never read its body and never respond, until the peer is dropped.
@@ -156,6 +163,8 @@ pub struct Request {
     pub body_len: usize,
     /// The status code of the response, or `0` if there was none.
     pub status: u16,
+    /// The body of the response of a request that was served by `git http-backend`, as it was before faults changed how it was sent.
+    pub response_body: Vec<u8>,
 }
 
 impl Request {
@@ -343,6 +352,7 @@ fn handle_request(
             connection,
             body_len: 0,
             status: 0,
+            response_body: Vec::new(),
         });
         requests.len() - 1
     };
@@ -511,6 +521,7 @@ fn handle_request(
     child.wait()?;
 
     let (headers, body) = split_cgi_output(&output);
+    shared.requests.lock()[index].response_body = body.to_vec();
     let mut status = 200;
     let mut extra = Vec::new();
     for header in headers {
@@ -545,6 +556,29 @@ fn handle_request(
                 stream.flush()?;
                 std::thread::sleep(interval);
             }
+            Ok(())
+        }
+        Fault::PaddedResponse { bytes } => {
+            shared.requests.lock()[index].status = status;
+            let mut head = format!(
+                "HTTP/1.1 {status} X\r\nConnection: close\r\nContent-Length: {}\r\n",
+                body.len() as u64 + bytes
+            );
+            for header in &extra {
+                head.push_str(header);
+                head.push_str("\r\n");
+            }
+            head.push_str("\r\n");
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(body)?;
+            let lines = b"0008abcd".repeat(8 * 1024);
+            let mut left = bytes;
+            while left > 0 {
+                let step = left.min(lines.len() as u64) as usize;
+                stream.write_all(&lines[..step])?;
+                left -= step as u64;
+            }
+            stream.flush()?;
             Ok(())
         }
         Fault::StallAfterHeaders => {
