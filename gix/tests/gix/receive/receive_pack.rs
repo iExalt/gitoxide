@@ -19,7 +19,20 @@ pub(super) struct Hook {
     /// Seconds to wait before doing anything.
     pub(super) sleep: f32,
     /// The file in the remote that it records to.
-    log: &'static str,
+    log: String,
+    /// The directory of the remote that it is installed in.
+    dir: &'static str,
+    /// The name of its file if that isn't the name of the event, as for hooks that configuration points to.
+    pub(super) file: Option<&'static str>,
+    mode: u32,
+    /// Kill itself with a signal instead of exiting.
+    signal: bool,
+    /// Lines to print on each output, to see what happens with more than a pipe holds.
+    noise: usize,
+    /// Don't read what is sent to it, and exit right away.
+    ignore_stdin: bool,
+    /// Say nothing, to compare hooks whose output is relayed in an order that depends on timing.
+    silent: bool,
 }
 
 impl Hook {
@@ -29,14 +42,21 @@ impl Hook {
             exit: 0,
             decline_ref: None,
             sleep: 0.0,
-            log: "hook.log",
+            log: "hook.log".into(),
+            dir: "hooks",
+            file: None,
+            mode: 0o755,
+            signal: false,
+            noise: 0,
+            ignore_stdin: false,
+            silent: false,
         }
     }
     /// A `reference-transaction` hook that records everything it sees to a file of its own, and says yes. The recording is
     /// compared in all pushes, so that the transactions of all scenarios are compared with those of Git.
     pub(super) fn recorder() -> Self {
         Hook {
-            log: "reftx.log",
+            log: "reftx.log".into(),
             ..Hook::new("reference-transaction")
         }
     }
@@ -53,20 +73,51 @@ impl Hook {
         self.sleep = seconds;
         self
     }
+    pub(super) fn in_dir(mut self, dir: &'static str) -> Self {
+        self.dir = dir;
+        self
+    }
+    /// Install it as `file`, with a recording of its own, so that the hooks of an event can run at the same time.
+    pub(super) fn named(mut self, file: &'static str) -> Self {
+        self.file = Some(file);
+        self.log = format!("hook-{file}.log");
+        self
+    }
+    pub(super) fn with_mode(mut self, mode: u32) -> Self {
+        self.mode = mode;
+        self
+    }
+    pub(super) fn killed(mut self) -> Self {
+        self.signal = true;
+        self
+    }
+    pub(super) fn noisy(mut self, lines: usize) -> Self {
+        self.noise = lines;
+        self
+    }
+    pub(super) fn silent(mut self) -> Self {
+        self.silent = true;
+        self
+    }
+    pub(super) fn ignoring_stdin(mut self) -> Self {
+        self.ignore_stdin = true;
+        self
+    }
 
     #[cfg(unix)]
     fn install(&self, remote: &Path) -> TestResult {
         use std::os::unix::fs::PermissionsExt;
-        let log = remote.join(self.log);
+        let log = remote.join(&self.log);
         let name = self.name;
-        let decline = match self.decline_ref {
+        let label = self.file.unwrap_or(name);
+        let decline: String = match self.decline_ref {
             Some(reference) => format!("[ \"$1\" = {reference} ] && exit {}\nexit 0", self.exit),
             None => format!("exit {}", self.exit),
         };
         let script = format!(
             r#"#!/bin/sh
 {{
-  echo "== {name} $*"
+  echo "== {label} $*"
   echo "cwd=$(pwd -P)"
   echo "GIT_DIR=${{GIT_DIR-unset}}"
   echo "GIT_PUSH_OPTION_COUNT=${{GIT_PUSH_OPTION_COUNT-unset}}"
@@ -74,7 +125,7 @@ impl Hook {
   while [ "$i" -lt "${{GIT_PUSH_OPTION_COUNT:-0}}" ]; do eval "echo GIT_PUSH_OPTION_$i=\$GIT_PUSH_OPTION_$i"; i=$((i+1)); done
   echo "quarantine=$([ -n "${{GIT_QUARANTINE_PATH-}}" ] && echo set || echo unset)"
   case "${{GIT_OBJECT_DIRECTORY-}}" in *tmp_objdir-incoming-*) echo object_dir=quarantine;; '') echo object_dir=unset;; *) echo object_dir=other;; esac
-  if [ "{name}" != update ]; then
+  if [ "{name}" != update ] && [ "{ignore_stdin}" != yes ]; then
     while read old new ref; do
       echo "stdin: $old $new $ref"
       case "$new" in *[!0]*) echo "visible: $(git cat-file -t "$new" 2>&1 | head -1)";; esac
@@ -82,19 +133,27 @@ impl Hook {
   fi
 }} >> "{log}"
 sleep {sleep}
-echo "{name} says hi"
-echo "{name} says it on the other output" >&2
-printf "{name} without a newline"
+[ "{silent}" = yes ] || {{
+echo "{label} says hi"
+echo "{label} says it on the other output" >&2
+}}
+i=0
+while [ "$i" -lt {noise} ]; do echo "{label} noise $i"; echo "{label} noise on the other output $i" >&2; i=$((i+1)); done
+[ "{silent}" = yes ] || printf "{label} without a newline"
 {decline}
 "#,
             log = log.display(),
             sleep = self.sleep,
+            noise = self.noise,
+            silent = if self.silent { "yes" } else { "no" },
+            ignore_stdin = if self.ignore_stdin { "yes" } else { "no" },
+            decline = if self.signal { "kill -KILL $$".into() } else { decline },
         );
-        let hooks = remote.join("hooks");
+        let hooks = remote.join(self.dir);
         std::fs::create_dir_all(&hooks)?;
-        let path = hooks.join(name);
+        let path = hooks.join(label);
         std::fs::write(&path, script)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(self.mode))?;
         Ok(())
     }
 
@@ -133,6 +192,9 @@ pub(super) struct Push {
     pub(super) hooks: Vec<Hook>,
     /// The push options to send, which the remote is told to accept with `receive.advertisePushOptions`.
     pub(super) options: Vec<&'static str>,
+    /// Don't install the recording `reference-transaction` hook, so that references are updated without an observer, as in
+    /// a repository that has no such hook.
+    pub(super) no_recorder: bool,
     pub(super) prepare: Option<fn(remote: &Path, client: &Path) -> TestResult>,
 }
 
@@ -267,7 +329,7 @@ impl World {
             hook.install(&dest)?;
         }
         #[cfg(unix)]
-        if !push.hooks.iter().any(|hook| hook.name == "reference-transaction") {
+        if !push.no_recorder && !push.hooks.iter().any(|hook| hook.name == "reference-transaction") {
             Hook::recorder().install(&dest)?;
         }
         if let Some(prepare) = push.prepare {
@@ -427,7 +489,14 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool, died: bool) -> TestResu
             // Git passes `.` where the fork passes the absolute path, and the quarantine's name is random.
             .replace("GIT_DIR=.\n", "GIT_DIR=<REMOTE>\n")
     };
-    let (hooks, reftx) = (recording("hook.log"), recording("reftx.log"));
+    // Hooks that run at the same time have recordings of their own, which are put together in the order of their names.
+    let mut recordings: Vec<_> = std::fs::read_dir(remote)?
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with("hook") && name.ends_with(".log"))
+        .collect();
+    recordings.sort();
+    let hooks: String = recordings.iter().map(|name| recording(name)).collect();
+    let reftx = recording("reftx.log");
     Ok(Result_ {
         died,
         reftx,
@@ -474,8 +543,20 @@ pub(super) fn assert_same(world: &World, label: &str, push: &Push) -> TestResult
 }
 
 /// Like [`assert_same()`], for the given reference formats, which is only worth varying if a push reaches the reference store.
+///
+/// Every push is compared twice: with a recording `reference-transaction` hook, which makes the receiver observe how references
+/// are updated, and without any hook, which is the path of repositories that have none and updates references without an
+/// observer. Pushes that bring hooks of their own are compared once.
 pub(super) fn assert_same_on(world: &World, label: &str, push: &Push, formats: &[&str]) -> TestResult {
-    compare_on(world, label, push, formats).map(drop)
+    compare_on(world, label, push, formats)?;
+    if push.hooks.is_empty() {
+        let bare = Push {
+            no_recorder: true,
+            ..push.clone()
+        };
+        compare_on(world, &format!("{label}-bare"), &bare, formats)?;
+    }
+    Ok(())
 }
 
 /// Like [`assert_same_on()`], and return what Git did for each of the `formats`.
@@ -1669,7 +1750,11 @@ mod effects {
         }
         let world = World::new()?;
         let format = "files";
-        let push = with_setup(push(commands), setup);
+        // Without hooks, as the phases of Git are compared with those of the receiver that has no observer to tell.
+        let push = Push {
+            no_recorder: true,
+            ..with_setup(push(commands), setup)
+        };
         let request_file = world.dir.path().join(format!("request-{label}"));
         std::fs::write(&request_file, world.request(format, &push)?)?;
 

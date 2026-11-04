@@ -182,9 +182,21 @@ impl<'r, 'h> Runner<'r, 'h> {
         });
         match outcome {
             Some(Ok(outcome)) => {
-                for hook in &outcome.hooks {
+                let resolved = gix_hook::Hooks::resolve(event, &self.dir, Some(&self.settings));
+                for (hook, resolved) in outcome.hooks.iter().zip(resolved.hooks()) {
                     if !hook.output.is_empty() {
                         messages.hook_output(hook.output.clone());
+                    }
+                    // Git says so for hooks that were killed, naming the program like it started it.
+                    if let Some(signal) = killed_by(hook.status) {
+                        let program = match &resolved.kind {
+                            gix_hook::Kind::Configured { command, .. } => command.clone(),
+                            gix_hook::Kind::File { path } => {
+                                let git_dir = self.repo.current_dir().join(self.repo.git_dir());
+                                path.strip_prefix(git_dir).unwrap_or(path).display().to_string()
+                            }
+                        };
+                        messages.hook_output(format!("error: {program} died of signal {signal}\n").into_bytes());
                     }
                 }
                 outcome.exit_code()
@@ -195,6 +207,19 @@ impl<'r, 'h> Runner<'r, 'h> {
             }
         }
     }
+}
+
+/// The signal that ended a hook, other than those that Git doesn't complain about as they are about an interrupt or about
+/// the end of what is read.
+#[cfg(unix)]
+fn killed_by(status: Option<std::process::ExitStatus>) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status?.signal().filter(|signal| ![2, 3, 13].contains(signal))
+}
+
+#[cfg(not(unix))]
+fn killed_by(_status: Option<std::process::ExitStatus>) -> Option<i32> {
+    None
 }
 
 /// `<old> <new> <name>` of every command, one per line.
