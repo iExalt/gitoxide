@@ -31,6 +31,7 @@ mod http_proxy;
 mod http_push;
 mod http_tls;
 mod interrupt;
+mod local_programs;
 mod pre_push;
 mod push_scenarios;
 mod ssh;
