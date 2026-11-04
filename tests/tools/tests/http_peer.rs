@@ -363,3 +363,45 @@ fn a_renamed_repository_is_followed_by_git_for_reading_and_pushing() -> TestResu
     );
     Ok(())
 }
+
+#[test]
+fn keep_alive_serves_several_requests_per_connection_and_closes_idle_ones() -> TestResult {
+    use std::io::{Read, Write};
+    let setup = Setup::new("sha1")?;
+    let peer = HttpPeer::start(Config {
+        project_root: setup.root(),
+        keep_alive_idle: Some(std::time::Duration::from_millis(200)),
+        ..Default::default()
+    })?;
+    let mut stream = std::net::TcpStream::connect(peer.addr())?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let request = "GET /remote.git/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: peer\r\n\r\n";
+    for _ in 0..2 {
+        stream.write_all(request.as_bytes())?;
+        let mut head = [0; 12];
+        stream.read_exact(&mut head)?;
+        assert_eq!(
+            &head, b"HTTP/1.1 200",
+            "a second request is served on the same connection"
+        );
+        // Skip to the end of the response, which has a `Content-Length`, by reading what the peer has sent so far.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        stream.set_nonblocking(true)?;
+        let mut sink = [0; 65536];
+        while stream.read(&mut sink).is_ok_and(|read| read > 0) {}
+        stream.set_nonblocking(false)?;
+    }
+    assert_eq!(
+        peer.requests().iter().map(|req| req.connection).collect::<Vec<_>>(),
+        [0, 0],
+        "both requests were served by one connection"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let mut rest = Vec::new();
+    stream.read_to_end(&mut rest)?;
+    assert!(
+        rest.is_empty(),
+        "the peer closed the idle connection without sending anything"
+    );
+    Ok(())
+}
