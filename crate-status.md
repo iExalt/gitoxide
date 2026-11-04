@@ -676,7 +676,10 @@ A basic crate for comon error types and utilities, changed as needed to replace 
   - [x] built-in `git credential` program
   - [x] as scripts
   - [x] as absolute paths to programs with optional arguments
-  - [x] program name with optional arguments, transformed into `git credential-<name>`
+  - [x] program name with optional arguments, run as `git-credential-<name>` found in `GIT_EXEC_PATH`, `gitoxide.credentials.execPath` and `PATH`, without involving `git`
+  - [x] native `store` helper, interchangeable with `git credential-store` and tested against it
+  - [ ] `cache` helper, which can only be used as an external `git-credential-cache` program
+  - [ ] credential protocol extensions: `capability[]`, `authtype`, `credential`, `state[]`, `continue`
 * [x] `helper::main()` for easy custom credential helper programs written in Rust
 * [ ] (correctness/security) select helpers against rewritten or redirected URLs
   - If a remote URL is rewritten via [`url.<base>.insteadOf|pushInsteadOf`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-urlltbasegtinsteadOf), or an HTTP request is redirected to another host,

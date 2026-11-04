@@ -570,6 +570,14 @@ mod subsections {
         /// If `false`, will be suppressed completely.
         pub const HELPER_STDERR: keys::Boolean = keys::Boolean::new_boolean("helperStderr", &Gitoxide::CREDENTIALS)
             .with_environment_override("GIX_CREDENTIALS_HELPER_STDERR");
+
+        /// The `gitoxide.credentials.execPath` key, a directory in which to find credential helpers named like `git-credential-<name>`.
+        ///
+        /// Credential helpers are found without running `git`, in the directory of `GIT_EXEC_PATH` and then in `PATH`.
+        /// A helper that only exists in the compiled-in exec-path of a Git installation, like `osxkeychain` or `libsecret`
+        /// of some distributions, isn't found, and its directory can be provided here.
+        pub const EXEC_PATH: keys::Path = keys::Path::new_path("execPath", &Gitoxide::CREDENTIALS)
+            .with_note("This is a custom addition, as the exec-path of Git can only be obtained by running `git`.");
     }
 
     impl Section for Credentials {
@@ -578,7 +586,7 @@ mod subsections {
         }
 
         fn keys(&self) -> &[&dyn Key] {
-            &[&Self::TERMINAL_PROMPT, &Self::HELPER_STDERR]
+            &[&Self::TERMINAL_PROMPT, &Self::HELPER_STDERR, &Self::EXEC_PATH]
         }
 
         fn parent(&self) -> Option<&dyn Section> {
