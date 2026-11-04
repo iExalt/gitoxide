@@ -558,10 +558,12 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
     * [x] packfile negotiation
         * [x] delegate can support for all fetch features, including shallow, deepen, etc.
         * [x] receive parsed shallow refs
-* [ ] push
-    * [ ] send-pack / receive-pack client plumbing
-    * [ ] report-status, sideband, delete-refs, push-options and atomic pushes
-    * [ ] object-format negotiation
+* [ ] push, see `push::push()` and `gix_pack::data::output::missing`
+    * [x] send-pack / receive-pack client plumbing, with the blocking client only
+    * [x] report-status and report-status-v2, side-band, delete-refs, push-options and atomic pushes
+    * [x] object-format negotiation
+    * [ ] async client
+    * [ ] signed pushes and thin packs
 * [ ] upload-pack / receive-pack server plumbing for in-process transports
 * [ ] bundle-uri protocol integration
 * [ ] remote helper protocol and integration
