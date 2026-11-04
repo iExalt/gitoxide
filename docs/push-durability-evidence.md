@@ -135,5 +135,36 @@ happened to the files:
 * **Configuration**: `gix` passes `core.fsync`, `core.fsyncMethod` and `core.fsyncObjectFiles` to the object database when it
   opens a repository, which makes changing them require reopening it, and to the writer of fetched packs.
 
-`receive-pack` flushes a barrier file once before it moves quarantined objects into place. The fork has no receiver, so this
-is kept as the golden only.
+`receive-pack` flushes a barrier file once before it moves quarantined objects into place, and `gix::receive::Receiver`
+does the same. `gix/tests/gix/receive/receive_pack.rs` compares the phases of a whole push under `strace` with Git for the
+default and the `core.fsync=all` configurations, loose and kept: objects are flushed in the quarantine, a barrier makes them
+durable, they are moved into place, and only then are references locked, renamed and released. The comparison is of phases,
+because how the quarantine writes its files is what the tests of the stores above compare.
+
+## The fork's receiver
+
+`gix/tests/gix/receive/receive_pack.rs` runs the same pushes against Git 2.56 `receive-pack` and the receiver, for both hash
+kinds and both reference formats, with Git in the C locale, and compares the report, the messages sent on the side band,
+the references, the objects, what is left behind and the advertisement. The receiver differs on purpose in these ways,
+each pinned by a test:
+
+| Case | Git | The receiver |
+| --- | --- | --- |
+| Deleting a reference with a null old value, which a client that sends no old value does | Skips `receive.denyDeletes` and `receive.denyDeleteCurrent` | Applies them like any deletion |
+| An update whose old value is stale, through a symbolic reference | Reports `ok` for a reference that didn't change | Reports `ng … incorrect old value provided` |
+| Updating the branch `HEAD` points at without changing it | Appends to the `HEAD` reflog and locks `HEAD` | Does neither |
+| A request that `receive.autogc` would act on | Runs `git gc --auto` | Reports `Outcome::maintenance_due` and leaves it to the caller |
+| A reverse index next to a kept pack | Writes one | Writes none, see above |
+| An update that is rejected while it is queued, for the branch `HEAD` points at | Appends to the reflog of `HEAD` anyway | Doesn't |
+| Deleting or updating the current branch through a symbolic reference | Protects the name that is pushed to only, so `receive.denyDeleteCurrent` and `receive.denyCurrentBranch` are bypassed by an alias | Protects what the reference leads to as well, and refuses |
+| No identity is configured | Derives one from the machine | Uses the fixed identity `no name configured <noEmailAvailable@example.com>` for reflogs |
+
+The fixed identity differs on purpose from the rule of the reference store, that a missing committer fails the update. A
+receiver must not fail a push for lack of an identity, which servers often don't have, so it supplies one itself.
+Deleting a branch through a symbolic reference deletes both the reference and the branch in Git and in the receiver.
+
+It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
+unsupported: hooks, `updateInstead`, signed pushes, `proc-receive`, namespaces, shallow and partial repositories,
+`core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
+trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
+`worktreeConfig`, `noop` and `preciousObjects`.
