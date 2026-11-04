@@ -252,7 +252,7 @@ mod baseline {
         if let Some(entries) = repo.find_reference(name)?.log_iter().all()? {
             for entry in entries {
                 let entry = entry?;
-                values.push((entry.previous_oid(), entry.new_oid()));
+                values.push((entry.previous_oid, entry.new_oid));
             }
         }
         Ok(values)

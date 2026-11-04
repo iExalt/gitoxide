@@ -295,13 +295,13 @@ impl ThreadSafeRepository {
                 prohibit_windows_device_names: repo_config.protect_windows,
             };
             match &common_dir {
-                Some(common_dir) => crate::RefStore::for_linked_worktree_opts(
+                Some(common_dir) => gix_ref::file::Store::for_linked_worktree_opts(
                     git_dir.to_owned(),
                     common_dir.into(),
                     object_hash,
                     ref_store_init_opts,
                 ),
-                None => crate::RefStore::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
+                None => gix_ref::file::Store::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
             }
         };
         refs.set_unsupported_backend(unsupported_ref_storage);
@@ -596,7 +596,7 @@ impl ThreadSafeRepository {
                 .or_error()?,
             ),
             common_dir,
-            refs,
+            refs: refs.into(),
             work_tree: worktree_dir,
             index_path,
             config,

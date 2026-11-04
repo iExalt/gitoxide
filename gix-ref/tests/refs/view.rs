@@ -256,3 +256,75 @@ fn a_marked_store_is_refused_through_every_part_of_the_view() -> crate::Result {
     );
     Ok(())
 }
+
+mod owned_store {
+    use gix_ref::{Store, store::WriteReflog};
+
+    use crate::file::store_at;
+
+    #[test]
+    fn it_is_the_files_store_in_an_owned_neutral_wrapper() -> crate::Result {
+        let files = store_at("make_ref_repository.sh")?;
+        let mut store = Store::from(files.clone());
+        assert_eq!(store.git_dir(), files.git_dir());
+        assert_eq!(store.common_dir(), files.common_dir());
+        assert_eq!(store.object_hash(), files.object_hash());
+        assert_eq!(
+            store.as_ref().try_find("main")?,
+            files.try_find("main")?,
+            "the borrowed view reads what the wrapped store reads"
+        );
+        assert!(store.as_file().is_some(), "files are what this is");
+
+        assert_eq!(store.set_write_reflog(WriteReflog::Always), files.write_reflog);
+        assert_eq!(store.write_reflog(), WriteReflog::Always);
+
+        assert!(store.set_namespace(Some(gix_ref::namespace::expand("ns")?)).is_none());
+        assert_eq!(
+            store.namespace().map(|ns| ns.as_bstr().to_owned()),
+            Some("refs/namespaces/ns/".into())
+        );
+        assert!(
+            store.as_ref().try_find("main")?.is_none(),
+            "the namespace limits what is found, like it does for the files store"
+        );
+        assert!(
+            store.set_namespace(None).is_some(),
+            "the previous namespace is returned"
+        );
+        assert!(store.as_ref().try_find("main")?.is_some());
+
+        store.set_unsupported_backend(Some("reftable".into()));
+        assert_eq!(store.unsupported_backend(), Some("reftable"));
+        assert!(
+            store.as_ref().try_find("main").is_err(),
+            "the mark applies to the view of the owned store"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_locations_keeps_everything_but_the_places() -> crate::Result {
+        let files = store_at("make_ref_repository.sh")?;
+        let mut store = Store::from(files.clone());
+        store.set_write_reflog(WriteReflog::Disable);
+        store.set_namespace(Some(gix_ref::namespace::expand("ns")?));
+        store.set_unsupported_backend(Some("reftable".into()));
+
+        let moved = store.with_locations(files.git_dir().to_owned(), None);
+        assert_eq!(moved.git_dir(), files.git_dir());
+        assert_eq!(
+            moved.as_file().expect("files").precompose_unicode,
+            files.precompose_unicode,
+            "options of the files store are retained"
+        );
+        assert_eq!(moved.write_reflog(), WriteReflog::Disable);
+        assert_eq!(moved.namespace(), store.namespace());
+        assert_eq!(moved.unsupported_backend(), Some("reftable"));
+
+        let linked = store.with_locations("linked".into(), Some("main".into()));
+        assert_eq!(linked.git_dir(), std::path::Path::new("linked"));
+        assert_eq!(linked.common_dir(), Some(std::path::Path::new("main")));
+        Ok(())
+    }
+}

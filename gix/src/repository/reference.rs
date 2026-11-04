@@ -47,12 +47,12 @@ impl crate::Repository {
     ///
     /// Namespaces allow to partition references.
     pub fn namespace(&self) -> Option<&gix_ref::Namespace> {
-        self.refs.namespace.as_ref()
+        self.refs.namespace()
     }
 
     /// Remove the currently set reference namespace and return it.
     pub fn clear_namespace(&mut self) -> Option<gix_ref::Namespace> {
-        self.refs.namespace.take()
+        self.refs.set_namespace(None)
     }
 
     /// Set the reference namespace to the given value, like `"foo"` or `"foo/bar"`.
@@ -62,7 +62,7 @@ impl crate::Repository {
         gix_validate::reference::name::Error: From<E>,
     {
         let namespace = gix_ref::namespace::expand(namespace).or_error()?;
-        Ok(self.refs.namespace.replace(namespace))
+        Ok(self.refs.set_namespace(Some(namespace)))
     }
 
     // TODO: more tests or usage

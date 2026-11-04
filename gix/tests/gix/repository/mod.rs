@@ -178,7 +178,7 @@ mod index {
             "not pristine as it things the initial ref was changed to 'main'"
         );
         assert_eq!(
-            repo.refs.is_pristine("refs/heads/main".try_into()?),
+            repo.ref_store().is_pristine("refs/heads/main".try_into()?),
             Some(true),
             "This is a quirk of default values in gix and the way we override the initial branch for test fixtures"
         );
