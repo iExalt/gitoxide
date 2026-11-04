@@ -2410,6 +2410,8 @@ dependencies = [
  "gix-macros",
  "gix-negotiate",
  "gix-object",
+ "gix-odb",
+ "gix-pack",
  "gix-packetline",
  "gix-protocol",
  "gix-ref",
