@@ -1,7 +1,7 @@
 use super::Cache;
 
 mod incubate;
-pub(crate) use incubate::StageOne;
+pub(crate) use incubate::{RefBackend, StageOne};
 
 mod init;
 pub(crate) use init::{load, source_path};
