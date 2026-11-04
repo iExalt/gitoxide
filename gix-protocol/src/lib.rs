@@ -39,6 +39,8 @@ pub mod command;
 
 pub mod push;
 
+pub mod receive;
+
 /// Attribute macros and mode flags for sharing async-shaped implementations between client modes.
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub mod bisync {
