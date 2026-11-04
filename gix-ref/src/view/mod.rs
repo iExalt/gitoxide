@@ -23,6 +23,13 @@ pub use snapshot::Snapshot;
 pub mod transaction;
 pub use transaction::Transaction;
 
+/// The error that [`StoreRef::find()`], [`StoreRef::find_resolved()`] and the lookups of a [`Snapshot`] raise for a
+/// reference that doesn't exist, which includes a missing referent of a symbolic reference.
+///
+/// Every kind of storage raises it, so that callers can recover from a missing reference, and learn its name, without
+/// knowing how references are stored. It is also classified as [`NotFound`](gix_error::Class::NotFound).
+pub use crate::file::find::NotFound;
+
 /// The kind of storage that backs a [`StoreRef`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
