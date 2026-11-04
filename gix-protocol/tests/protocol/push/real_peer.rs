@@ -231,6 +231,36 @@ fn without_side_band_the_server_finishes_its_hooks_before_push_returns() -> Test
 }
 
 #[test]
+fn a_server_that_was_sent_an_incomplete_pack_ends_when_it_is_waited_for() -> TestResult {
+    use gix_transport::client::TransportWithoutIO;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for f in fixtures()?.into_iter().take(1) {
+        let kind = f.kind;
+        let (one, two) = (rev(&f.source, "victim")?, rev(&f.source, "main")?);
+        let before = refs(&f.remote)?;
+        let (mut transport, handshake) = connect(&f.remote)?;
+        let request = Request::new(
+            vec![Command::new("refs/heads/main", two, one)?],
+            kind,
+            &ServerCapabilities::from_capabilities(&handshake.capabilities),
+            Options::default(),
+        )?;
+        // The server is told that a pack follows, and waits for it, which is what makes it hang around once we stop.
+        let err = push(&mut transport, &request, write_all(b"PACK".to_vec()), None, false)
+            .expect_err("a pack without trailing hash is refused locally");
+        assert_eq!(classes(&err), [Class::Validation], "{kind}: {err:#}");
+        assert!(
+            transport.wait_for_server(std::time::Duration::from_secs(60))?,
+            "{kind}: the server ends once its input is closed, and is waited for instead of killed"
+        );
+        assert_eq!(refs(&f.remote)?, before, "{kind}: nothing was applied");
+    }
+    Ok(())
+}
+
+#[test]
 fn the_remote_hanging_up_without_a_report_is_an_uncertain_outcome() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
