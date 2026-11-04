@@ -251,7 +251,7 @@ beyond existing subscriptions is approved.
 | --- | --- | --- | --- | --- |
 | 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | done: [assessment](push-architecture-assessment.md) delivered; owner decisions pending |
 | 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | ready |
-| 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks | None | None known | ready |
+| 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks; Git 2.56 config-defined hooks, parallel jobs and per-hook stdin producers | None | None known | done |
 
 Later threads (reftable, durability, local backend, network, receiver, maintenance,
 cutover) wait for the owner to accept thread 1 and agree their scope.
@@ -265,3 +265,9 @@ cutover) wait for the owner to accept thread 1 and agree their scope.
   and stopped for the owner's decisions listed in its section 10. It ran in about 17 minutes
   of wall-clock by the sandbox clock against a 5–8 hour allowance, and found one defect
   independent of this plan (the fork opens reftable repositories with the files store).
+- 2026-11-04: thread 3 (hook runner) is done as `gix-hook` plus `gix::Repository::hook()`. The overseer added Git 2.56
+  config-defined hooks, jobs and stdin producers to its scope. Two deliberate differences to Git are pinned by tests:
+  `GIT_DIR` is an absolute path where Git passes `.`, and no exec-path is prepended to `PATH`.
+  Callers still own `GIT_PREFIX`, `GIT_INDEX_FILE` and receive-side environment, and the `Side` for events such as
+  `reference-transaction` that run both locally and while receiving. Not covered: the Windows `.exe` suffix lookup,
+  warnings for invalid `hook.*` values, and byte-exact names and commands of configured hooks.
