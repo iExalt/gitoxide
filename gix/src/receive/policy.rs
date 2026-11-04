@@ -53,6 +53,8 @@ pub enum Level {
     Warning,
     /// The message is for whoever runs the receiver, and not sent to the pusher as Git doesn't either.
     Diagnostic,
+    /// What a hook said, as it said it.
+    Hook,
 }
 
 /// A message for the pusher that explains what happens, which Git sends on the side band.
@@ -60,8 +62,19 @@ pub enum Level {
 pub struct Message {
     /// How serious it is.
     pub level: Level,
-    /// What to tell.
-    pub text: String,
+    /// What to tell. Messages of hooks are what they printed, and others are a line without its end.
+    pub text: BString,
+}
+
+impl Message {
+    /// The bytes to send on the side band for people: lines of Git's own messages end with a newline, whereas what a hook
+    /// says is relayed as it came.
+    pub fn to_side_band_bytes(&self) -> Vec<u8> {
+        match self.level {
+            Level::Hook => self.text.to_vec(),
+            _ => format!("{self}\n").into_bytes(),
+        }
+    }
 }
 
 impl std::fmt::Display for Message {
@@ -69,6 +82,7 @@ impl std::fmt::Display for Message {
         let prefix = match self.level {
             Level::Error | Level::Diagnostic => "error",
             Level::Warning => "warning",
+            Level::Hook => return write!(f, "{}", self.text),
         };
         write!(f, "{prefix}: {}", self.text)
     }
@@ -82,19 +96,25 @@ impl Messages {
     fn error(&mut self, text: impl Into<String>) {
         self.0.push(Message {
             level: Level::Error,
-            text: text.into(),
+            text: text.into().into(),
         });
     }
-    fn diagnostic(&mut self, text: impl Into<String>) {
+    pub fn diagnostic(&mut self, text: impl Into<String>) {
         self.0.push(Message {
             level: Level::Diagnostic,
-            text: text.into(),
+            text: text.into().into(),
         });
     }
     fn warning(&mut self, text: impl Into<String>) {
         self.0.push(Message {
             level: Level::Warning,
-            text: text.into(),
+            text: text.into().into(),
+        });
+    }
+    pub fn hook_output(&mut self, output: Vec<u8>) {
+        self.0.push(Message {
+            level: Level::Hook,
+            text: output.into(),
         });
     }
 }
@@ -131,6 +151,8 @@ pub(super) trait World {
     fn checked_out(&self, name: &BStr) -> Option<CheckedOut>;
     /// The full name that `HEAD` leads to.
     fn head_name(&self) -> Option<BString>;
+    /// Run the `update` hook for `command` and return `true` if it declines it. What it says is added to `messages`.
+    fn update_hook(&self, command: &Command, messages: &mut Messages) -> bool;
     /// The name of the reference that `name` leads to if it is a symbolic reference, following all of them.
     fn alias_target(&self, name: &BStr) -> Option<BString>;
     /// Whether the object exists.
@@ -339,6 +361,11 @@ pub(super) fn check_update(
         }
     }
 
+    if world.update_hook(command, messages) {
+        messages.error(format!("hook declined to update {name}"));
+        return Err("hook declined");
+    }
+
     if !deleting {
         // Git finds this out when it queues the update.
         if let Some(reason) = world.invalid_new_value(name, &command.new_id) {
@@ -524,6 +551,10 @@ mod tests {
         existing_refs: Vec<&'static str>,
         ancestry: Option<Ancestry>,
         invalid: Vec<ObjectId>,
+        /// The references whose update hook declines.
+        declined_by_hook: Vec<&'static str>,
+        /// The references that the update hook was asked about, in order.
+        hook_asked: RefCell<Vec<String>>,
     }
 
     impl World for Fake {
@@ -535,6 +566,14 @@ mod tests {
         }
         fn head_name(&self) -> Option<BString> {
             self.head.map(Into::into)
+        }
+        fn update_hook(&self, command: &Command, messages: &mut Messages) -> bool {
+            self.hook_asked.borrow_mut().push(command.ref_name.to_string());
+            let declined = self.declined_by_hook.iter().any(|name| *name == command.ref_name);
+            if declined {
+                messages.hook_output(b"said by the hook\n".to_vec());
+            }
+            declined
         }
         fn alias_target(&self, name: &BStr) -> Option<BString> {
             self.aliases
@@ -618,6 +657,91 @@ mod tests {
     }
 
     #[test]
+    fn the_update_hook_decides_after_the_deny_rules_and_before_the_new_value_is_judged() {
+        let world = Fake {
+            declined_by_hook: vec!["refs/heads/a"],
+            invalid: vec![id(1)],
+            ancestry: Some(Ancestry::NotAncestor),
+            ..Fake::default()
+        };
+        let strict = Policy {
+            deny_non_fast_forwards: true,
+            ..policy()
+        };
+        let mut messages = Messages::default();
+        let mut non_ff = update("refs/heads/a");
+        non_ff.old_id = id(2);
+        assert_eq!(
+            check_update(&mut non_ff, &strict, &world, &mut messages),
+            Err("non-fast-forward"),
+            "the deny rules come first, so the hook isn't asked"
+        );
+        assert!(
+            world.hook_asked.borrow().is_empty(),
+            "the hook is not asked about what failed"
+        );
+
+        let mut messages = Messages::default();
+        assert_eq!(
+            check_update(&mut update("refs/heads/a"), &policy(), &world, &mut messages),
+            Err("hook declined"),
+            "a hook that declines wins over the judgement of the new value"
+        );
+        let texts: Vec<_> = messages.0.iter().map(|message| message.text.to_string()).collect();
+        assert_eq!(
+            texts,
+            ["said by the hook\n", "hook declined to update refs/heads/a"],
+            "what the hook said comes before the refusal"
+        );
+    }
+
+    #[test]
+    fn update_hooks_follow_the_phases_of_execution() {
+        let commands = || {
+            vec![
+                Command::new("refs/heads/create", null(), id(1)),
+                Command::new("refs/heads/delete", id(2), null()),
+            ]
+        };
+        let world = Fake::default();
+        let mut refs = FakeRefs::default();
+        execute(
+            &mut commands(),
+            false,
+            &policy(),
+            &world,
+            &mut refs,
+            &mut Messages::default(),
+        );
+        assert_eq!(
+            *world.hook_asked.borrow(),
+            ["refs/heads/delete", "refs/heads/create"],
+            "without atomicity, deletions are executed first and so are their hooks asked first"
+        );
+
+        let world = Fake {
+            declined_by_hook: vec!["refs/heads/create"],
+            ..Fake::default()
+        };
+        let mut cmds = commands();
+        cmds.reverse();
+        cmds.insert(0, Command::new("refs/heads/first", null(), id(3)));
+        execute(
+            &mut cmds,
+            true,
+            &policy(),
+            &world,
+            &mut FakeRefs::default(),
+            &mut Messages::default(),
+        );
+        assert_eq!(
+            *world.hook_asked.borrow(),
+            ["refs/heads/first", "refs/heads/delete", "refs/heads/create"],
+            "atomic pushes ask in the order of commands, and stop at the first that fails, so what follows isn't asked"
+        );
+    }
+
+    #[test]
     fn the_current_branch_is_protected_through_a_symbolic_reference_too() {
         let world = Fake {
             checked_out: vec![("refs/heads/main", false)],
@@ -676,7 +800,7 @@ mod tests {
             messages
                 .0
                 .iter()
-                .filter(|message| message.text.starts_with("By default"))
+                .filter(|message| message.text.starts_with(b"By default"))
                 .count(),
             1,
             "only an unconfigured setting explains how to configure it"

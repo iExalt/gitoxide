@@ -82,7 +82,7 @@ fn what_is_configured_but_supported_is_accepted() -> TestResult {
 
 #[cfg(unix)]
 #[test]
-fn hooks_are_refused_and_only_those_that_exist() -> TestResult {
+fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResult {
     use std::os::unix::fs::PermissionsExt;
     let (dir, _repo) = bare()?;
     std::fs::create_dir_all(dir.path().join("hooks"))?;
@@ -93,14 +93,17 @@ fn hooks_are_refused_and_only_those_that_exist() -> TestResult {
         .receive()
         .expect("a hook that can't run is no hook");
 
-    for event in [
-        "pre-receive",
-        "update",
-        "post-receive",
-        "post-update",
-        "push-to-checkout",
-        "reference-transaction",
-    ] {
+    // These run, and so are no reason to refuse.
+    for event in ["pre-receive", "update", "post-receive", "post-update"] {
+        let hook = dir.path().join("hooks").join(event);
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        open(dir.path(), &[])?
+            .receive()
+            .unwrap_or_else(|err| panic!("the {event} hook can be run: {err}"));
+        std::fs::remove_file(hook)?;
+    }
+    for event in ["push-to-checkout", "reference-transaction"] {
         let hook = dir.path().join("hooks").join(event);
         std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;

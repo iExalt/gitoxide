@@ -1,0 +1,216 @@
+//! Run the hooks of a receiver the way `receive-pack` does: `pre-receive` and `update` while the push is judged, and
+//! `post-receive` and `post-update` after the report was sent.
+use std::{cell::RefCell, ffi::OsString, sync::Arc, time::Duration};
+
+use gix_error::{Result, ResultExt, message};
+use gix_hook::{Stderr, Stdin, Stdout};
+use gix_object::bstr::{BString, ByteSlice};
+
+use super::policy::{Command, Messages};
+use crate::Repository;
+
+/// What a hook is told to do while it runs, which a receiver has to answer to even if the hook says nothing.
+pub(super) type Heartbeat<'h> = &'h mut (dyn FnMut() + 'h);
+
+/// Runs the hooks of one push.
+pub(super) struct Runner<'r, 'h> {
+    repo: &'r Repository,
+    settings: gix_hook::Settings,
+    dir: std::path::PathBuf,
+    /// Called every so often while a hook runs, if there is somebody who wants to know that it's still running.
+    heartbeat: Option<(Duration, RefCell<Heartbeat<'h>>)>,
+    push_options: &'r [BString],
+}
+
+impl<'r, 'h> Runner<'r, 'h> {
+    pub fn new(
+        repo: &'r Repository,
+        push_options: &'r [BString],
+        heartbeat: Option<(Duration, Heartbeat<'h>)>,
+    ) -> Result<Self> {
+        let settings = gix_hook::Settings::from_config(&repo.config.resolved, &mut repo.filter_config_section())
+            .or_raise(|| message("Failed to read hook configuration"))?;
+        let dir = repo
+            .hooks_dir(gix_hook::Side::Receive)
+            .or_raise(|| message("Could not find out where hooks are"))?;
+        Ok(Runner {
+            repo,
+            settings,
+            dir,
+            heartbeat: heartbeat.map(|(interval, beat)| (interval, RefCell::new(beat))),
+            push_options,
+        })
+    }
+
+    /// Whether there is a hook for `event` that can be run.
+    pub fn exists(&self, event: &str) -> bool {
+        !gix_hook::Hooks::resolve(event, &self.dir, Some(&self.settings)).is_empty()
+    }
+
+    /// `pre-receive`: it gets all commands, whether they failed already or not, and the objects of the push if there are any.
+    /// Return `true` if the push is declined.
+    pub fn pre_receive(
+        &self,
+        commands: &[Command],
+        quarantine: Option<&gix_odb::quarantine::Quarantine>,
+        messages: &mut Messages,
+    ) -> bool {
+        if !self.exists("pre-receive") {
+            return false;
+        }
+        let Some(mut env) = self.push_option_env(messages) else {
+            return true;
+        };
+        if let Some(quarantine) = quarantine {
+            let inherited = std::env::var_os("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+            env.extend(quarantine.environment(inherited.as_deref()));
+        }
+        self.run("pre-receive", Vec::new(), env, command_lines(commands.iter()), messages) != 0
+    }
+
+    /// `update`, which is asked about every command that is about to be executed. Return `true` if it declines it.
+    pub fn update(&self, command: &Command, messages: &mut Messages) -> bool {
+        if !self.exists("update") {
+            return false;
+        }
+        let Some(name) = name_arg(&command.ref_name) else {
+            messages.diagnostic("the name of a reference can't be passed to the hook");
+            return true;
+        };
+        let args = vec![
+            name,
+            command.old_id.to_string().into(),
+            command.new_id.to_string().into(),
+        ];
+        self.run("update", args, Vec::new(), Vec::new(), messages) != 0
+    }
+
+    /// `post-receive` and `post-update`, which can't change what happened, so their exit codes are ignored.
+    pub fn post(&self, commands: &[Command], messages: &mut Messages) {
+        let mut valid = commands
+            .iter()
+            .filter(|command| command.error.is_none() && !command.did_not_exist)
+            .peekable();
+        if valid.peek().is_none() {
+            return;
+        }
+        if self.exists("post-receive")
+            && let Some(env) = self.push_option_env(messages)
+        {
+            self.run(
+                "post-receive",
+                Vec::new(),
+                env,
+                command_lines(commands.iter().filter(|c| c.error.is_none() && !c.did_not_exist)),
+                messages,
+            );
+        }
+        if self.exists("post-update") {
+            let args: Option<Vec<_>> = valid.map(|command| name_arg(&command.ref_name)).collect();
+            let Some(args) = args else {
+                messages.diagnostic("the name of a reference can't be passed to the hook");
+                return;
+            };
+            self.run("post-update", args, Vec::new(), Vec::new(), messages);
+        }
+    }
+
+    /// The variables for push options, or `None` if one of them can't be passed on, which declines the push.
+    fn push_option_env(&self, messages: &mut Messages) -> Option<Vec<(OsString, OsString)>> {
+        // Git sets the count even if there are no options.
+        let mut env = Vec::with_capacity(self.push_options.len() + 1);
+        for (index, option) in self.push_options.iter().enumerate() {
+            let Ok(value) = gix_path::from_bstr(option.as_bstr()) else {
+                messages.diagnostic("a push option can't be passed to the hook");
+                return None;
+            };
+            env.push((
+                format!("GIT_PUSH_OPTION_{index}").into(),
+                value.into_owned().into_os_string(),
+            ));
+        }
+        env.push((
+            "GIT_PUSH_OPTION_COUNT".into(),
+            self.push_options.len().to_string().into(),
+        ));
+        Some(env)
+    }
+
+    /// Run the hooks of `event` and return the exit code that Git would see, after relaying what they say.
+    fn run(
+        &self,
+        event: &str,
+        args: Vec<OsString>,
+        env: Vec<(OsString, OsString)>,
+        stdin: Vec<u8>,
+        messages: &mut Messages,
+    ) -> i32 {
+        let Ok(mut prepare) = self.repo.hook(event) else {
+            messages.diagnostic(format!("cannot run the '{event}' hook"));
+            return 1;
+        };
+        prepare = prepare
+            .args(args)
+            .stdin(Stdin::Feed(Arc::new(move |writer| writer.write_all(&stdin))))
+            .stdout(Stdout::ToStderr)
+            .stderr(Stderr::Capture);
+        for (key, value) in env {
+            prepare = prepare.env(key, value);
+        }
+        let outcome = std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                sender.send(prepare.run()).ok();
+            });
+            loop {
+                let received = match &self.heartbeat {
+                    Some((interval, _)) => receiver.recv_timeout(*interval),
+                    None => receiver
+                        .recv()
+                        .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+                };
+                match received {
+                    Ok(outcome) => break Some(outcome),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if let Some((_, beat)) = &self.heartbeat {
+                            (beat.borrow_mut())();
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break None,
+                }
+            }
+        });
+        match outcome {
+            Some(Ok(outcome)) => {
+                for hook in &outcome.hooks {
+                    if !hook.output.is_empty() {
+                        messages.hook_output(hook.output.clone());
+                    }
+                }
+                outcome.exit_code()
+            }
+            Some(Err(_)) | None => {
+                messages.diagnostic(format!("cannot run the '{event}' hook"));
+                1
+            }
+        }
+    }
+}
+
+/// `<old> <new> <name>` of every command, one per line.
+fn command_lines<'a>(commands: impl Iterator<Item = &'a Command>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for command in commands {
+        out.extend_from_slice(format!("{} {} ", command.old_id, command.new_id).as_bytes());
+        out.extend_from_slice(&command.ref_name);
+        out.push(b'\n');
+    }
+    out
+}
+
+/// The name of a reference as argument of a hook, which can't be done if the platform can't represent it.
+fn name_arg(name: &BString) -> Option<OsString> {
+    gix_path::from_bstr(name.as_bstr())
+        .ok()
+        .map(|path| path.into_owned().into_os_string())
+}
