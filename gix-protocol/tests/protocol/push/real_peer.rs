@@ -183,6 +183,53 @@ fn a_stale_old_id_is_rejected_by_the_server_and_nothing_changes() -> TestResult 
     Ok(())
 }
 
+/// Install an executable `name` hook in `remote` that runs `script`.
+fn install_hook(remote: &Path, name: &str, script: &str) -> TestResult {
+    let hook = remote.join("hooks").join(name);
+    std::fs::create_dir_all(hook.parent().expect("a parent"))?;
+    std::fs::write(&hook, format!("#!/bin/sh\n{script}\n"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn without_side_band_the_server_finishes_its_hooks_before_push_returns() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    // The hash doesn't matter for what is tested here, so one is enough.
+    for f in fixtures()?.into_iter().take(1) {
+        let kind = f.kind;
+        let (one, two) = (rev(&f.source, "victim")?, rev(&f.source, "main")?);
+        // `post-receive` runs after the report was sent, and its working directory is the remote.
+        install_hook(&f.remote, "post-receive", "sleep 1\necho done >hook-finished")?;
+        let (mut transport, handshake) = connect(&f.remote)?;
+        let mut server = ServerCapabilities::from_capabilities(&handshake.capabilities);
+        server.side_band_64k = false;
+        let request = Request::new(
+            vec![Command::new("refs/heads/main", two, one)?],
+            kind,
+            &server,
+            Options::default(),
+        )?;
+        assert!(
+            !request.uses_side_band(),
+            "{kind}: the report is a plain sequence of packet lines"
+        );
+        let report = push(&mut transport, &request, write_all(empty_pack(&f.remote)?), None, false)?;
+        assert!(report.is_success(), "{kind}: {report:?}");
+        assert!(
+            f.remote.join("hook-finished").is_file(),
+            "{kind}: like `git push`, we wait for the server to finish, instead of killing it with the hooks it still runs when the transport is dropped"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn the_remote_hanging_up_without_a_report_is_an_uncertain_outcome() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {

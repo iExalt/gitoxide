@@ -50,6 +50,9 @@ macro_rules! collect_lines {
 /// incomplete pack that the server can't unpack, so nothing is applied. The transport has to be dropped
 /// by the caller then, as it can't be used for anything else.
 ///
+/// The function returns once the server ended its output after the report, which it does when it exits, so hooks like `post-receive`
+/// have finished by then, like with `git push`. Without that, dropping the transport can kill a local server while its hooks run.
+///
 /// `on_remote_message` receives the remote's messages as `(is_error, text)`, which is progress unless `is_error` is set.
 ///
 /// ## Progress
@@ -227,6 +230,22 @@ fn read_report<'a>(
         let lines = collect_lines!(reader.readline());
         if reader.stopped_at() != Some(MessageKind::Flush) && !lines.is_empty() {
             bail!(corruption("The status report ended without a flush packet"));
+        }
+        // Without side-band, the server sends the report before it runs hooks like `post-receive`, and ends the stream
+        // when it exits. Wait for that, as `git push` does, as dropping the transport may kill the server mid-hook.
+        // What follows the report isn't part of the outcome, so nothing is expected and anything unreadable is ignored.
+        loop {
+            let more = match reader.readline() {
+                Some(Ok(Ok(_))) => true,
+                Some(_) => false,
+                None => reader.stopped_at().is_some(),
+            };
+            if !more {
+                break;
+            }
+            if reader.stopped_at().is_some() {
+                reader.reset(gix_transport::Protocol::V1);
+            }
         }
         Ok(lines)
     }
