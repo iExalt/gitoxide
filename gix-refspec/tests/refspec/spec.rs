@@ -144,8 +144,13 @@ mod expand_prefixes {
     }
 
     #[test]
-    fn patterns_without_a_useful_fixed_prefix_expand_to_nothing() {
-        assert_eq!(parse("refs/*/main:refs/*/main").len(), 0);
+    fn patterns_without_a_useful_fixed_prefix_expand_to_what_precedes_their_first_special_character() {
+        assert_eq!(
+            parse("refs/*/main:refs/*/main"),
+            ["refs/"],
+            "a server matches prefixes literally, so the wildcard must not be sent"
+        );
+        assert_eq!(parse("refs/*:refs/p/all/*"), ["refs/"]);
     }
 
     #[test]
