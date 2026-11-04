@@ -548,10 +548,11 @@ mod abbrev {
                     Ok(object_hash.len_in_hex().into())
                 } else {
                     let value = gix_config::Integer::from_bytes::<usize>(value_bytes).or_raise(invalid)?;
-                    if value < 4 || value > object_hash.len_in_hex() {
+                    if value < 4 {
                         return Err(invalid());
                     }
-                    Ok(Some(value))
+                    // Like Git, a length that is longer than a hash is the full hash.
+                    Ok(Some(value.min(object_hash.len_in_hex())))
                 }
             }
         }

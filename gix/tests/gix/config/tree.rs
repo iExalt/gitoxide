@@ -1136,7 +1136,14 @@ mod core {
                 "false values still disable abbreviation"
             );
         }
-        for invalid in ["foo", "-1", "3", "41", "1k", "9223372036854775807k"] {
+        for too_long in ["41", "65", "100", "1k"] {
+            assert_eq!(
+                Core::ABBREV.try_into_abbreviation(too_long, object_hash)?,
+                Some(object_hash.len_in_hex()),
+                "a length beyond that of a hash is the whole hash, like Git has it"
+            );
+        }
+        for invalid in ["foo", "-1", "3", "9223372036854775807k"] {
             assert!(Core::ABBREV.try_into_abbreviation(invalid, object_hash).is_err());
         }
         Ok(())
