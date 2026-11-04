@@ -23,6 +23,20 @@ fn credentials_rejected(err: std::io::Error, url: &bstr::BString) -> gix_error::
     err.and_raise(context)
 }
 
+/// Return `true` if credential helpers can help to authenticate with the remote at `url`.
+///
+/// That's not the case for `ssh://` and `git://`, and for local transports. `ssh` authenticates by itself with keys
+/// or by asking for passwords on its own terms, so nothing in a credential helper could change its refusal, and
+/// asking helpers for a password of the user would hand out secrets that were stored for other purposes.
+/// Transports with other schemes keep to the behaviour of HTTP, as they always did.
+fn transport_obtains_credentials_from_helpers(url: &bstr::BStr) -> bool {
+    use bstr::ByteSlice;
+    url.contains_str("://")
+        && !["ssh://", "git://", "file://"]
+            .iter()
+            .any(|scheme| url.starts_with_str(scheme))
+}
+
 /// Perform a handshake with the server on the other side of `transport`, with `authenticate` being used if authentication
 /// turns out to be required. `extra_parameters` are the parameters `(name, optional value)` to add to the handshake,
 /// each time it is performed in case authentication is required.
@@ -53,6 +67,7 @@ where
             .collect();
         let supported_versions: Vec<_> = transport.supported_protocol_versions().into();
 
+        let credentials_from_helpers = transport_obtains_credentials_from_helpers(transport.to_url().as_ref());
         let result = transport.handshake(service, &extra_parameters).await;
         let SetServiceResponse {
             actual_protocol,
@@ -60,7 +75,9 @@ where
             refs,
         } = match result {
             Ok(v) => Ok(v),
-            Err(client::Error::Io(ref err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(client::Error::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied && credentials_from_helpers =>
+            {
                 let www_authenticate = err
                     .get_ref()
                     .and_then(|err| err.downcast_ref::<client::AuthenticationRequired>())
@@ -150,6 +167,25 @@ mod tests {
     use bstr::BString;
     use gix_error::Class;
     use gix_transport::client::AuthenticationRequired;
+
+    #[test]
+    fn only_remotes_with_helper_based_authentication_use_credential_helpers() {
+        for (url, expected) in [
+            ("https://example.com/repo", true),
+            ("http://example.com/repo", true),
+            ("ssh://user@example.com/repo", false),
+            ("git://example.com/repo", false),
+            ("file:///repo", false),
+            ("user@example.com:repo", false),
+            ("/local/repo", false),
+        ] {
+            assert_eq!(
+                super::transport_obtains_credentials_from_helpers(url.into()),
+                expected,
+                "{url}"
+            );
+        }
+    }
 
     #[test]
     fn permission_denied_requires_a_typed_signal_to_classify_as_authentication() {
