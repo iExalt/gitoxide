@@ -130,6 +130,10 @@ impl crate::Repository {
         let repo = self.with_absolute_paths()?;
         // Refuse before registering anything, as the HEAD of the new worktree can't be created without references.
         repo.ref_store().assure_backend_supported()?;
+        #[cfg(feature = "reftable")]
+        let uses_reftable = repo.ref_store().kind() == gix_ref::view::Kind::Reftable;
+        #[cfg(not(feature = "reftable"))]
+        let uses_reftable = false;
         let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
             .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
@@ -244,6 +248,12 @@ impl crate::Repository {
         // can see the branch; detached HEADs start at null so their first update records initialization.
         let mut head_contents = Vec::new();
         let reflog_mode = match &head_target {
+            // Git leaves a placeholder that no older Git can mistake for a branch, and keeps the actual `HEAD` in the
+            // stack of the worktree.
+            _ if uses_reftable => {
+                head_contents.extend_from_slice(b"ref: refs/heads/.invalid");
+                RefLog::AndReference
+            }
             gix_ref::Target::Object(_) => {
                 repo.object_hash()
                     .null()
@@ -260,6 +270,10 @@ impl crate::Repository {
         head_contents.push(b'\n');
         std::fs::write(prepared.git_dir().join("HEAD"), head_contents)
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
+        if uses_reftable {
+            std::fs::create_dir(prepared.git_dir().join("reftable"))
+                .or_raise(|| message("Could not create the reftable stack of the linked worktree"))?;
+        }
 
         if Extensions::WORKTREE_CONFIG
             .enrich_error(repo.config.resolved.boolean(Extensions::WORKTREE_CONFIG))
@@ -281,17 +295,28 @@ impl crate::Repository {
             .or_raise(|| message("Could not open a worktree repository"))?
             .to_thread_local();
         repo.clear_namespace();
-        // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
-        repo.edit_reference(RefEdit::update_with_log(
-            "HEAD".try_into().expect("valid reference name"),
-            commit_id,
-            PreviousValue::Any,
-            LogChange {
-                mode: reflog_mode,
-                ..Default::default()
-            },
-        ))
-        .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
+        let head_edit = if uses_reftable {
+            // `HEAD` itself is a record of the stack of the worktree, which is created along with its first log entry.
+            RefEdit::update_with_log(
+                "HEAD".try_into().expect("valid reference name"),
+                head_target,
+                PreviousValue::Any,
+                LogChange::default(),
+            )
+        } else {
+            // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
+            RefEdit::update_with_log(
+                "HEAD".try_into().expect("valid reference name"),
+                commit_id,
+                PreviousValue::Any,
+                LogChange {
+                    mode: reflog_mode,
+                    ..Default::default()
+                },
+            )
+        };
+        repo.edit_reference(head_edit)
+            .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
         Ok(PrepareCheckout {
             repo,
             prepared,

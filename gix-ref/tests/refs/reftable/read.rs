@@ -235,33 +235,6 @@ fn a_snapshot_keeps_what_it_has_seen_while_lookups_see_what_others_wrote() -> Te
 }
 
 #[test]
-fn editing_is_refused_until_it_is_supported_so_that_nothing_is_written_wrongly() -> TestResult {
-    let store = gix_ref::Store::from(main_store()?);
-    let edit = gix_ref::transaction::RefEdit::update(
-        "refs/heads/new".try_into()?,
-        gix_ref::Target::Object(store.as_ref().find("main")?.target.try_id().expect("direct").to_owned()),
-        gix_ref::transaction::PreviousValue::MustNotExist,
-        "create",
-    );
-    let err = match store.as_ref().transaction().prepare(
-        [edit],
-        gix_ref::view::transaction::LockOptions::new(
-            gix_lock::acquire::Fail::Immediately,
-            gix_lock::acquire::Fail::Immediately,
-        ),
-    ) {
-        Ok(_) => panic!("editing reftables isn't implemented yet, and must not fall back to loose files"),
-        Err(err) => err,
-    };
-    assert!(err.is_unsupported(), "the failure is classified: {err:?}");
-    assert!(
-        !main_store()?.git_dir().join("refs/heads/new").exists(),
-        "nothing was written to files"
-    );
-    Ok(())
-}
-
-#[test]
 fn the_neutral_store_knows_what_it_is() -> TestResult {
     let store = gix_ref::Store::from(main_store()?);
     assert_eq!(store.as_ref().kind(), gix_ref::view::Kind::Reftable);
