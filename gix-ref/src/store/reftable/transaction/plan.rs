@@ -13,7 +13,8 @@ use crate::{
     file::transaction::prepare::{MustNotExist, ReferenceOutOfDate},
     store::WriteReflog,
     transaction::{
-        Change, ExistingRefs, LogChange, PreviousValue, RefEdit, RefLog, normalize_reflog_message, verify_available,
+        Change, ExistingRefs, HeadLog, LogChange, PreviousValue, RefEdit, RefLog, head_log_update, is_noop_update,
+        is_verification, normalize_reflog_message, verify_available,
     },
 };
 
@@ -81,43 +82,38 @@ pub(super) struct Planned {
     pub log: Log,
 }
 
-/// Return the name of the reference `HEAD` points to if it is a symbolic reference, and the edit that gives `HEAD` the
-/// entry in its reflog which Git writes when the reference it points to is updated directly.
+/// Return the edits that give `HEAD` the entry in its reflog which Git writes when the reference it points to, the
+/// `head_referent`, is updated directly. They are log-only edits, one at most, decided by [`head_log_update()`] for each
+/// of `edits`, which is the same for every kind of storage.
 ///
-/// Edits are left alone if they don't change what `HEAD` leads to, or if `HEAD` is a part of the transaction already
-/// because the edit comes from it, which is told by `HEAD` being a log-only edit. Anything else that involves both
-/// is refused as Git does.
-pub(super) fn head_log_edit(edits: &[RefEdit], head_referent: Option<&FullName>) -> Result<Option<RefEdit>> {
+/// An edit that comes from splitting `HEAD` is told by `HEAD` being a log-only edit of `edits` already, and is logged
+/// there.
+pub(super) fn head_log_edits(
+    edits: &[RefEdit],
+    head_referent: Option<&FullName>,
+    hash: gix_hash::Kind,
+    mode: HeadLog,
+) -> Result<Vec<RefEdit>> {
     let Some(referent) = head_referent else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    let Some(edit) = edits
+    let head_is_split = edits
         .iter()
-        .find(|edit| edit.name == *referent && edit.change_log_mode() != RefLog::Only)
-    else {
-        return Ok(None);
-    };
-    if let Some(head) = edits.iter().find(|edit| edit.name.as_bstr() == "HEAD") {
-        if head.change_log_mode() == RefLog::Only {
-            return Ok(None);
+        .any(|edit| edit.name.as_bstr() == "HEAD" && edit.change_log_mode() == RefLog::Only);
+    let mut names: Vec<BString> = edits
+        .iter()
+        .filter(|edit| mode != HeadLog::CallerDecides || !is_verification(edit))
+        .map(|edit| edit.name.0.clone())
+        .collect();
+    names.sort();
+    let mut out = Vec::new();
+    for edit in edits {
+        let via_head = head_is_split && edit.name == *referent;
+        if let Some(head) = head_log_update(edit, via_head, Some(referent.as_ref()), &names, hash, mode)? {
+            out.push(head);
         }
-        bail!(gix_error::conflict(format!(
-            "multiple updates for 'HEAD' (including one via its referent '{referent}') are not allowed"
-        )));
     }
-    let head = FullName::try_from("HEAD").expect("valid name");
-    Ok(Some(match &edit.change {
-        Change::Update { log, new, .. } => RefEdit::update_with_log(
-            head,
-            new.clone(),
-            PreviousValue::Any,
-            LogChange {
-                mode: RefLog::Only,
-                ..log.clone()
-            },
-        ),
-        Change::Delete { .. } => RefEdit::delete_with_log(head, PreviousValue::Any, RefLog::Only),
-    }))
+    Ok(out)
 }
 
 impl RefEdit {
@@ -235,16 +231,7 @@ pub(super) fn plan<L: Lookup>(edits: Vec<RefEdit>, settings: &Settings<'_>, look
         // What a deletion or a log-only edit would do to something that isn't there is nothing.
         let nothing_to_delete = existing.is_none() && matches!(edit.change, Change::Delete { .. });
         // A reference that is already what it should become isn't touched, which includes not writing a reflog entry.
-        let no_change = match (&edit.change, &existing) {
-            (
-                Change::Update {
-                    new: Target::Object(new),
-                    ..
-                },
-                Some(Target::Object(old)),
-            ) => !log_only && new == old,
-            _ => false,
-        };
+        let no_change = is_noop_update(&edit, existing.as_ref());
         let value_before = existing.clone();
         if let Some(existing) = existing {
             match &mut edit.change {
@@ -619,6 +606,11 @@ mod tests {
         );
     }
 
+    /// The edit that Git adds for `HEAD`, if any.
+    fn head_log_edit(edits: &[RefEdit], referent: Option<&FullName>) -> Result<Option<RefEdit>> {
+        Ok(head_log_edits(edits, referent, gix_hash::Kind::Sha1, HeadLog::Git)?.pop())
+    }
+
     #[test]
     fn updating_the_branch_head_points_to_adds_a_log_only_edit_for_head() {
         let edits = [update("refs/heads/main", ID_B, PreviousValue::Any)];
@@ -640,7 +632,13 @@ mod tests {
         let head = head_log_edit(&deletion, Some(&name("refs/heads/main")))
             .expect("fine")
             .expect("added");
-        assert!(matches!(head.change, Change::Delete { log: RefLog::Only, .. }));
+        assert!(
+            matches!(
+                head.change,
+                Change::Update { new: Target::Object(id), log: LogChange { mode: RefLog::Only, .. }, .. } if id.is_null()
+            ),
+            "a deletion is logged as a change to the null id"
+        );
 
         let edits = [
             update("refs/heads/main", ID_B, PreviousValue::Any),
@@ -659,6 +657,42 @@ mod tests {
                 .expect("fine")
                 .is_none(),
             "an edit that comes from splitting HEAD already logs it"
+        );
+    }
+
+    #[test]
+    fn the_caller_can_decide_what_head_logs() {
+        let branch = name("refs/heads/main");
+        let guard = RefEdit::update(
+            name("HEAD"),
+            Target::Symbolic(branch.clone()),
+            PreviousValue::MustExistAndMatch(Target::Symbolic(branch.clone())),
+            "m",
+        );
+        let edits = [update("refs/heads/main", ID_B, PreviousValue::Any), guard];
+        assert!(
+            head_log_edits(&edits, Some(&branch), gix_hash::Kind::Sha1, HeadLog::Git).is_err(),
+            "Git refuses to change both"
+        );
+        let added = head_log_edits(&edits, Some(&branch), gix_hash::Kind::Sha1, HeadLog::CallerDecides).expect("fine");
+        assert_eq!(
+            added.len(),
+            1,
+            "a guard of HEAD doesn't keep the branch from being logged in HEAD"
+        );
+
+        let attach = RefEdit::update(
+            name("HEAD"),
+            Target::Symbolic(name("refs/heads/other")),
+            PreviousValue::Any,
+            "m",
+        );
+        let edits = [update("refs/heads/main", ID_B, PreviousValue::Any), attach];
+        assert!(
+            head_log_edits(&edits, Some(&branch), gix_hash::Kind::Sha1, HeadLog::CallerDecides)
+                .expect("fine")
+                .is_empty(),
+            "an edit of HEAD decides what it logs"
         );
     }
 

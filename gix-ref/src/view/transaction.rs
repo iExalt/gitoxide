@@ -108,17 +108,13 @@ impl<'s, 'p> Transaction<'s, 'p> {
 
     /// Decide how the reflog of `HEAD` follows the branch it points at, which is [what Git does](HeadLog::Git) by default.
     ///
-    /// Reftables don't implement [`HeadLog::CallerDecides`] yet, and ignore it.
     pub fn head_log(self, head_log: HeadLog) -> Self {
         match self.inner {
             Inner::File(transaction) => Transaction::new_file(transaction.head_log(head_log)),
             #[cfg(feature = "reftable")]
-            Inner::Reftable(transaction) => {
-                let _ = head_log;
-                Transaction {
-                    inner: Inner::Reftable(transaction),
-                }
-            }
+            Inner::Reftable(transaction) => Transaction {
+                inner: Inner::Reftable(transaction.head_log(head_log)),
+            },
         }
     }
 

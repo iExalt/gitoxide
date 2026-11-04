@@ -30,8 +30,6 @@ pub enum HeadLog {
     /// * An edit that expects exactly the value it writes (`PreviousValue::MustExistAndMatch(value)` with the same
     ///   `value` as new target) is a verification that logs nothing, not even in `HEAD`, and isn't a change of `HEAD`.
     ///   It guards a reference that is left as it is.
-    ///
-    /// Reftable storage doesn't implement this yet.
     CallerDecides,
 }
 

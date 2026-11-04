@@ -24,7 +24,7 @@ use crate::{
     FullName, PartialNameRef, Target,
     file::log::create_or_update::MissingCommitter,
     transaction::{
-        Change, ExistingRefs, PreviousValue, RefEdit, RefEditsExt, RefLog,
+        Change, ExistingRefs, HeadLog, PreviousValue, RefEdit, RefEditsExt, RefLog,
         commit_failure::{NothingApplied, Uncertain},
         observe::{Event, Observer, Scope, State, Update, Veto, Vetoed},
     },
@@ -53,6 +53,7 @@ struct Item {
 pub(crate) struct Transaction<'s, 'p> {
     store: &'s Store,
     observer: Option<Box<dyn Observer + 'p>>,
+    head_log: HeadLog,
 }
 
 /// A transaction whose stacks are locked and whose edits are verified.
@@ -134,7 +135,16 @@ impl Drop for Notifier<'_> {
 
 impl<'s, 'p> Transaction<'s, 'p> {
     pub(crate) fn new(store: &'s Store) -> Self {
-        Transaction { store, observer: None }
+        Transaction {
+            store,
+            observer: None,
+            head_log: HeadLog::default(),
+        }
+    }
+
+    pub(crate) fn head_log(mut self, head_log: HeadLog) -> Self {
+        self.head_log = head_log;
+        self
     }
 
     pub(crate) fn observer(mut self, observer: impl Observer + 'p) -> Self {
@@ -144,7 +154,11 @@ impl<'s, 'p> Transaction<'s, 'p> {
 
     /// Lock the stacks, verify the `edits` and decide what to write. Nothing is changed if this fails.
     pub(crate) fn prepare(self, edits: impl IntoIterator<Item = RefEdit>) -> Result<Prepared<'s, 'p>> {
-        let Transaction { store, observer } = self;
+        let Transaction {
+            store,
+            observer,
+            head_log,
+        } = self;
         store.assure_backend_supported()?;
         let options = *store.stack_options()?;
         let mut edits: Vec<RefEdit> = edits.into_iter().collect();
@@ -225,7 +239,8 @@ impl<'s, 'p> Transaction<'s, 'p> {
         edits.assure_one_name_has_one_edit().map_err(duplicate)?;
 
         let head_referent = head_referent(store, &locked, &settings)?;
-        if let Some(head) = plan::head_log_edit(&edits, head_referent.as_ref())? {
+        let head_edits = plan::head_log_edits(&edits, head_referent.as_ref(), settings.hash, head_log)?;
+        for head in head_edits {
             lock(
                 store,
                 &options,
