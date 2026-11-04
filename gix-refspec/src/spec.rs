@@ -163,6 +163,9 @@ impl<'a> RefSpecRef<'a> {
     /// are expanded to all of their Git-style ref-name candidates. For example, `main` expands to `main`,
     /// `refs/main`, `refs/tags/main`, `refs/heads/main`, `refs/remotes/main`, and `refs/remotes/main/HEAD`.
     ///
+    /// Patterns that `prefix()` can't use, like `refs/*` and `refs/*/main`, expand to the part before their first special
+    /// character, like `refs/`, as servers match prefixes literally.
+    ///
     /// Fetch refspecs use their source; push refspecs use their explicit destination. Negative refspecs produce
     /// no prefixes because they only exclude refs selected by positive refspecs; they do not request remote refs.
     pub fn expand_prefixes(&self, out: &mut Vec<BString>) {
@@ -179,10 +182,11 @@ impl<'a> RefSpecRef<'a> {
                     Some(source) => source,
                     None => return,
                 };
-                if let Some(rest) = source.strip_prefix(b"refs/") {
-                    if !rest.contains(&b'/') {
-                        out.push(source.into());
-                    }
+                if source.starts_with(b"refs/") {
+                    // Like Git, send what precedes the first character that makes this a pattern, as the server
+                    // matches prefixes literally: `refs/*` and `refs/*/main` both become `refs/`.
+                    let fixed_len = source.find_byteset(b"*?[]\\").unwrap_or(source.len());
+                    out.push(source[..fixed_len].into());
                     return;
                 } else if gix_hash::ObjectId::from_hex(source).is_ok() {
                     return;
