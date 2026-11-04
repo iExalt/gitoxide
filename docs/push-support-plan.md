@@ -254,7 +254,7 @@ existing subscriptions is approved.
 | 1. Architecture assessment | Assessment deliverables 1–6 above. Read-only: no builds, mutating probes or fault injection. One docs PR, ending with an explicit stop and report | None | The owner accepts the report and decides storage, default format, conversion policy, revised scope and experiment authority | done: [assessment](push-architecture-assessment.md) delivered; owner decisions recorded below |
 | 2. Client protocol and bounded packs | Plumbing that takes validated old/new/ref commands and a pack producer; strict command/status parsing; real `receive-pack` acceptance with Git as test oracle; complete object closure, remote-have exclusions, bounded streaming, both-hash fsck. Excludes the repository push API and lease policy | None | None known | done |
 | 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks; Git 2.56 config-defined hooks, parallel jobs and per-hook stdin producers | None | None known | done |
-| 4. Ref-store abstraction and interim reftable refusal | Probe P12 first; refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while opening and object access keep working; `gix init` follows Git's ref-format precedence and refuses a requested reftable; then the staged ref-store abstraction (assessment 5.1, additive handle first) and its call-site migration; probe P11 | None | None known | ready |
+| 4. Ref-store abstraction and interim reftable refusal | Probe P12 first; refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while opening and object access keep working; `gix init` follows Git's ref-format precedence and refuses a requested reftable; then the staged ref-store abstraction (assessment 5.1, additive handle first) and its call-site migration; probe P11 | None | None known | done |
 | 5. Durability plumbing and differential fault harness | Probes P1, P3, P5 and P7; `core.fsync` and `core.fsyncMethod` for objects, packs and refs, including the barrier flush; the files-store gaps in assessment 4.3; an uncertain-outcome class; a transaction observer; P1, P3 and P5 turned into differential tests against Git | None; rebases on thread 4 where both touch `gix-ref` | None known | ready |
 | 6. Reftable codecs and stack layer | Probes P6 and P4; adopt the upstream reftable codecs after a parity review, both hashes and version 2; a new stack layer following Git's lock and publication protocol, with reload, segment compaction, cleanup and flush; interoperability tests where Git reads fork-written tables and stacks and the fork reads Git's. Integration as a ref backend waits for thread 4 | None for the standalone crate | None known | done: standalone `gix-reftable` crate, estimated at 4–5.5 sessions and run in that range; see the revision log |
 | 7. Reftable ref backend | A feature-gated `gix_ref::store::reftable` adapter over `gix-reftable` behind the neutral `gix_ref::Store`: reads, iteration, symrefs, peeled values, transactions with reflogs, the `HEAD` reflog and tombstones, reflog reading and expiry, worktree stacks; opening selects it for `extensions.refStorage=reftable` when the feature is built, and the interim refusal stays otherwise; `init` and clone create reftable only on an explicit or configured request, with `files` the default; outcome classes and the transaction observer through the neutral wrapper; a differential matrix against Git (selected `t0610`, `t0613`, `t0614` cases, mixed writers, both hashes). Excludes migration (decision 3) and the `reference-transaction` hook | Threads 4 and 6; rebases on thread 5 where both touch `gix-ref` | None known | ready |
@@ -278,6 +278,37 @@ sequencing; the overseer proposes each as its dependencies finish.
   Callers still own `GIT_PREFIX`, `GIT_INDEX_FILE` and receive-side environment, and the `Side` for events such as
   `reference-transaction` that run both locally and while receiving. Not covered: the Windows `.exe` suffix lookup,
   warnings for invalid `hook.*` values, and byte-exact names and commands of configured hooks.
+- 2026-11-04: thread 4 (ref-store abstraction and interim reftable refusal) is done, in four PRs. A repository whose
+  `extensions.refStorage` is not `files` opens, but every reference operation fails with an `Unsupported` error and
+  leaves the git directory untouched (#24); `gix::init()`, `init_opts()` and clone follow Git's ref-format precedence and
+  refuse a requested reftable, and `ein init --ref-format` exists. Probe P12 confirmed the hazard first: a tag written into a reftable
+  repository landed as a loose file that Git never reads, and reads reported existing references as missing
+  (assessment 4.1). The abstraction came in three steps: the borrowed
+  `gix_ref::StoreRef` view with `Snapshot` and neutral transactions (#25), the call sites moved onto
+  `Repository::ref_store()` with `view::NotFound` as the neutral not-found marker (#27), and one breaking change that
+  makes `Repository::refs` and `gix::RefStore` an owned `gix_ref::Store` (#29, break list in its commit body).
+  The reftable ref backend (thread 7) adds a reftable arm to the private backend enums. Notes for it: `Store` is `Clone` and `with_locations()`
+  can't fail, so a reftable store has to open lazily and clone cheaply, and missing references and failed transaction
+  constraints must raise the `view::` error types. Deviations and limits:
+  - `Store::from_backend` is not provided, as the reftable threads haven't asked for it. The unsupported-storage mark stays in
+    `file::Store` and `Store` forwards to it.
+  - `ein init` applies `init.defaultBranch` and `init.defaultObjectFormat`, which it ignored before, and an invalid
+    `init.defaultRefFormat` is an error where Git warns. `GIT_DEFAULT_REF_FORMAT` is ignored by the isolated options
+    of `init_opts()`. `feature.experimental=true` in the global configuration now makes init and clone fail, as
+    they would create reftable. `gix clone` has no `--ref-format` flag.
+  - Replace references and `onbranch` conditions are read while opening a repository and stay lenient: an unsupported
+    store yields no replacements instead of an error. `GIT_REFERENCE_BACKEND=files` doesn't override a configured
+    unsupported backend, which differs from Git.
+  - `references().peeled()` iterates and peels from separate `packed-refs` snapshots. Negotiation in `gix-protocol`
+    now uses one. `view::transaction` re-exports the files `PackedRefs` hint, which a neutral type should replace once
+    the durability work has settled that module.
+  - A failed write below `refs/notes/` leaves a reflog file behind (found by P12). The guard doesn't cause this, and it
+    was forwarded to thread 5.
+  - Probe P11 is in assessment section 8. Runtimes: `mise run check` took 26 min 11 s (exit 0) at station load 6 to 7 with
+    other workers running, against no recorded baseline. The 104-case feature-matrix compile of its `check` stage
+    dominates, while the main nextest run took 81 s. `mise run test` took 2 min 36 s and 2 min 59 s on the last two revisions at load 6, and 4 min 15 s
+    at load 7 on an earlier one, against the 120 s budget; each includes compiling after an edit. Neither is comparable to the warm low-load baselines.
+  - Edits were made in the anchor worktree on the laptop and copied to the station. Every build and test ran on the station.
 - 2026-11-05: thread 2 (client protocol and bounded packs) is done as `gix_protocol::push` and `gix_pack::data::output::missing`.
   `push()` is blocking only, and needs a `Request` that was validated against what the server advertised. Its pack
   producer is a callback, and `missing::write_pack()` is the one to use. Tests run against real `git receive-pack` for SHA-1
