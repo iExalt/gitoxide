@@ -145,6 +145,54 @@ fn upload_stall_is_given_up_on<H: http::Http + Default + 'static>() -> TestResul
     Ok(())
 }
 
+/// A consumer that doesn't read for longer than the limits allow, and then reads everything quickly, doesn't make a transfer slow:
+/// the time that the transfer waits for the consumer isn't held against the server.
+fn a_consumer_that_reads_late_doesnt_trip_the_limits<H: http::Http + Default + 'static>() -> TestResult {
+    const PADDING: u64 = 16 * 1024 * 1024;
+    let setup = Setup::new("sha1")?;
+    // The advertisement is served as it is, and the response to the request after it is followed by more data than the
+    // kernel and the backends buffer, so the server has to wait for the consumer.
+    let peer = HttpPeer::start(Config {
+        project_root: setup.path("."),
+        fault: Fault::PaddedResponse { bytes: PADDING },
+        fault_after_requests: 1,
+        ..Default::default()
+    })?;
+    let mut transport = transport::<H>(&peer.url("remote.git"))?;
+    transport.configure(&http::Options {
+        low_speed_limit_bytes_per_second: 1000,
+        low_speed_time_seconds: 1,
+        ..Default::default()
+    })?;
+    transport.handshake(Service::UploadPack, &[])?;
+    let writer = transport.request(WriteMode::Binary, MessageKind::Flush, false)?;
+    let (raw_writer, mut reader) = writer.into_parts();
+    // The request is complete once its body ends.
+    drop(raw_writer);
+    std::thread::sleep(Duration::from_secs(3));
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut total = 0u64;
+    let end = loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break None,
+            Ok(n) => total += n as u64,
+            Err(err) => break Some(gix::Error::from_error(err)),
+        }
+    };
+    // The padding is not a whole response, so the reader of packet lines may complain about its end, which is fine.
+    if let Some(err) = end {
+        assert!(
+            !is_low_speed_error(&err),
+            "the stall of the consumer was held against the server: {err:?}"
+        );
+    }
+    assert!(
+        total >= PADDING / 2, // half of it is payload, the rest are the lengths of the packet lines
+        "all the padding arrived after the consumer woke up: {total} bytes"
+    );
+    Ok(())
+}
+
 /// Run each case with one backend as tests of their own, which lets them run in parallel.
 macro_rules! backend_tests {
     ($module:ident, $backend:ty, $feature:literal) => {
@@ -174,6 +222,14 @@ macro_rules! backend_tests {
                     return Ok(());
                 };
                 a_trickle_is_judged_by_its_speed::<$backend>()
+            }
+
+            #[test]
+            fn a_consumer_that_reads_late_is_not_a_slow_server() -> TestResult {
+                let Some(_environment) = isolated()? else {
+                    return Ok(());
+                };
+                a_consumer_that_reads_late_doesnt_trip_the_limits::<$backend>()
             }
         }
     };
