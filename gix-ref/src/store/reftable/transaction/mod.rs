@@ -63,6 +63,8 @@ pub(crate) struct Prepared<'s, 'p> {
     /// The stacks in the order in which they were locked.
     locked: Vec<Locked>,
     items: Vec<Item>,
+    /// The number of log-only edits of `HEAD` that were added after the edits of the caller, which are not reported back.
+    synthetic: usize,
     notifier: Notifier<'p>,
 }
 
@@ -240,6 +242,7 @@ impl<'s, 'p> Transaction<'s, 'p> {
 
         let head_referent = head_referent(store, &locked, &settings)?;
         let head_edits = plan::head_log_edits(&edits, head_referent.as_ref(), settings.hash, head_log)?;
+        let synthetic = head_edits.len();
         for head in head_edits {
             lock(
                 store,
@@ -281,6 +284,7 @@ impl<'s, 'p> Transaction<'s, 'p> {
             options,
             locked,
             items,
+            synthetic,
             notifier,
         })
     }
@@ -294,6 +298,7 @@ impl Prepared<'_, '_> {
             options,
             mut locked,
             items,
+            synthetic,
             mut notifier,
         } = self;
         let stack_of_edit: Vec<_> = items.iter().map(|item| item.stack).collect();
@@ -351,14 +356,19 @@ impl Prepared<'_, '_> {
             compact(store, &options, id);
         }
         notifier.committed();
-        Ok(items.into_iter().map(|item| item.planned.edit).collect())
+        Ok(requested_edits(items, synthetic))
     }
 
     /// Release all locks and return the edits as they were verified, without changing anything.
     pub(crate) fn rollback(self) -> Vec<RefEdit> {
-        let Prepared { locked, items, .. } = self;
+        let Prepared {
+            locked,
+            items,
+            synthetic,
+            ..
+        } = self;
         drop(locked);
-        items.into_iter().map(|item| item.planned.edit).collect()
+        requested_edits(items, synthetic)
     }
 }
 
@@ -535,6 +545,16 @@ impl Lookup for Existing<'_> {
         }
         Ok(indices)
     }
+}
+
+/// The edits of the caller as they were verified, without the log-only edits of `HEAD` that were added to them.
+fn requested_edits(items: Vec<Item>, synthetic: usize) -> Vec<RefEdit> {
+    let requested = items.len() - synthetic;
+    items
+        .into_iter()
+        .take(requested)
+        .map(|item| item.planned.edit)
+        .collect()
 }
 
 /// Write one table for every locked stack that has something to change, which isn't visible yet.
