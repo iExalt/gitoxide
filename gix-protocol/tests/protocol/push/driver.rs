@@ -102,6 +102,20 @@ fn run(
     }
 }
 
+/// A valid pack with no objects, as Git would send it.
+fn empty_pack(kind: Kind) -> Vec<u8> {
+    let mut pack = b"PACK\0\0\0\x02\0\0\0\0".to_vec();
+    let mut hasher = gix_hash::hasher(kind);
+    hasher.update(&pack);
+    pack.extend_from_slice(hasher.try_finalize().expect("hash").as_slice());
+    pack
+}
+
+/// A pack writer that writes a complete pack without objects.
+fn write_empty_pack(kind: Kind) -> impl FnOnce(&mut dyn Write) -> gix_error::Result {
+    move |out| out.write_all(&empty_pack(kind)).map_err(gix_error::Error::from_error)
+}
+
 fn report_lines(lines: &[&str]) -> Vec<u8> {
     let mut out: Vec<u8> = lines
         .iter()
@@ -136,12 +150,12 @@ fn commands_options_and_pack_are_sent_and_the_side_band_report_is_decoded() {
                 ..Default::default()
             },
             &response,
-            |out| out.write_all(b"PACK-bytes").map_err(gix_error::Error::from_error),
+            |out| out.write_all(&empty_pack(kind)).map_err(gix_error::Error::from_error),
         );
         let report = run.result.expect("the canned report is valid");
         assert!(report.is_success(), "{kind}: {report:?}");
         let mut expected = commands_header(kind, &[("refs/heads/a", 1, 2)], true);
-        expected.extend_from_slice(b"PACK-bytes");
+        expected.extend_from_slice(&empty_pack(kind));
         assert_eq!(
             run.written, expected,
             "{kind}: the header, the push options and the pack are written, and the pack verbatim"
@@ -209,7 +223,7 @@ fn report_lines_split_across_side_band_packets_are_decoded() {
             &[("refs/heads/a", 1, 2)],
             Options::default(),
             &response,
-            |_| Ok(()),
+            write_empty_pack(kind),
         );
         assert!(
             run.result.expect("a split report is decoded as a stream").is_success(),
@@ -235,7 +249,7 @@ fn empty_keepalive_packets_around_and_within_the_report_are_skipped() {
             &[("refs/heads/a", 1, 2)],
             Options::default(),
             &response,
-            |_| Ok(()),
+            write_empty_pack(kind),
         );
         assert!(
             run.result.expect("empty band-1 packets carry no data").is_success(),
@@ -254,7 +268,7 @@ fn without_side_band_the_report_consists_of_plain_packet_lines() {
             &[("refs/heads/a", 1, 2)],
             Options::default(),
             &response,
-            |_| Ok(()),
+            write_empty_pack(kind),
         );
         let report = run.result.expect("plain report");
         assert!(
@@ -302,7 +316,14 @@ fn a_missing_or_incomplete_report_is_an_uncertain_outcome() {
         ),
     ];
     for (name, response, says) in cases {
-        let run = run(kind, CAPABILITIES, &updates, Options::default(), &response, |_| Ok(()));
+        let run = run(
+            kind,
+            CAPABILITIES,
+            &updates,
+            Options::default(),
+            &response,
+            write_empty_pack(kind),
+        );
         let err = run.result.expect_err(name);
         assert_eq!(classes(&err), [Class::Corruption], "{name}: {err:#}");
         assert!(
@@ -321,12 +342,88 @@ fn a_failing_pack_producer_ends_the_push_with_its_own_error() {
         &[("refs/heads/a", 1, 2)],
         Options::default(),
         &[],
-        |_| Err(gix_error::validation("cannot produce the pack").raise()),
+        |_| Err(gix_error::unsupported("cannot produce the pack").raise()),
     );
     let err = run.result.expect_err("the producer failed");
     assert_eq!(
         classes(&err),
-        [Class::Validation],
+        [Class::Unsupported],
         "the producer's classification survives: {err:#}"
     );
+}
+
+#[test]
+fn incomplete_packs_fail_before_the_server_could_wait_for_the_rest() {
+    for kind in Kind::all().iter().copied() {
+        let valid = empty_pack(kind);
+        let mut flipped = valid.clone();
+        *flipped.last_mut().expect("trailer") ^= 1;
+        let mut with_trailing_data = valid.clone();
+        with_trailing_data.extend_from_slice(b"more");
+        let cases: Vec<(&str, Vec<u8>, Class, &str)> = vec![
+            ("nothing", Vec::new(), Class::Validation, "no header"),
+            (
+                "not a pack",
+                b"hello there, not a pack at all".to_vec(),
+                Class::Validation,
+                "no header",
+            ),
+            (
+                "a pack without a trailer",
+                valid[..12].to_vec(),
+                Class::Validation,
+                "ends before its trailing hash",
+            ),
+            (
+                "a pack without its last byte",
+                valid[..valid.len() - 1].to_vec(),
+                Class::Corruption,
+                "doesn't match",
+            ),
+            (
+                "a pack with a wrong trailer",
+                flipped,
+                Class::Corruption,
+                "doesn't match",
+            ),
+            (
+                "a complete pack followed by data, which the server may have acted on",
+                with_trailing_data,
+                Class::Corruption,
+                "doesn't match",
+            ),
+        ];
+        for (name, pack, class, says) in cases {
+            let run = run(
+                kind,
+                CAPABILITIES,
+                &[("refs/heads/a", 1, 2)],
+                Options::default(),
+                &[],
+                |out| out.write_all(&pack).map_err(gix_error::Error::from_error),
+            );
+            let err = run.result.expect_err(name);
+            assert_eq!(classes(&err), [class], "{kind} {name}: {err:#}");
+            assert!(
+                format!("{err:#}").contains(says),
+                "{kind} {name}: should say '{says}', got {err:#}"
+            );
+        }
+
+        // The checks don't depend on how a pack is split across writes.
+        let run = run(
+            kind,
+            CAPABILITIES,
+            &[("refs/heads/a", 1, 2)],
+            Options::default(),
+            &side_band_response(&report_lines(&["unpack ok", "ok refs/heads/a"]), &[]),
+            |out| {
+                for byte in empty_pack(kind) {
+                    out.write_all(&[byte]).map_err(gix_error::Error::from_error)?;
+                }
+                Ok(())
+            },
+        );
+        assert!(run.result.expect("a complete pack written byte by byte").is_success());
+    }
 }
