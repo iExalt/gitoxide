@@ -1,12 +1,12 @@
 use gix_error::Result;
-/// An implementation for HTTP requests via `reqwest`.
+/// An implementation for HTTP requests via `reqwest`, which must not be called from a `tokio` runtime thread.
 pub struct Remote {
     /// A worker thread which performs the actual request.
     handle: Option<std::thread::JoinHandle<Result>>,
     /// A channel to send requests (work) to the worker thread.
-    request: std::sync::mpsc::SyncSender<remote::Request>,
+    request: tokio::sync::mpsc::Sender<remote::Request>,
     /// A channel to receive the result of the prior request.
-    response: std::sync::mpsc::Receiver<remote::Response>,
+    response: tokio::sync::mpsc::Receiver<remote::Response>,
     /// A mechanism for configuring the remote.
     config: crate::client::blocking_io::http::Options,
     /// The effective base URL after an accepted redirect.
@@ -15,11 +15,11 @@ pub struct Remote {
 
 /// A function to configure a single request prior to sending it, support most complex configuration beyond what's possible with
 /// basic `git` http configuration.
-pub type ConfigureRequestFn = dyn FnMut(&mut reqwest::blocking::Request) -> Result + Send + Sync + 'static;
+pub type ConfigureRequestFn = dyn FnMut(&mut reqwest::Request) -> Result + Send + Sync + 'static;
 
 /// A function to configure the HTTP client before it is built, for example to provide a TLS configuration.
 pub type ConfigureClientFn =
-    dyn FnMut(reqwest::blocking::ClientBuilder) -> Result<reqwest::blocking::ClientBuilder> + Send + Sync + 'static;
+    dyn FnMut(reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder> + Send + Sync + 'static;
 
 /// Options to configure the reqwest HTTP handler.
 #[derive(Default)]
