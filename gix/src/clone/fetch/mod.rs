@@ -297,6 +297,8 @@ impl PrepareFetch {
                 config = None;
             }
         }
+        // Only now that the object hash is known can the stack of tables be created, if the references are stored as such.
+        crate::init::create_reference_database(&mut repo)?;
         let reflog_message = {
             let mut b = self.url.to_bstring();
             b.insert_str(0, "clone: from ");

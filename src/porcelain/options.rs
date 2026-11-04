@@ -28,10 +28,10 @@ pub enum Subcommands {
         /// Defaults to the current working directory.
         directory: Option<PathBuf>,
 
-        /// The storage for references of the new repository, which can only be `files`.
+        /// The storage for references of the new repository, which is `files` or `reftable`.
         ///
         /// It takes precedence over the `GIT_DEFAULT_REF_FORMAT` environment variable and `init.defaultRefFormat`.
-        /// Asking for `reftable` is an error, as it is not supported yet.
+        /// Asking for `reftable` is an error unless the `reftable` feature was enabled when building.
         #[clap(long, value_name = "FORMAT")]
         ref_format: Option<String>,
     },
