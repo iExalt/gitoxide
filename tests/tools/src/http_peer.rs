@@ -123,6 +123,12 @@ pub struct Config {
     /// If set, `GET` requests below the old name are redirected to the new one with a `301`, like services do for repositories
     /// that were renamed, and all other requests to the old name fail with a `404`.
     pub moved: Option<Moved>,
+    /// If set, the size in bytes of the receive buffer of accepted connections, which the kernel rounds up.
+    ///
+    /// A small buffer makes a client that uploads to a peer that doesn't read stall soon, whereas the defaults let a stalled
+    /// upload trickle by a few KiB every second for as long as the kernel's buffers allow, which is no stall at all to a
+    /// check of the transfer speed.
+    pub receive_buffer: Option<usize>,
     /// If set, connections are kept alive for further requests, and closed from the side of the peer after being idle for this long.
     /// By default, each connection serves one request and is closed right after, which is something that clients cannot trip over.
     pub keep_alive_idle: Option<Duration>,
@@ -196,7 +202,17 @@ impl HttpPeer {
     }
 
     fn start_inner(config: Config, acceptor: Option<Acceptor>) -> std::io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let listener = match config.receive_buffer {
+            Some(size) => {
+                // Accepted connections inherit what is set before listening.
+                let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+                socket.set_recv_buffer_size(size)?;
+                socket.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
+                socket.listen(128)?;
+                TcpListener::from(socket)
+            }
+            None => TcpListener::bind(("127.0.0.1", 0))?,
+        };
         let addr = listener.local_addr()?;
         let shared = Arc::new(Shared {
             config,

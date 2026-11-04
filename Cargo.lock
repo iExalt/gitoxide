@@ -2720,6 +2720,7 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "serial_test",
+ "socket2",
  "tar",
  "tempfile",
  "xz2",
