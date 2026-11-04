@@ -72,6 +72,7 @@ where
     let mut handshake = gix::protocol::handshake(
         &mut transport.inner,
         transport::Service::UploadPack,
+        // Without a repository there is no configuration to build the credential helpers from, so this asks `git credential` on purpose.
         gix::protocol::credentials::builtin,
         vec![("agent".into(), Some(agent.clone()))],
         &mut progress,

@@ -172,6 +172,34 @@ pub(super) mod function {
 
         let allow_git_env = environment.git_prefix.is_allowed();
         let allow_ssh_env = environment.ssh_prefix.is_allowed();
+        // Helpers are found like Git does, but without asking Git for its exec-path.
+        let helper_environment = gix_credentials::program::Environment {
+            home: crate::config::cache::access::home_dir(environment),
+            xdg_config_home: std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|dir| !dir.is_empty())
+                .and_then(|dir| environment.xdg_config_home.check_opt(std::path::PathBuf::from(dir))),
+            exec_path: allow_git_env
+                .then(|| std::env::var_os("GIT_EXEC_PATH").filter(|dir| !dir.is_empty()))
+                .flatten()
+                .map(std::path::PathBuf::from)
+                .into_iter()
+                .chain(
+                    crate::config::cache::access::trusted_file_path(
+                        config,
+                        Credentials::EXEC_PATH,
+                        &mut filter,
+                        is_lenient_config,
+                        environment,
+                    )
+                    .or_raise(|| gix_error::message("gitoxide.credentials.execPath could not be read"))?,
+                )
+                .collect(),
+            path: None,
+        };
+        let programs: Vec<_> = programs
+            .into_iter()
+            .map(|program: gix_credentials::Program| program.with_environment(helper_environment.clone()))
+            .collect();
         let prompt_options = gix_prompt::Options {
             askpass: crate::config::cache::access::trusted_file_path(
                 config,

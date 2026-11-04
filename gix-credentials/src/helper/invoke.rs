@@ -60,9 +60,31 @@ impl std::error::Error for HelperFailure {
     }
 }
 
+/// Run the `store` helper in-process. Like the helper program that dies when it can't do its job, a failure is that of the helper.
+fn native_store(helper: &crate::Program, arguments: &bstr::BStr, action: &Action) -> Result<Option<Vec<u8>>> {
+    let failure = |err: gix_error::Error| HelperFailure(std::io::Error::other(err)).raise();
+    let environment = helper
+        .environment
+        .clone()
+        .unwrap_or_else(crate::program::Environment::from_process);
+    let store = match crate::store::file_from_arguments(arguments, environment.home.as_deref()).map_err(failure)? {
+        Some(file) => crate::store::Store::at_file(file),
+        None => crate::store::Store::at_default_locations(&environment).map_err(failure)?,
+    };
+    store.invoke(action).map_err(failure)
+}
+
 pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> Result<Option<Vec<u8>>> {
+    if let crate::program::Kind::Store { arguments } = &helper.kind {
+        return native_store(helper, arguments.as_ref(), action);
+    }
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");
-    let (mut stdin, stdout) = helper.start(action).or_raise(communication_error)?;
+    let (mut stdin, stdout) = match helper.start(action) {
+        Ok(started) => started,
+        // A helper that doesn't exist is a failure of that helper, so that the next one is tried, just as when it exits with an error.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(HelperFailure(err).raise()),
+        Err(err) => return Err(err.and_raise(communication_error())),
+    };
     if let (Action::Get(_), None) = (&action, &stdout) {
         panic!("BUG: `Helper` impls must return an output handle to read output from if Action::Get is provided")
     }

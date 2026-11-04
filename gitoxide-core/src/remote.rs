@@ -68,6 +68,7 @@ where
     let mut handshake = protocol::handshake(
         &mut transport.inner,
         transport::Service::UploadPack,
+        // Without a repository there is no configuration to build the credential helpers from, so this asks `git credential` on purpose.
         protocol::credentials::builtin,
         vec![("agent".into(), Some(agent.clone()))],
         &mut progress,

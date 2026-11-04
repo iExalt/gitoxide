@@ -1,12 +1,29 @@
-use gix_credentials::{Program, helper, program::Kind};
+use gix_credentials::{
+    Program, helper,
+    program::{Environment, Kind},
+};
 use gix_testtools::TestResult;
-use std::sync::LazyLock;
+use std::{path::PathBuf, sync::LazyLock};
 
-static GIT: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    gix_path::env::exe_invocation()
-        .to_str()
-        .expect("some `from_custom_definition` tests must be run where 'git' path is valid Unicode")
-});
+/// Create a directory containing an executable `git-credential-<name>`, and an environment that finds it only there.
+fn environment_with_helper(name: &str) -> TestResult<(gix_testtools::tempfile::TempDir, Environment, PathBuf)> {
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let helper = dir
+        .path()
+        .join(format!("git-credential-{name}{}", std::env::consts::EXE_SUFFIX));
+    std::fs::write(&helper, "#!/bin/sh\n")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let environment = Environment {
+        exec_path: vec![dir.path().to_owned()],
+        path: Some("".into()),
+        ..Default::default()
+    };
+    Ok((dir, environment, helper))
+}
 
 static SH: LazyLock<&'static str> = LazyLock::new(|| {
     gix_path::env::shell()
@@ -24,19 +41,44 @@ const SH_BASENAME: &str = if cfg!(windows) { "sh.exe" } else { "sh" };
 fn empty() -> TestResult {
     let prog = Program::from_custom_definition("")?;
     assert!(matches!(&prog.kind, Kind::ExternalName { name_and_args } if name_and_args.is_empty()));
-    let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
-    assert_eq!(
-        std::path::Path::new(cmd.get_program()),
-        std::path::Path::new(
-            std::process::Command::try_from(gix_command::prepare(gix_path::env::exe_invocation()))?.get_program()
-        ),
-        "Git uses the platform's command resolution"
+    let err = prog
+        .with_environment(Environment::default())
+        .to_command(&helper::Action::Store("egal".into()))
+        .expect_err("not useful, but allowed, and it can't be found");
+    assert!(
+        err.is_not_found(),
+        "the lack of a name is just a helper that isn't there"
     );
-    assert_eq!(
-        cmd.get_args().collect::<Vec<_>>(),
-        ["credential-", "store"],
-        "not useful, but allowed, would have to be caught elsewhere"
+    Ok(())
+}
+
+#[test]
+fn name_that_cannot_be_found_is_not_found_and_never_runs_git() -> TestResult {
+    let prog = Program::from_custom_definition("missing --arg")?.with_environment(Environment {
+        path: Some("".into()),
+        ..Default::default()
+    });
+    let err = prog
+        .to_command(&helper::Action::Store("egal".into()))
+        .expect_err("there is no `git-credential-missing`");
+    assert!(err.is_not_found(), "{err:?}");
+    assert!(
+        err.to_string().contains("git-credential-missing"),
+        "the diagnostic says what was looked for: {err}"
     );
+    Ok(())
+}
+
+#[test]
+fn names_are_not_paths() -> TestResult {
+    let (_dir, environment, _helper) = environment_with_helper("name")?;
+    for input in ["../name", "sub/name"] {
+        let err = Program::from_custom_definition(input)?
+            .with_environment(environment.clone())
+            .to_command(&helper::Action::Store("egal".into()))
+            .expect_err("only plain names are looked up");
+        assert!(err.is_not_found(), "{input}: {err:?}");
+    }
     Ok(())
 }
 
@@ -61,19 +103,18 @@ fn simple_script_in_path() -> TestResult {
 #[test]
 fn name_with_args() -> TestResult {
     let input = "name --arg --bar=\"a b\"";
-    let prog = Program::from_custom_definition(input)?;
+    let (_dir, environment, helper) = environment_with_helper("name")?;
+    let prog = Program::from_custom_definition(input)?.with_environment(environment);
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
     assert_eq!(
         std::path::Path::new(cmd.get_program()),
-        std::path::Path::new(
-            std::process::Command::try_from(gix_command::prepare(gix_path::env::exe_invocation()))?.get_program()
-        ),
-        "Git uses the platform's command resolution"
+        std::path::Path::new(std::process::Command::try_from(gix_command::prepare(&helper))?.get_program()),
+        "the helper is found without Git and runs directly"
     );
     assert_eq!(
         cmd.get_args().collect::<Vec<_>>(),
-        ["credential-name", "--arg", "--bar=a b", "store"],
+        ["--arg", "--bar=a b", "store"],
         "quoted arguments are split without losing their contents"
     );
     Ok(())
@@ -82,16 +123,15 @@ fn name_with_args() -> TestResult {
 #[test]
 fn name_with_special_args() -> TestResult {
     let input = "name --arg --bar=~/folder/in/home";
-    let prog = Program::from_custom_definition(input)?;
+    let (_dir, environment, helper) = environment_with_helper("name")?;
+    let prog = Program::from_custom_definition(input)?.with_environment(environment);
     let sh = gix_path::env::shell_command();
-    let git = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(std::path::Path::new(*GIT))?);
-    let quoted_git = gix_quote::single(git.as_ref());
+    let helper = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(helper.as_path())?);
+    let quoted_helper = gix_quote::single(helper.as_ref());
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))?),
-        format!(
-            r#"{sh:?} "-c" "{quoted_git} credential-name --arg --bar=~/folder/in/home \"$@\"" "{SH_BASENAME}" "store""#
-        )
+        format!(r#"{sh:?} "-c" "{quoted_helper} --arg --bar=~/folder/in/home \"$@\"" "{SH_BASENAME}" "store""#)
     );
     Ok(())
 }
@@ -99,20 +139,19 @@ fn name_with_special_args() -> TestResult {
 #[test]
 fn name() -> TestResult {
     let input = "name";
-    let prog = Program::from_custom_definition(input)?;
+    let (_dir, environment, helper) = environment_with_helper("name")?;
+    let prog = Program::from_custom_definition(input)?.with_environment(environment);
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
     assert_eq!(
         std::path::Path::new(cmd.get_program()),
-        std::path::Path::new(
-            std::process::Command::try_from(gix_command::prepare(gix_path::env::exe_invocation()))?.get_program()
-        ),
+        std::path::Path::new(std::process::Command::try_from(gix_command::prepare(&helper))?.get_program()),
         "we detect that this can run without shell, which is also more portable on windows"
     );
     assert_eq!(
         cmd.get_args().collect::<Vec<_>>(),
-        ["credential-name", "store"],
-        "Git receives the helper name and action"
+        ["store"],
+        "the helper receives just its action"
     );
     Ok(())
 }
