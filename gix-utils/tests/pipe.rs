@@ -114,4 +114,41 @@ mod io {
         }
         assert_eq!(block_count * BLOCK_SIZE, bytes_read);
     }
+
+    #[test]
+    fn a_read_that_waits_fails_when_the_flag_is_set_and_keeps_failing() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let (_writer, reader) = io::pipe::unidirectional(0);
+        let mut reader = reader.fail_when_set(flag.clone(), || std::io::Error::other("stopped"));
+        let setter = std::thread::spawn({
+            let flag = flag.clone();
+            move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                flag.store(true, Ordering::SeqCst);
+            }
+        });
+        let err = reader
+            .read(&mut [0; 8])
+            .expect_err("the writer never writes, so only the flag ends the wait");
+        assert_eq!(err.to_string(), "stopped");
+        setter.join().expect("no panic");
+        assert!(reader.fill_buf().is_err(), "once set, the flag keeps reads failing");
+    }
+
+    #[test]
+    fn a_read_with_a_flag_that_is_not_set_returns_data_and_the_end_of_the_stream() -> gix_testtools::TestResult {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mut writer, reader) = io::pipe::unidirectional(1);
+        let mut reader = reader.fail_when_set(flag, || std::io::Error::other("stopped"));
+        writer.write_all(b"data")?;
+        drop(writer);
+        let mut received = String::new();
+        reader.read_to_string(&mut received)?;
+        assert_eq!(received, "data");
+        Ok(())
+    }
 }
