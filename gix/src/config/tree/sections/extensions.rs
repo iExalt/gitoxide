@@ -13,8 +13,9 @@ impl Extensions {
     pub const OBJECT_FORMAT: ObjectFormat = ObjectFormat::new_object_format("objectFormat", &config::Tree::EXTENSIONS);
     /// The `extensions.refStorage` key, selecting the reference storage backend.
     ///
-    /// Only `files` is supported: `gix` can't read or write references stored as `reftable`, or at a location
-    /// given with the `<format>://<payload>` form, and refuses to operate on references in these cases.
+    /// `files` is always supported, and `reftable` with the `reftable` feature, which can read but not yet edit references.
+    /// Without the feature, or at a location given with the `<format>://<payload>` form, `gix` can't operate
+    /// on references and refuses to.
     pub const REF_STORAGE: RefStorage = RefStorage::new_ref_storage("refStorage", &config::Tree::EXTENSIONS)
         .with_environment_override("GIT_REFERENCE_BACKEND");
 }
@@ -62,6 +63,21 @@ mod ref_storage {
     };
 
     impl RefStorage {
+        /// Like `try_into_unsupported_backend()`, but also tell if the references are stored as reftables
+        /// and this build can handle them.
+        pub(crate) fn try_into_ref_backend(
+            &'static self,
+            value: impl gix_utils::AsBStr,
+        ) -> Result<crate::config::cache::RefBackend> {
+            use crate::config::cache::RefBackend;
+            Ok(match self.try_into_unsupported_backend(value)? {
+                None => RefBackend::Files,
+                #[cfg(feature = "reftable")]
+                Some(backend) if backend == "reftable" => RefBackend::Reftable,
+                Some(backend) => RefBackend::Unsupported(backend),
+            })
+        }
+
         /// Create a new instance.
         pub const fn new_ref_storage(name: &'static str, section: &'static dyn Section) -> Self {
             keys::Any::new_with_validate(name, section, super::validate::RefStorage)

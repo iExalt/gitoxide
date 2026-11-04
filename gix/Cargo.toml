@@ -65,6 +65,14 @@ default = [
 ## More fundamental components that most will be able to make good use of.
 basic = ["blob-diff", "revision", "index"]
 
+## Read the references of repositories that store them as reftables, which Git selects with `extensions.refStorage = reftable`.
+##
+## Without it, such repositories can be opened and their objects used, but every operation on references fails with an
+## `Unsupported` error. It adds `gix-reftable` and its dependencies.
+##
+## Editing references stored this way isn't supported yet, which fails with an `Unsupported` error as well.
+reftable = ["gix-ref/reftable"]
+
 ## Various additional features and capabilities that are not necessarily part of what most users would need.
 extras = [
     "worktree-stream",
@@ -544,12 +552,12 @@ checks = [
 ]
 tests = [
     { args = ["--no-default-features", "--features", "basic,comfort,max-performance,sha1,sha256"] },
-    { args = ["--no-default-features", "--features", "basic,extras,comfort,sha1,sha256"] },
+    { args = ["--no-default-features", "--features", "basic,extras,comfort,reftable,sha1,sha256"] },
     { args = ["--features", "async-network-client,sha256"] },
     { args = ["--features", "async-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     { args = ["--features", "blocking-network-client,sha256"] },
     { args = ["--features", "blocking-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
-    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "reftable,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     { args = ["--no-default-features", "--features", "sha256", "--lib"] },
 ]
 doctests = [

@@ -143,6 +143,8 @@ hashes = ["sha1", "sha256"]
 sha1 = ["gix/sha1", "gix-tix?/sha1"]
 ## Enable support for the SHA-256 hash throughout the `gix` crate.
 sha256 = ["gix/sha256", "gix-tix?/sha256"]
+## Read the references of repositories that store them as reftables.
+reftable = ["gix/reftable"]
 
 ## Enable the interactive commit graph. This requires Rust 1.91 or newer.
 tix = ["dep:gix-tix"]
