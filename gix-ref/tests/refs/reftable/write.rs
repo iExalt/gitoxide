@@ -710,6 +710,51 @@ fn a_list_that_may_have_been_replaced_leaves_the_stack_published_before_it_appli
     Ok(())
 }
 
+/// The highest update index that a stack has, which is the end of the range in the name of its newest table.
+fn newest_update_index(fixture: &Fixture, dir: &str) -> TestResult<u64> {
+    let tables = fixture.tables(dir)?;
+    let newest = tables.last().expect("a stack has tables");
+    let max = newest
+        .split('-')
+        .nth(1)
+        .expect("names have a range")
+        .trim_start_matches("0x");
+    Ok(u64::from_str_radix(max, 16)?)
+}
+
+#[test]
+fn a_transaction_uses_one_update_index_for_everything_it_writes_like_git() -> TestResult {
+    let f = Fixture::new()?;
+    let store = f.main();
+    let before = newest_update_index(&f, "repo/.git/reftable")?;
+    commit(
+        &store,
+        vec![
+            create("refs/heads/one", f.c1, "a"),
+            create("refs/heads/two", f.c2, "b"),
+            create("refs/heads/three", f.c3, "c"),
+        ],
+    )?;
+    assert_eq!(
+        newest_update_index(&f, "repo/.git/reftable")?,
+        before + 1,
+        "three edits take one update index, not one each"
+    );
+    f.git("repo", "update-ref refs/heads/by-git HEAD")?;
+    assert_eq!(
+        newest_update_index(&f, "repo/.git/reftable")?,
+        before + 2,
+        "Git's transaction is the next one and continues without a gap"
+    );
+    assert_eq!(
+        reflog_messages(&f, "repo", "refs/heads/two")?,
+        ["b"],
+        "the log entries of all edits are found although they share an update index"
+    );
+    f.git_agrees_that_nothing_is_wrong()?;
+    Ok(())
+}
+
 #[test]
 fn stacks_are_compacted_after_enough_transactions_and_git_keeps_reading_them() -> TestResult {
     let f = Fixture::new()?;
