@@ -48,7 +48,7 @@ use gix_ref::{
 };
 use gix_testtools::TestResult;
 
-use super::write::{Fixture, commit, create, name};
+use super::write::{Fixture, commit, create, name, update};
 use crate::fixture_hash_kind;
 
 /// The path of the newest table of the stack at `dir`.
@@ -365,6 +365,95 @@ fn t0613_disabled_reflog_writes_no_log_records() -> TestResult {
     assert!(
         f.git("repo", "reflog exists refs/heads/unlogged").is_err(),
         "no reflog was created although branches get one otherwise"
+    );
+    Ok(())
+}
+
+/// Lines `<new id> <message>` of the reflog of `reference`, newest first.
+fn reflog_lines(fixture: &Fixture, reference: &str) -> TestResult<Vec<String>> {
+    Ok(fixture
+        .git("repo", &format!("reflog show --format=%H\\ %gs {reference} --"))?
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+/// The entries of the log of `reference` as `old new message`, newest first, as the store reads them. Git can't show the log of
+/// `HEAD` once the branch it points to is gone.
+fn entries(fixture: &Fixture, reference: &str) -> TestResult<Vec<String>> {
+    let store = gix_ref::Store::from(fixture.main());
+    let name: &gix_ref::FullNameRef = reference.try_into()?;
+    let mut platform = store.as_ref().reflog(name);
+    let lines = platform.rev()?.expect("the log exists");
+    Ok(lines
+        .map(|line| {
+            let line = line?;
+            Ok(format!("{} {} {}", line.previous_oid, line.new_oid, line.message))
+        })
+        .collect::<gix_error::Result<_>>()?)
+}
+
+#[test]
+fn deleting_the_branch_head_points_at_logs_the_deletion_to_head_like_git() -> TestResult {
+    let (by_git, by_store) = (Fixture::new()?, Fixture::new()?);
+    let branch = by_git.git("repo", "symbolic-ref HEAD")?;
+    assert_eq!(
+        branch.trim(),
+        "refs/heads/main",
+        "HEAD points to the branch that is deleted"
+    );
+    by_git.git("repo", "update-ref -d refs/heads/main")?;
+    commit(
+        &by_store.main(),
+        vec![RefEdit::delete(name("refs/heads/main"), PreviousValue::MustExist)],
+    )?;
+    let ours = entries(&by_store, "HEAD")?;
+    let theirs = entries(&by_git, "HEAD")?;
+    assert_eq!(
+        ours.len(),
+        theirs.len(),
+        "the deletion is an entry of the log of HEAD, as it is for Git"
+    );
+    let (our_newest, their_newest) = (&ours[0], &theirs[0]);
+    assert_eq!(
+        our_newest.split(' ').take(2).collect::<Vec<_>>(),
+        their_newest.split(' ').take(2).collect::<Vec<_>>(),
+        "it goes from the commit the branch had to the null id, like Git records it"
+    );
+    Ok(())
+}
+
+#[test]
+fn only_existing_reflogs_are_appended_to_without_log_all_ref_updates_like_git() -> TestResult {
+    let (by_git, by_store) = (Fixture::new()?, Fixture::new()?);
+    let git_config = "-c core.logAllRefUpdates=false";
+    by_git.git(
+        "repo",
+        &format!("{git_config} update-ref refs/heads/side {}", by_git.c1),
+    )?;
+    by_git.git(
+        "repo",
+        &format!("{git_config} update-ref refs/heads/brand-new {}", by_git.c2),
+    )?;
+    let mut store = gix_ref::Store::from(by_store.main());
+    store.set_write_reflog(gix_ref::store::WriteReflog::Existing);
+    commit_with(
+        &store,
+        vec![
+            update("refs/heads/side", by_store.c1, PreviousValue::Any, "moved"),
+            create("refs/heads/brand-new", by_store.c2, "created"),
+        ],
+    )?;
+    for reference in ["refs/heads/side", "refs/heads/brand-new", "HEAD"] {
+        assert_eq!(
+            reflog_lines(&by_store, reference)?.len(),
+            reflog_lines(&by_git, reference)?.len(),
+            "{reference} has as many entries as it has for Git: the one that exists got one, and none was created"
+        );
+    }
+    assert!(
+        by_store.git("repo", "reflog exists refs/heads/brand-new").is_err(),
+        "no reflog for the new branch"
     );
     Ok(())
 }
