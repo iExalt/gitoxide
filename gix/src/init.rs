@@ -6,8 +6,12 @@ use gix_ref::{
     transaction::{PreviousValue, RefEdit},
 };
 
-use crate::error::{ResultExt, message, validation};
-use crate::{Result, ThreadSafeRepository, bstr::ByteSlice, config::tree::Init};
+use crate::error::{ResultExt, bail, message, validation};
+use crate::{
+    Result, ThreadSafeRepository,
+    bstr::ByteSlice,
+    config::tree::{Feature, Init},
+};
 
 /// The name of the branch to use if non is configured via git configuration.
 ///
@@ -36,6 +40,11 @@ impl ThreadSafeRepository {
     /// Similar to [`init`][Self::init()], but allows to determine how exactly to open the newly created repository.
     /// Invalid `init.defaultBranch` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
     ///
+    /// Requests for reference storage other than `files`, like `init.defaultRefFormat=reftable`, fail with an
+    /// [unsupported](gix_error::Error::is_unsupported()) error before anything is created. As with the other environment
+    /// and system configuration read here, they are only honored as far as the permissions of `open_options` allow, so
+    /// [`Options::isolated()`](crate::open::Options::isolated()) creates `files` regardless of `GIT_DEFAULT_REF_FORMAT`.
+    ///
     /// # Deviation
     ///
     /// Instead of naming the default branch `master`, we name it `main` unless configured explicitly using the `init.defaultBranch`
@@ -47,6 +56,7 @@ impl ThreadSafeRepository {
         open_options: crate::open::Options,
     ) -> Result<Self> {
         let directory = directory.as_ref();
+        assure_ref_format_is_supported(&open_options)?;
         if create_options.object_hash.is_none() {
             create_options.object_hash = default_object_format(&open_options)?;
         }
@@ -99,6 +109,54 @@ impl ThreadSafeRepository {
 
         Ok(repo)
     }
+}
+
+/// Fail if Git would store the references of a new repository using something else than `files`, as we can't create these.
+///
+/// This follows Git's precedence, which is `GIT_REFERENCE_BACKEND`, then a format requested explicitly by the caller as
+/// `init.defaultRefFormat` using `open_options` (like Git's `--ref-format`), then `GIT_DEFAULT_REF_FORMAT`,
+/// then `init.defaultRefFormat`, and then `feature.experimental`, which selects `reftable` unless
+/// `init.defaultRefFormat` is set. Like in Git, only the system, global and environment configuration is used.
+///
+/// It must be called before anything is created, so that requesting something else than `files` doesn't silently
+/// create a repository that stores its references in files.
+pub(crate) fn assure_ref_format_is_supported(options: &crate::open::Options) -> Result<()> {
+    let refuse = |format: &str| -> Result<()> {
+        bail!(
+            gix_error::unsupported(
+                "Creating repositories that store references other than in `files` is not supported"
+            )
+            .with("format", format.to_owned())
+        )
+    };
+    if let Some(backend) = crate::open::ref_backend_from_environment(&options.permissions.env)? {
+        return backend.map_or(Ok(()), |backend| refuse(&backend));
+    }
+    let config = crate::config(None, options)?;
+    let filter = options
+        .filter_config_section
+        .unwrap_or(crate::config::section::is_trusted);
+    let key = &Init::DEFAULT_REF_FORMAT;
+    // A format passed through the API is an explicit request, like `--ref-format`, and thus beats the environment.
+    let explicit = config.string_implicit_filter(key, |meta| meta.source == gix_config::Source::Api && filter(meta));
+    if let Some(value) = explicit.or_else(|| config.string_implicit_filter(key, filter)) {
+        let value =
+            value.ok_or_else(|| crate::config::key::error(key, "Missing configuration value").validation_error())?;
+        return match value.as_bstr().as_bytes() {
+            b"files" => Ok(()),
+            b"reftable" => refuse("reftable"),
+            _ => Err(crate::config::key::error(key, "Unknown reference format")
+                .with_input(value.as_bstr())
+                .validation_error()),
+        };
+    }
+    let experimental = Feature::EXPERIMENTAL
+        .enrich_error(config.boolean_filter(Feature::EXPERIMENTAL, filter))?
+        .unwrap_or_default();
+    if experimental {
+        return refuse("reftable");
+    }
+    Ok(())
 }
 
 /// Read `init.defaultObjectFormat` without repository context, like Git's format selection.

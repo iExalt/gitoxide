@@ -53,6 +53,11 @@ pub mod diff;
 pub struct Extensions;
 pub mod extensions;
 
+/// The `feature` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Feature;
+mod feature;
+
 /// The `fetch` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Fetch;
