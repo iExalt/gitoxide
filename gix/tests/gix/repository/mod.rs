@@ -29,6 +29,7 @@ mod object;
 mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
+mod ref_storage;
 mod reference;
 mod remote;
 mod shallow;

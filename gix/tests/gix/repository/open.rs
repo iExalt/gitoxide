@@ -146,7 +146,7 @@ fn non_bare_reftable() -> TestResult {
     assert!(err.is_unsupported(), "the reference backend requires changing strategy");
     insta::assert_debug_snapshot!(err.probable_cause(), "accessing HEAD explains that the reference storage backend is unsupported", @r#"
     Message {
-        message: "This reference uses an unsupported storage backend, such as reftable",
+        message: "References are stored using the unsupported `reftable` backend",
         class: Unsupported,
     }
     "#);

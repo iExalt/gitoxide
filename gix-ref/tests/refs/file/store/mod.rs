@@ -16,6 +16,7 @@ mod access;
 mod find;
 mod iter;
 mod reflog;
+mod unsupported;
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "Needs filesystem that folds Unicode composition")]

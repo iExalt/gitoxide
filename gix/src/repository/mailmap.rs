@@ -36,11 +36,19 @@ impl crate::Repository {
         match self.workdir() {
             None => {
                 blob_id = blob_id.or_else(|| {
-                    self.head().ok().and_then(|mut head| {
-                        let commit = head.peel_to_commit().ok()?;
-                        let tree = commit.tree().ok()?;
-                        tree.find_entry(".mailmap").map(|e| e.object_id())
-                    })
+                    let mut head = match self.head() {
+                        Ok(head) => head,
+                        Err(e) => {
+                            // An unborn HEAD is fine, but unsupported storage hides the HEAD that would have a `.mailmap`.
+                            if e.is_unsupported() {
+                                err.get_or_insert(e.and_raise(message("The `.mailmap` of HEAD could not be read")));
+                            }
+                            return None;
+                        }
+                    };
+                    let commit = head.peel_to_commit().ok()?;
+                    let tree = commit.tree().ok()?;
+                    tree.find_entry(".mailmap").map(|e| e.object_id())
                 });
             }
             Some(root) => match gix_fs::open_read_only_no_follow(&root.join(".mailmap")) {

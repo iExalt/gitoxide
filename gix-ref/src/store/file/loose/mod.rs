@@ -65,6 +65,7 @@ mod init {
                 packed: gix_fs::SharedFileSnapshotMut::new().into(),
                 object_hash,
                 precompose_unicode,
+                unsupported_backend: None,
             }
         }
 
@@ -103,6 +104,7 @@ mod init {
                 packed: gix_fs::SharedFileSnapshotMut::new().into(),
                 object_hash,
                 precompose_unicode,
+                unsupported_backend: None,
             }
         }
     }

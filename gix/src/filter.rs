@@ -210,8 +210,11 @@ impl Pipeline<'_> {
             let Some(submodule_repo) = crate::open_opts(&path, options).ok() else {
                 return Ok(None);
             };
-            let Some(id) = submodule_repo.head_id().ok() else {
-                return Ok(None);
+            let id = match submodule_repo.head_id() {
+                Ok(id) => id,
+                // An unborn or otherwise unreadable HEAD means there is nothing to track, but unsupported storage hides it.
+                Err(err) if err.is_unsupported() => return Err(err),
+                Err(_) => return Ok(None),
             };
             (id.detach().attach(repo), gix_object::tree::EntryKind::Commit)
         } else {

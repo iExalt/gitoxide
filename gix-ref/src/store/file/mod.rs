@@ -38,6 +38,8 @@ pub struct Store {
     /// It's updated only in one spot, which is prior to reading it based on file stamps.
     /// Doing it like this has the benefit of being able to hand snapshots out to people without blocking others from updating it.
     packed: packed::modifiable::MutableSharedBuffer,
+    /// The reference storage backend this store must refuse to operate on, see [`Self::set_unsupported_backend()`].
+    unsupported_backend: Option<String>,
 }
 
 mod access {
@@ -80,7 +82,8 @@ mod access {
         }
 
         /// Return `Some(true)` if this is a freshly initialized ref store without any observable changes.
-        /// Return `None` if `HEAD` couldn't be read.
+        /// Return `None` if `HEAD` couldn't be read, which includes stores marked with an
+        /// [unsupported backend](Self::set_unsupported_backend()).
         ///
         /// This is the case if:
         ///
@@ -138,6 +141,8 @@ pub mod transaction;
 
 ///
 pub mod packed;
+
+mod unsupported;
 
 mod raw_ext;
 pub use raw_ext::ReferenceExt;
