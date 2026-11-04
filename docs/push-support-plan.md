@@ -256,7 +256,7 @@ existing subscriptions is approved.
 | 3. Hook runner | `core.hooksPath` resolution; argument, stdin, environment and working-directory parity with Git; veto versus notification exit handling; missing and non-executable hooks; Git 2.56 config-defined hooks, parallel jobs and per-hook stdin producers | None | None known | done |
 | 4. Ref-store abstraction and interim reftable refusal | Probe P12 first; refuse every reference operation, reads and writes, on a repository whose `extensions.refStorage` is not `files`, with an `Unsupported` error, while opening and object access keep working; `gix init` follows Git's ref-format precedence and refuses a requested reftable; then the staged ref-store abstraction (assessment 5.1, additive handle first) and its call-site migration; probe P11 | None | None known | ready |
 | 5. Durability plumbing and differential fault harness | Probes P1, P3, P5 and P7; `core.fsync` and `core.fsyncMethod` for objects, packs and refs, including the barrier flush; the files-store gaps in assessment 4.3; an uncertain-outcome class; a transaction observer; P1, P3 and P5 turned into differential tests against Git | None; rebases on thread 4 where both touch `gix-ref` | None known | ready |
-| 6. Reftable codecs and stack layer | Probes P6 and P4; adopt the upstream reftable codecs after a parity review, both hashes and version 2; a new stack layer following Git's lock and publication protocol, with reload, segment compaction, cleanup and flush; interoperability tests where Git reads fork-written tables and stacks and the fork reads Git's. Integration as a ref backend waits for thread 4 | None for the standalone crate | None known | ready |
+| 6. Reftable codecs and stack layer | Probes P6 and P4; adopt the upstream reftable codecs after a parity review, both hashes and version 2; a new stack layer following Git's lock and publication protocol, with reload, segment compaction, cleanup and flush; interoperability tests where Git reads fork-written tables and stacks and the fork reads Git's. Integration as a ref backend waits for thread 4 | None for the standalone crate | None known | done: standalone `gix-reftable` crate, estimated at 4–5.5 sessions and run in that range; see the revision log |
 
 Later threads (reftable ref backend, local consumer backend, repository push and fetch,
 network, receiver, maintenance, cutover) follow the assessment's section 9 rows and
@@ -312,3 +312,31 @@ sequencing; the overseer proposes each as its dependencies finish.
   first, so the interim refusal lands now in thread 4. The overseer also started the
   standalone reftable codecs and stack layer (thread 6) now, rather than after the base
   work, so that support can land sooner.
+- 2026-11-04: thread 6 (reftable codecs and stack layer) is done as the standalone `gix-reftable` crate, with no `gix-ref`
+  dependency and no backend integration. Probe P6 found the upstream port worth adopting, so the record, block and table codecs follow
+  its structure under `(MIT OR Apache-2.0) AND BSD-3-Clause`, the owner having chosen to add the latter for the code that
+  derives from Git's reftable library. Its stack module wasn't adopted: it neither locks nor checks for concurrent writers,
+  and flushes and compacts differently. The parity review changed the port: names are bytes, the writer streams and lays
+  blocks, padding and indices out like Git, keys must ascend, seeking uses the index, lengths are bounded, and errors are
+  `gix-error` errors. The stack layer reads, adds tables under the `tables.list` lock, compacts by Git's geometric policy
+  and cleans up. Git reads what the fork writes and the fork reads what Git writes, for both hashes, with tombstones and
+  logs, and the compaction choices and merged bytes match Git's `pack-refs`.
+  - Differences from Git that are decisions: readers fail closed on a missing, damaged or foreign table, where Git's
+    readers treat it as an empty stack and the same goes for a list that keeps changing past the deadline; names in
+    `tables.list` must be plain file names; Git's stat-based staleness check is a content comparison; the object index is
+    read but not written; compaction is kept out of `Addition::commit()`, so that its failures can't misreport a published
+    change; and `Addition` reloads a stale view under the lock, like Git, leaving expected old values to the caller.
+  - A failed replacement of the list is told apart: when the old list is in place the added tables are removed, but when
+    the new list may be in place, which includes a list that can't be read, they stay and the error is a typed
+    `UncertainAfterPublish`. Lock contention is retryable and a stale view in a compaction is a conflict.
+  - P4 results behind this: a held lock fails after about the 100 ms `reftable.lockTimeout`; Git 2.56 readers swallow a
+    missing or damaged table as no references while its writers fail; a transaction over several stacks commits the
+    worktree stack first, so a failure on the main stack leaves the first published; `pack-refs` removes orphan tables;
+    and there is no `reftable.autoCompaction` setting. Whether Git stays correct when it fails after publishing wasn't
+    probed, as there is no deterministic trigger. The fork covers it with a fault seam in its own tests.
+  - No `gix-reftable` has been merged upstream as of this date, and two draft upstream pull requests only add fixtures
+    for one. They plan for `gix-ref` to consume the crate, which matches this layout.
+  - Not covered: Windows, expiring reflog entries while compacting, writing the object index, and Git compacting
+    tables below the fork's range inside its unlock window, which would contend for the same locks. The backend adapter
+    in `gix-ref` and migration wait for thread 4's abstraction. `Stack` and `Snapshot` are `Send + Sync` and `Snapshot`
+    is cheap to clone, so an adapter can open the stack lazily behind an `Arc`.
