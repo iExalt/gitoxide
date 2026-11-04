@@ -212,6 +212,9 @@ pub type DurationInMilliseconds = Any<validate::DurationInMilliseconds>;
 /// A key which represents any unsigned integer.
 pub type UnsignedInteger = Any<validate::UnsignedInteger>;
 
+/// A key which represents any integer, including negative ones. `gc.auto`, for one, disables itself with zero or less.
+pub type Integer = Any<validate::Integer>;
+
 /// A key that represents a remote name, either as url or symbolic name.
 pub type RemoteName = Any<validate::RemoteName>;
 
@@ -426,6 +429,17 @@ impl Path {
     }
 }
 
+mod integer {
+    use crate::config::tree::{Section, keys::Integer};
+
+    impl Integer {
+        /// Create a new instance.
+        pub const fn new_integer(name: &'static str, section: &'static dyn Section) -> Self {
+            Self::new_with_validate(name, section, super::validate::Integer)
+        }
+    }
+}
+
 mod workers {
     use gix_error::ResultExt;
 
@@ -614,6 +628,17 @@ pub mod validate {
     impl Validate for UnsignedInteger {
         fn validate(&self, value: &BStr) -> Result {
             gix_config::Integer::from_bytes::<usize>(value)?;
+            Ok(())
+        }
+    }
+
+    /// Assure that values that parse as signed integers are valid.
+    #[derive(Default, Clone, Copy)]
+    pub struct Integer;
+
+    impl Validate for Integer {
+        fn validate(&self, value: &BStr) -> Result {
+            gix_config::Integer::from_bytes::<i64>(value)?;
             Ok(())
         }
     }

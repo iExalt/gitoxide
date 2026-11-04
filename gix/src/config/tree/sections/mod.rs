@@ -63,6 +63,11 @@ mod feature;
 pub struct Fetch;
 pub mod fetch;
 
+/// The `gc` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Gc;
+pub mod gc;
+
 /// The `gitoxide` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Gitoxide;
@@ -87,6 +92,11 @@ pub mod index;
 #[derive(Copy, Clone, Default)]
 pub struct Init;
 mod init;
+
+/// The `maintenance` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Maintenance;
+pub mod maintenance;
 
 #[derive(Copy, Clone, Default)]
 pub struct Mailmap;
