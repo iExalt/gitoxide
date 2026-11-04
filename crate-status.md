@@ -1063,6 +1063,13 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
 
 Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility.
 
+* [x] read and write single tables, for SHA-1 (version 1) and SHA-256 (version 2)
+    * [x] reference and reflog records, tombstones and block indices of any depth
+    * [x] tables have the layout of Git's (blocks, padding, indices of any depth), and Git reads them in turn; deflated log blocks match too for Git built with classic zlib
+    * [x] reference names and reflog fields are bytes, not necessarily UTF-8
+    * [x] structurally invalid tables are errors that are classified as corruption, never panics or empty results
+    * [ ] write and use the object index
+* [x] a merged view of several tables, with tombstones that can be hidden
 * [ ] read and write reftable stacks
 * [ ] transactions and reflogs
 * [ ] compaction and table management
