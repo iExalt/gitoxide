@@ -1,0 +1,367 @@
+//! Hooks of a receiver are run like `git receive-pack` runs them: with the same arguments, input and environment, in the
+//! same order, with what they say relayed to the client and with their exit codes deciding the same.
+//!
+//! The hooks are scripts that record how they were called, see `Hook`, so the recordings of Git and the receiver are compared
+//! on top of everything that `receive_pack` compares. Where the position of a hook in a recording is what matters, it is
+//! asserted on what Git recorded, so that the comparison can't be passed by neither doing it.
+#![cfg(unix)]
+use gix_testtools::TestResult;
+
+use super::receive_pack::{Cmd, Hook, Push, World, assert_same, compare_on, push, with_setup};
+
+fn all_hooks() -> Vec<Hook> {
+    ["pre-receive", "update", "post-receive", "post-update"]
+        .into_iter()
+        .map(Hook::new)
+        .collect()
+}
+
+fn with_hooks(push: Push, hooks: Vec<Hook>) -> Push {
+    Push { hooks, ..push }
+}
+
+/// The position of `needle` in what a hook recorded, which has to be there.
+fn at(log: &str, needle: &str) -> usize {
+    log.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} is in the recording of Git:\n{log}"))
+}
+
+fn git_log(world: &World, label: &str, push: &Push, formats: &[&str]) -> TestResult<String> {
+    let mut results = compare_on(world, label, push, formats)?;
+    Ok(results.remove(0).hooks)
+}
+
+#[test]
+fn all_hooks_see_what_they_see_in_git() -> TestResult {
+    let world = World::new()?;
+    let commands = [
+        Cmd("0", "next", "refs/heads/next"),
+        Cmd("main", "next", "refs/heads/main"),
+        Cmd("side", "0", "refs/heads/side"),
+    ];
+    let pushed = with_hooks(
+        with_setup(push(&commands), &["config receive.denyCurrentBranch ignore"]),
+        all_hooks(),
+    );
+    let log = git_log(&world, "hooks-non-atomic", &pushed, &["files", "reftable"])?;
+    assert!(
+        log.contains("GIT_PUSH_OPTION_COUNT=0\n"),
+        "the count is set without options, as Git does it:\n{log}"
+    );
+    let pre = &log[at(&log, "== pre-receive")..at(&log, "== update")];
+    assert!(
+        pre.contains("object_dir=quarantine") && pre.contains("quarantine=set") && pre.contains("visible: commit"),
+        "pre-receive sees the objects of the push in the quarantine:\n{pre}"
+    );
+    let update = &log[at(&log, "== update")..at(&log, "== post-receive")];
+    assert!(
+        update.contains("quarantine=unset") && update.contains("GIT_PUSH_OPTION_COUNT=unset"),
+        "update is called after the objects moved, and gets no push options:\n{update}"
+    );
+    assert!(
+        at(&log, "== update refs/heads/side") < at(&log, "== update refs/heads/next"),
+        "without atomicity deletions are executed first, and so their update hooks run first:\n{log}"
+    );
+    let post = &log[at(&log, "== post-receive")..at(&log, "== post-update")];
+    assert!(
+        post.contains("quarantine=unset") && post.contains("GIT_PUSH_OPTION_COUNT=0"),
+        "post-receive has no quarantine but the count:\n{post}"
+    );
+    assert!(
+        log[at(&log, "== post-update")..]
+            .starts_with("== post-update refs/heads/next refs/heads/main refs/heads/side\n"),
+        "post-update gets the names of what was updated, in the order of the commands:\n{log}"
+    );
+    git_log(&world, "hooks-atomic", &Push { atomic: true, ..pushed }, &["files"])?;
+    Ok(())
+}
+
+#[test]
+fn the_objects_of_the_push_are_found_in_a_repository_that_has_a_colon_in_its_path() -> TestResult {
+    let world = World::new()?;
+    let pushed = with_hooks(
+        push(&[Cmd("0", "next", "refs/heads/next")]),
+        vec![Hook::new("pre-receive")],
+    );
+    // The name of the directory ends up in the alternates, where a colon separates paths, and has to be quoted.
+    let log = git_log(&world, "colon:in:path", &pushed, &["files"])?;
+    assert!(
+        log.contains("visible: commit"),
+        "Git finds the objects of the quarantine, and the receiver is compared to it:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn push_options_reach_the_hooks_that_get_them() -> TestResult {
+    let world = World::new()?;
+    let pushed = Push {
+        options: vec!["topic=a b", "flag"],
+        ..with_hooks(push(&[Cmd("0", "next", "refs/heads/next")]), all_hooks())
+    };
+    let log = git_log(&world, "push-options", &pushed, &["files", "reftable"])?;
+    assert_eq!(
+        log.matches("GIT_PUSH_OPTION_COUNT=2\nGIT_PUSH_OPTION_0=topic=a b\nGIT_PUSH_OPTION_1=flag\n")
+            .count(),
+        2,
+        "only pre-receive and post-receive get the options:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_deletion_has_no_objects_and_so_no_quarantine() -> TestResult {
+    let world = World::new()?;
+    let pushed = with_hooks(
+        with_setup(
+            push(&[Cmd("side", "0", "refs/heads/side")]),
+            &["config receive.denyDeletes false"],
+        ),
+        all_hooks(),
+    );
+    let log = git_log(&world, "hooks-delete-only", &pushed, &["files", "reftable"])?;
+    assert!(
+        log[at(&log, "== pre-receive")..at(&log, "== update")].contains("quarantine=unset"),
+        "without objects pre-receive has no quarantine:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pre_receive_declines_everything_and_the_hooks_after_it_do_not_run() -> TestResult {
+    let world = World::new()?;
+    let pushed = with_hooks(
+        push(&[Cmd("0", "next", "refs/heads/next"), Cmd("side", "0", "refs/heads/side")]),
+        vec![
+            Hook::new("pre-receive").exiting(1),
+            Hook::new("update"),
+            Hook::new("post-receive"),
+            Hook::new("post-update"),
+        ],
+    );
+    let log = git_log(&world, "pre-receive-declines", &pushed, &["files", "reftable"])?;
+    assert!(
+        log.contains("== pre-receive") && !log.contains("== update") && !log.contains("== post-"),
+        "only pre-receive ran:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pre_receive_is_told_of_commands_that_failed_already_but_not_after_an_unpack_error() -> TestResult {
+    let world = World::new()?;
+    let hooks = || vec![Hook::new("pre-receive"), Hook::new("post-receive")];
+    // One of two commands lacks its objects, and the hook still hears about both.
+    let log = git_log(
+        &world,
+        "pre-receive-after-connectivity",
+        &with_hooks(
+            Push {
+                pack_of: Some(vec!["next"]),
+                ..push(&[
+                    Cmd("0", "next", "refs/heads/next"),
+                    Cmd("0", "diverge", "refs/heads/diverge"),
+                ])
+            },
+            hooks(),
+        ),
+        &["files", "reftable"],
+    )?;
+    assert_eq!(
+        log.matches("stdin: ").count(),
+        3,
+        "pre-receive gets both commands, and post-receive the one that worked:\n{log}"
+    );
+    // Everything is hidden or lacks objects, and the hook is called all the same, but nothing follows.
+    let log = git_log(
+        &world,
+        "pre-receive-all-failed",
+        &with_hooks(
+            with_setup(
+                push(&[Cmd("side", "next", "refs/heads/side")]),
+                &["config receive.hideRefs refs/heads/side"],
+            ),
+            hooks(),
+        ),
+        &["files", "reftable"],
+    )?;
+    assert!(
+        log.contains("== pre-receive") && !log.contains("== post-receive"),
+        "pre-receive is called even though everything failed, and post-receive isn't:\n{log}"
+    );
+    // An unpack error ends it all before any hook.
+    let log = git_log(
+        &world,
+        "no-hook-after-unpack-error",
+        &with_hooks(
+            Push {
+                no_pack: true,
+                ..push(&[Cmd("0", "next", "refs/heads/next")])
+            },
+            hooks(),
+        ),
+        &["files", "reftable"],
+    )?;
+    assert!(log.is_empty(), "no hook ran after an unpack error:\n{log}");
+    Ok(())
+}
+
+#[test]
+fn a_declining_update_hook_stops_its_reference_and_atomic_pushes() -> TestResult {
+    let world = World::new()?;
+    let commands = [
+        Cmd("0", "next", "refs/heads/next"),
+        Cmd("side", "next", "refs/heads/side"),
+        Cmd("0", "diverge", "refs/heads/diverge"),
+    ];
+    let hooks = vec![
+        Hook::new("update").declining("refs/heads/side"),
+        Hook::new("post-update"),
+    ];
+    let log = git_log(
+        &world,
+        "update-declines",
+        &with_hooks(push(&commands), hooks.clone()),
+        &["files", "reftable"],
+    )?;
+    assert!(
+        log.contains("== update refs/heads/diverge")
+            && log.contains("== post-update refs/heads/next refs/heads/diverge\n"),
+        "the others went on and post-update was told of them only:\n{log}"
+    );
+    let log = git_log(
+        &world,
+        "update-declines-atomic",
+        &Push {
+            atomic: true,
+            ..with_hooks(push(&commands), hooks)
+        },
+        &["files", "reftable"],
+    )?;
+    assert!(
+        !log.contains("== update refs/heads/diverge") && !log.contains("== post-update"),
+        "an atomic push stops at the first that is declined, so the later ones are not asked:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn post_hooks_cannot_change_the_outcome_and_are_skipped_if_nothing_was_updated() -> TestResult {
+    let world = World::new()?;
+    let log = git_log(
+        &world,
+        "post-hooks-fail",
+        &with_hooks(
+            push(&[Cmd("0", "next", "refs/heads/next")]),
+            vec![
+                Hook::new("post-receive").exiting(1),
+                Hook::new("post-update").exiting(2),
+            ],
+        ),
+        &["files", "reftable"],
+    )?;
+    assert!(
+        log.contains("== post-receive") && log.contains("== post-update refs/heads/next"),
+        "both hooks ran and the push still worked:\n{log}"
+    );
+    // Only a command that did not exist when it was deleted is "updated" for no hook.
+    let log = git_log(
+        &world,
+        "post-hooks-for-missing-reference",
+        &with_hooks(
+            push(&[Cmd("main", "0", "refs/heads/nope")]),
+            vec![Hook::new("post-receive"), Hook::new("post-update")],
+        ),
+        &["files", "reftable"],
+    )?;
+    assert!(
+        log.is_empty(),
+        "a deletion of what wasn't there doesn't call the post hooks:\n{log}"
+    );
+    assert_same(
+        &world,
+        "denied-and-allowed",
+        &with_hooks(
+            with_setup(
+                push(&[
+                    Cmd("main", "diverge", "refs/heads/main"),
+                    Cmd("0", "next", "refs/heads/next"),
+                ]),
+                &["config receive.denyNonFastForwards true"],
+            ),
+            vec![Hook::new("post-receive"), Hook::new("post-update")],
+        ),
+    )
+}
+
+/// Receive with Git and the receiver at the same time, as waiting for slow hooks is what takes the time here.
+fn keep_alive_results(
+    world: &World,
+    label: &str,
+    pushed: &Push,
+) -> TestResult<(super::receive_pack::Result_, super::receive_pack::Result_)> {
+    use super::receive_pack::{fork_receive, git_receive};
+    let format = "files";
+    let request = world.request(format, pushed)?;
+    let git_remote = world.remote(format, &format!("git-{label}"), pushed)?;
+    let fork_remote = world.remote(format, &format!("fork-{label}"), pushed)?;
+    std::thread::scope(|scope| {
+        let git = scope.spawn(|| git_receive(&git_remote, &request, true));
+        let fork = fork_receive(&fork_remote, &request, true)?;
+        Ok((fork, git.join().expect("no panic")?))
+    })
+}
+
+/// A client that waits for a slow hook is told every `receive.keepAlive` seconds that the receiver is still working, with an
+/// empty packet on the data band, which Git does while hooks run before and after the report. How many there are depends on
+/// timing, so what is compared is that there are about as many.
+#[test]
+fn slow_hooks_keep_the_client_waiting_with_keep_alive_packets() -> TestResult {
+    let world = World::new()?;
+    let pushed = with_hooks(
+        with_setup(
+            push(&[Cmd("0", "next", "refs/heads/next")]),
+            &["config receive.keepAlive 1"],
+        ),
+        vec![
+            Hook::new("pre-receive").sleeping(2.2),
+            Hook::new("post-receive").sleeping(1.2),
+        ],
+    );
+    let (fork, git) = keep_alive_results(&world, "keep-alive", &pushed)?;
+    // pre-receive takes 2.2 s and post-receive 1.2 s, so there are at least 2 + 1 beats.
+    assert!(git.keepalives >= 3, "Git keeps the client waiting: {}", git.keepalives);
+    assert!(
+        fork.keepalives >= 3,
+        "the receiver keeps the client waiting as well: {}",
+        fork.keepalives
+    );
+    assert!(
+        git.keepalives.abs_diff(fork.keepalives) <= 1,
+        "about as often as Git: {} vs {}",
+        fork.keepalives,
+        git.keepalives
+    );
+    assert_eq!(fork.hooks, git.hooks, "the same hooks ran");
+    Ok(())
+}
+
+#[test]
+fn a_keep_alive_of_zero_turns_them_off() -> TestResult {
+    let world = World::new()?;
+    let pushed = with_hooks(
+        with_setup(
+            push(&[Cmd("0", "next", "refs/heads/next")]),
+            &["config receive.keepAlive 0"],
+        ),
+        vec![Hook::new("pre-receive").sleeping(1.2)],
+    );
+    let (fork, git) = keep_alive_results(&world, "keep-alive-off", &pushed)?;
+    assert_eq!(
+        (fork.keepalives, git.keepalives),
+        (0, 0),
+        "nobody tells the client to wait"
+    );
+    assert_eq!(fork.hooks, git.hooks, "the same hooks ran");
+    Ok(())
+}

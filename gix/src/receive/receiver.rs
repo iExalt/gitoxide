@@ -21,6 +21,7 @@ use gix_ref::transaction::{LogChange, PreviousValue, RefEdit, RefLog};
 use super::{
     Options,
     connectivity::{self, Cutoffs},
+    hooks::{Heartbeat, Runner},
     policy::{
         self, Ancestry, CheckedOut, Command, Level, Message, Messages, Plan, Policy, Queued, Refs, Resolved,
         StoreFailure, World,
@@ -33,7 +34,11 @@ pub struct Receiver<'repo> {
     repo: &'repo Repository,
     options: Options,
     fault: Option<Fault>,
+    auto_maintenance: Option<AutoMaintenance<'repo>>,
 }
+
+/// What runs maintenance after a push, if it's due, as Git does with `maintenance run --auto` after the hooks.
+type AutoMaintenance<'repo> = Box<dyn Fn(&Repository) -> Result<()> + 'repo>;
 
 /// Something that fails on purpose, to see how the receiver deals with failures that are hard to cause otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +64,9 @@ pub struct Outcome {
     ///
     /// This is the seam for native maintenance: nothing is run by the receiver itself.
     pub maintenance_due: bool,
+    /// What the commands became, for the hooks that run after the report was sent.
+    commands: Vec<Command>,
+    push_options: Vec<BString>,
 }
 
 impl Repository {
@@ -71,14 +79,22 @@ impl Repository {
             repo: self,
             options: Options::from_repository(self)?,
             fault: None,
+            auto_maintenance: None,
         })
     }
 }
 
-impl Receiver<'_> {
+impl<'repo> Receiver<'repo> {
     /// The settings that were read from the configuration.
     pub fn options(&self) -> &Options {
         &self.options
+    }
+
+    /// Run `maintenance` with the repository after the hooks that follow a push, if objects were received and
+    /// [`Options::auto_gc`] says so, like `git receive-pack` runs `maintenance run --auto` then. Its failure is ignored.
+    pub fn with_auto_maintenance(mut self, maintenance: impl Fn(&Repository) -> Result<()> + 'repo) -> Self {
+        self.auto_maintenance = Some(Box::new(maintenance));
+        self
     }
 
     /// Make the receiver fail where a [`Fault`] says.
@@ -138,23 +154,35 @@ impl Receiver<'_> {
         if request.commands.is_empty() {
             return Ok(None);
         }
-        let outcome = self.receive(&request, input, interrupt)?;
         let side_band = request.features.side_band_64k;
+        // A client that waits for hooks is told that all is well every so often, in a packet that has no data.
+        let outcome = {
+            let mut keep_alive = |()| {
+                output.write_all(b"0005\x01").and_then(|()| output.flush()).ok();
+            };
+            let mut beat = || keep_alive(());
+            self.receive_with(
+                &request,
+                input,
+                interrupt,
+                side_band.then_some(&mut beat as Heartbeat<'_>),
+            )?
+        };
         if side_band {
-            let mut text = String::new();
-            for message in outcome
-                .messages
-                .iter()
-                .filter(|message| message.level != Level::Diagnostic)
-            {
-                text.push_str(&format!("{message}\n"));
-            }
-            output
-                .write_all(&side_band::encode(side_band::Channel::Progress, text.as_bytes()))
-                .or_raise(|| message("Could not write messages"))?;
+            write_messages(output, &outcome.messages)?;
         }
         if let Some(format) = request.features.status_format() {
             write_report(output, &outcome.report, format, side_band)?;
+        }
+        let after = {
+            let mut keep_alive = |()| {
+                output.write_all(b"0005\x01").and_then(|()| output.flush()).ok();
+            };
+            let mut beat = || keep_alive(());
+            self.after_report_with(&outcome, side_band.then_some(&mut beat as Heartbeat<'_>))?
+        };
+        if side_band {
+            write_messages(output, &after)?;
         }
         if side_band {
             output
@@ -171,6 +199,36 @@ impl Receiver<'_> {
     /// Commands that can't be executed are reported as such, which isn't an error. Errors are returned if the request
     /// can't be handled at all, like if it asks for what isn't supported.
     pub fn receive(&self, request: &Request, pack: &mut dyn Read, interrupt: &AtomicBool) -> Result<Outcome> {
+        self.receive_with(request, pack, interrupt, None)
+    }
+
+    /// Run the hooks that follow a push, which Git runs after it reported what happened to the client, and then
+    /// maintenance if it is due. Return what the hooks said, which is for the client as well.
+    pub fn after_report(&self, outcome: &Outcome) -> Result<Vec<Message>> {
+        self.after_report_with(outcome, None)
+    }
+
+    fn after_report_with(&self, outcome: &Outcome, heartbeat: Option<Heartbeat<'_>>) -> Result<Vec<Message>> {
+        let mut messages = Messages::default();
+        let heartbeat = heartbeat
+            .zip(self.options.keep_alive)
+            .map(|(beat, interval)| (interval, beat));
+        Runner::new(self.repo, &outcome.push_options, heartbeat)?.post(&outcome.commands, &mut messages);
+        if outcome.maintenance_due
+            && let Some(maintenance) = &self.auto_maintenance
+        {
+            maintenance(self.repo).ok();
+        }
+        Ok(messages.0)
+    }
+
+    fn receive_with(
+        &self,
+        request: &Request,
+        pack: &mut dyn Read,
+        interrupt: &AtomicBool,
+        heartbeat: Option<Heartbeat<'_>>,
+    ) -> Result<Outcome> {
         if !request.shallow.is_empty() {
             bail!(unsupported(
                 "pushes from or to shallow repositories aren't supported yet"
@@ -183,6 +241,10 @@ impl Receiver<'_> {
             .map(|command| Command::new(command.ref_name.clone(), command.old_id, command.new_id))
             .collect();
         let mut messages = Messages::default();
+        let heartbeat = heartbeat
+            .zip(self.options.keep_alive)
+            .map(|(beat, interval)| (interval, beat));
+        let runner = Runner::new(repo, &request.push_options, heartbeat)?;
         let mut unpack_failure = None;
         let mut quarantine = None;
         let mut objects_migrated = false;
@@ -210,6 +272,12 @@ impl Receiver<'_> {
         } else {
             self.verify_connectivity(&mut commands, quarantine.as_ref())?;
             policy::reject_hidden(&mut commands, &|name| self.options.hidden.is_hidden(name));
+            // The hook sees all commands, including those that failed already, and decides about all of them.
+            if runner.pre_receive(&commands, quarantine.as_ref(), &mut messages) {
+                for command in commands.iter_mut().filter(|command| command.error.is_none()) {
+                    command.error = Some("pre-receive hook declined".into());
+                }
+            }
             // If nothing is going to be updated, nothing is going to be kept either.
             if commands.iter().any(|command| command.error.is_none()) {
                 let migrated = quarantine
@@ -225,7 +293,7 @@ impl Receiver<'_> {
                     Ok(migrated) => {
                         objects_migrated = migrated.is_some();
                         keep = migrated;
-                        self.update_references(&mut commands, request.features.atomic, &mut messages)?;
+                        self.update_references(&mut commands, request.features.atomic, &runner, &mut messages)?;
                     }
                 }
             }
@@ -235,7 +303,9 @@ impl Receiver<'_> {
             keep.release().ok();
         }
         drop(quarantine);
+        drop(runner);
 
+        let post_commands = commands.clone();
         Ok(Outcome {
             report: Report {
                 unpack: unpack_failure.map(Into::into),
@@ -250,6 +320,8 @@ impl Receiver<'_> {
             messages: messages.0,
             objects_migrated,
             maintenance_due: maintenance_due && objects_migrated,
+            commands: post_commands,
+            push_options: request.push_options.clone(),
         })
     }
 
@@ -296,9 +368,19 @@ impl Receiver<'_> {
         Ok(())
     }
 
-    fn update_references(&self, commands: &mut [Command], atomic: bool, messages: &mut Messages) -> Result<()> {
+    fn update_references(
+        &self,
+        commands: &mut [Command],
+        atomic: bool,
+        runner: &Runner<'_, '_>,
+        messages: &mut Messages,
+    ) -> Result<()> {
         let repo = self.repo;
-        let world = RepoWorld { repo };
+        let update_hook = |command: &Command, messages: &mut Messages| runner.update(command, messages);
+        let world = RepoWorld {
+            repo,
+            update_hook: Some(&update_hook),
+        };
         policy::check_aliased_updates(
             commands,
             &|name| world.resolve(name),
@@ -328,10 +410,21 @@ impl Receiver<'_> {
         policy::execute(commands, atomic, &policy, &world, &mut refs, messages);
         messages.0.extend(refs.messages.into_iter().map(|text| Message {
             level: policy::Level::Error,
-            text,
+            text: text.into(),
         }));
         Ok(())
     }
+}
+
+/// Tell the client what is going on, on the side band that is for people.
+fn write_messages(output: &mut dyn Write, messages: &[Message]) -> Result<()> {
+    let mut text = Vec::new();
+    for message in messages.iter().filter(|message| message.level != Level::Diagnostic) {
+        text.extend(message.to_side_band_bytes());
+    }
+    output
+        .write_all(&side_band::encode(side_band::Channel::Progress, &text))
+        .or_raise(|| message("Could not write messages"))
 }
 
 /// All references with the id they lead to, in the order of their names, without those that lead nowhere.
@@ -385,9 +478,13 @@ impl Repository {
     }
 }
 
+/// Asks whether the `update` hook declines a command.
+type UpdateHook<'a> = dyn Fn(&Command, &mut Messages) -> bool + 'a;
+
 /// What decisions about commands need to know about the repository.
 struct RepoWorld<'a> {
     repo: &'a Repository,
+    update_hook: Option<&'a UpdateHook<'a>>,
 }
 
 fn read_trimmed(path: &Path) -> Option<BString> {
@@ -458,6 +555,10 @@ impl World for RepoWorld<'_> {
                     .is_ok_and(|linked| worktree_uses(&linked, name))
             })
             .then_some(CheckedOut { bare: false })
+    }
+
+    fn update_hook(&self, command: &Command, messages: &mut Messages) -> bool {
+        self.update_hook.is_some_and(|hook| hook(command, messages))
     }
 
     fn head_name(&self) -> Option<BString> {

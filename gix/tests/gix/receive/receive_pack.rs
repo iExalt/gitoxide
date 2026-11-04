@@ -9,28 +9,120 @@ use std::{
 
 use gix_testtools::TestResult;
 
+/// A hook that records how it was called, says something on both outputs and exits with a code.
+#[derive(Clone)]
+pub(super) struct Hook {
+    pub(super) name: &'static str,
+    pub(super) exit: i32,
+    /// For `update`: decline only the reference of this name.
+    pub(super) decline_ref: Option<&'static str>,
+    /// Seconds to wait before doing anything.
+    pub(super) sleep: f32,
+}
+
+impl Hook {
+    pub(super) fn new(name: &'static str) -> Self {
+        Hook {
+            name,
+            exit: 0,
+            decline_ref: None,
+            sleep: 0.0,
+        }
+    }
+    pub(super) fn exiting(mut self, code: i32) -> Self {
+        self.exit = code;
+        self
+    }
+    pub(super) fn declining(mut self, name: &'static str) -> Self {
+        self.decline_ref = Some(name);
+        self.exit = 1;
+        self
+    }
+    pub(super) fn sleeping(mut self, seconds: f32) -> Self {
+        self.sleep = seconds;
+        self
+    }
+
+    #[cfg(unix)]
+    fn install(&self, remote: &Path) -> TestResult {
+        use std::os::unix::fs::PermissionsExt;
+        let log = remote.join("hook.log");
+        let name = self.name;
+        let decline = match self.decline_ref {
+            Some(reference) => format!("[ \"$1\" = {reference} ] && exit {}\nexit 0", self.exit),
+            None => format!("exit {}", self.exit),
+        };
+        let script = format!(
+            r#"#!/bin/sh
+{{
+  echo "== {name} $*"
+  echo "cwd=$(pwd -P)"
+  echo "GIT_DIR=${{GIT_DIR-unset}}"
+  echo "GIT_PUSH_OPTION_COUNT=${{GIT_PUSH_OPTION_COUNT-unset}}"
+  i=0
+  while [ "$i" -lt "${{GIT_PUSH_OPTION_COUNT:-0}}" ]; do eval "echo GIT_PUSH_OPTION_$i=\$GIT_PUSH_OPTION_$i"; i=$((i+1)); done
+  echo "quarantine=$([ -n "${{GIT_QUARANTINE_PATH-}}" ] && echo set || echo unset)"
+  case "${{GIT_OBJECT_DIRECTORY-}}" in *tmp_objdir-incoming-*) echo object_dir=quarantine;; '') echo object_dir=unset;; *) echo object_dir=other;; esac
+  if [ "{name}" != update ]; then
+    while read old new ref; do
+      echo "stdin: $old $new $ref"
+      case "$new" in *[!0]*) echo "visible: $(git cat-file -t "$new" 2>&1 | head -1)";; esac
+    done
+  fi
+}} >> "{log}"
+sleep {sleep}
+echo "{name} says hi"
+echo "{name} says it on the other output" >&2
+printf "{name} without a newline"
+{decline}
+"#,
+            log = log.display(),
+            sleep = self.sleep,
+        );
+        let hooks = remote.join("hooks");
+        std::fs::create_dir_all(&hooks)?;
+        let path = hooks.join(name);
+        std::fs::write(&path, script)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn install(&self, _remote: &Path) -> TestResult {
+        unreachable!("hooks are scripts, which aren't tried where they can't run")
+    }
+}
+
 /// A command to send, with revisions of the client instead of ids, where `0` is the null id.
 #[derive(Clone, Copy)]
-struct Cmd(&'static str, &'static str, &'static str);
+pub(super) struct Cmd(
+    pub(super) &'static str,
+    pub(super) &'static str,
+    pub(super) &'static str,
+);
 
 /// What a client sends.
 #[derive(Clone, Default)]
-struct Push {
-    commands: Vec<Cmd>,
-    atomic: bool,
-    quiet: bool,
+pub(super) struct Push {
+    pub(super) commands: Vec<Cmd>,
+    pub(super) atomic: bool,
+    pub(super) quiet: bool,
     /// Don't use a side band. The default is to use one, as Git does.
-    no_side_band: bool,
+    pub(super) no_side_band: bool,
     /// Revisions that the pack contains the history of, on top of what the remote has. `None` for all new values.
-    pack_of: Option<Vec<&'static str>>,
+    pub(super) pack_of: Option<Vec<&'static str>>,
     /// Send no pack at all, even though there are commands that need one.
-    no_pack: bool,
+    pub(super) no_pack: bool,
     /// Arguments of Git commands to run in the remote before anything happens, like `config receive.denyDeletes true`.
-    setup: Vec<&'static str>,
+    pub(super) setup: Vec<&'static str>,
     /// The directory of the remote in the directory of the ref format, which is `remote.git` unless set.
-    remote: Option<&'static str>,
+    pub(super) remote: Option<&'static str>,
     /// Something else to do to the remote, which gets the path of the client.
-    prepare: Option<fn(remote: &Path, client: &Path) -> TestResult>,
+    /// Hooks to install in the remote, which record how they were run.
+    pub(super) hooks: Vec<Hook>,
+    /// The push options to send, which the remote is told to accept with `receive.advertisePushOptions`.
+    pub(super) options: Vec<&'static str>,
+    pub(super) prepare: Option<fn(remote: &Path, client: &Path) -> TestResult>,
 }
 
 fn copy_dir(from: &Path, to: &Path) -> TestResult {
@@ -47,31 +139,31 @@ fn copy_dir(from: &Path, to: &Path) -> TestResult {
     Ok(())
 }
 
-fn pkt(line: impl AsRef<[u8]>) -> Vec<u8> {
+pub(super) fn pkt(line: impl AsRef<[u8]>) -> Vec<u8> {
     let line = line.as_ref();
     let mut out = format!("{:04x}", line.len() + 4).into_bytes();
     out.extend_from_slice(line);
     out
 }
 
-struct World {
-    dir: gix_testtools::tempfile::TempDir,
-    kind: gix_hash::Kind,
+pub(super) struct World {
+    pub(super) dir: gix_testtools::tempfile::TempDir,
+    pub(super) kind: gix_hash::Kind,
 }
 
 impl World {
-    fn new() -> TestResult<Self> {
+    pub(super) fn new() -> TestResult<Self> {
         Ok(World {
             dir: gix_testtools::scripted_fixture_writable("make_receive_remotes.sh")?,
             kind: gix_testtools::object_hash_from_env().unwrap_or(gix_hash::Kind::Sha1),
         })
     }
 
-    fn client(&self, format: &str) -> PathBuf {
+    pub(super) fn client(&self, format: &str) -> PathBuf {
         self.dir.path().join(format).join("client")
     }
 
-    fn id(&self, format: &str, rev: &str) -> TestResult<String> {
+    pub(super) fn id(&self, format: &str, rev: &str) -> TestResult<String> {
         if rev == "0" {
             return Ok(gix_hash::ObjectId::null(self.kind).to_string());
         }
@@ -81,7 +173,7 @@ impl World {
     }
 
     /// The bytes a client sends for `push`.
-    fn request(&self, format: &str, push: &Push) -> TestResult<Vec<u8>> {
+    pub(super) fn request(&self, format: &str, push: &Push) -> TestResult<Vec<u8>> {
         let mut caps = format!("report-status-v2 object-format={} agent=test", self.kind);
         if !push.no_side_band {
             caps.push_str(" side-band-64k");
@@ -91,6 +183,9 @@ impl World {
         }
         if push.atomic {
             caps.push_str(" atomic");
+        }
+        if !push.options.is_empty() {
+            caps.push_str(" push-options");
         }
         let mut out = Vec::new();
         let mut revs = String::new();
@@ -112,6 +207,12 @@ impl World {
             }
         }
         out.extend(b"0000");
+        if !push.options.is_empty() {
+            for option in &push.options {
+                out.extend(pkt(option));
+            }
+            out.extend(b"0000");
+        }
         let needs_pack = push.commands.iter().any(|Cmd(_, new, _)| *new != "0");
         if needs_pack && !push.no_pack {
             if let Some(pack_of) = &push.pack_of {
@@ -137,7 +238,7 @@ impl World {
     }
 
     /// A copy of the remote of `format` with `config` applied.
-    fn remote(&self, format: &str, label: &str, push: &Push) -> TestResult<PathBuf> {
+    pub(super) fn remote(&self, format: &str, label: &str, push: &Push) -> TestResult<PathBuf> {
         let dest = self.dir.path().join(format!("{format}-{label}"));
         copy_dir(
             &self.dir.path().join(format).join(push.remote.unwrap_or("remote.git")),
@@ -145,8 +246,14 @@ impl World {
         )?;
         // Bare repositories keep no reflogs unless told to, and what is written to them is to be compared.
         gix_testtools::git(&dest, "config core.logAllRefUpdates always")?;
+        if !push.options.is_empty() {
+            gix_testtools::git(&dest, "config receive.advertisePushOptions true")?;
+        }
         for args in &push.setup {
             gix_testtools::git(&dest, args)?;
+        }
+        for hook in &push.hooks {
+            hook.install(&dest)?;
         }
         if let Some(prepare) = push.prepare {
             prepare(&dest, &self.client(format))?;
@@ -157,15 +264,37 @@ impl World {
 
 /// What a receiver did, as far as can be compared.
 #[derive(Debug, PartialEq, Eq)]
-struct Result_ {
+pub(super) struct Result_ {
     /// What the client is told, without what is told on the side band for people.
-    report: Vec<u8>,
-    refs: Vec<String>,
-    objects: Vec<String>,
+    pub(super) report: Vec<u8>,
+    pub(super) refs: Vec<String>,
+    pub(super) objects: Vec<String>,
     /// What people are told on the side band, which is what Git prints to its standard error.
-    messages: String,
+    pub(super) messages: String,
     /// Anything that was left behind that isn't an object or reference, like a quarantine.
-    leftovers: Vec<String>,
+    pub(super) leftovers: Vec<String>,
+    /// How many times the receiver told the client that it is still working, which depends on the time that it takes.
+    pub(super) keepalives: usize,
+    /// What the hooks recorded about how they were run, with what they differ in made the same.
+    pub(super) hooks: String,
+}
+
+/// The number of packets on the side band that are empty, which is how a client is told to keep waiting.
+fn count_keepalives(bytes: &[u8]) -> usize {
+    let mut count = 0;
+    let mut rest = bytes;
+    while rest.len() >= 4 {
+        let len = usize::from_str_radix(std::str::from_utf8(&rest[..4]).expect("hex"), 16).expect("hex");
+        if len == 0 {
+            rest = &rest[4..];
+            continue;
+        }
+        if len == 5 && rest[4] == 1 {
+            count += 1;
+        }
+        rest = &rest[len..];
+    }
+    count
 }
 
 /// Split what is on a side band from the data of the band.
@@ -239,7 +368,7 @@ fn state(repo: &Path) -> TestResult<(Vec<String>, Vec<String>, Vec<String>)> {
 }
 
 /// Run `git receive-pack` on `remote`.
-fn git_receive(remote: &Path, request: &[u8], side_band: bool) -> TestResult<Result_> {
+pub(super) fn git_receive(remote: &Path, request: &[u8], side_band: bool) -> TestResult<Result_> {
     let mut child = gix_testtools::git_command(remote)
         // Messages are compared, so they must not be translated.
         .env("LC_ALL", "C")
@@ -271,7 +400,15 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool) -> TestResult<Result_> 
         (rest.to_vec(), Vec::new())
     };
     let (refs, objects, leftovers) = state(remote)?;
+    let remote_path = std::fs::canonicalize(remote)?.display().to_string();
+    let hooks = std::fs::read_to_string(remote.join("hook.log"))
+        .unwrap_or_default()
+        .replace(&remote_path, "<REMOTE>")
+        // Git passes `.` where the fork passes the absolute path, and the quarantine's name is random.
+        .replace("GIT_DIR=.\n", "GIT_DIR=<REMOTE>\n");
     Ok(Result_ {
+        keepalives: if side_band { count_keepalives(rest) } else { 0 },
+        hooks,
         report,
         messages: normalize_messages(&String::from_utf8_lossy(&messages)),
         refs,
@@ -281,12 +418,17 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool) -> TestResult<Result_> 
 }
 
 /// Run the native receiver on `remote`.
-fn fork_receive(remote: &Path, request: &[u8], side_band: bool) -> TestResult<Result_> {
+pub(super) fn fork_receive(remote: &Path, request: &[u8], side_band: bool) -> TestResult<Result_> {
     // Git gets its identity from the environment of the test, which isolated repositories don't see.
     fork_receive_as(remote, request, side_band, &["user.name=a", "user.email=a@example.com"])
 }
 
-fn fork_receive_as(remote: &Path, request: &[u8], side_band: bool, overrides: &[&str]) -> TestResult<Result_> {
+pub(super) fn fork_receive_as(
+    remote: &Path,
+    request: &[u8],
+    side_band: bool,
+    overrides: &[&str],
+) -> TestResult<Result_> {
     let repo = gix::open_opts(
         remote,
         gix::open::Options::isolated().config_overrides(overrides.iter().copied()),
@@ -303,12 +445,18 @@ fn fork_receive_as(remote: &Path, request: &[u8], side_band: bool, overrides: &[
     finish(remote, &output, side_band)
 }
 
-fn assert_same(world: &World, label: &str, push: &Push) -> TestResult {
+pub(super) fn assert_same(world: &World, label: &str, push: &Push) -> TestResult {
     assert_same_on(world, label, push, &["files", "reftable"])
 }
 
 /// Like [`assert_same()`], for the given reference formats, which is only worth varying if a push reaches the reference store.
-fn assert_same_on(world: &World, label: &str, push: &Push, formats: &[&str]) -> TestResult {
+pub(super) fn assert_same_on(world: &World, label: &str, push: &Push, formats: &[&str]) -> TestResult {
+    compare_on(world, label, push, formats).map(drop)
+}
+
+/// Like [`assert_same_on()`], and return what Git did for each of the `formats`.
+pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&str]) -> TestResult<Vec<Result_>> {
+    let mut results = Vec::new();
     for format in formats.iter().copied() {
         let request = world.request(format, push)?;
         let git = git_receive(
@@ -380,12 +528,17 @@ fn assert_same_on(world: &World, label: &str, push: &Push, formats: &[&str]) -> 
             fork.leftovers, git.leftovers,
             "{format}/{label}: nothing is left behind"
         );
+        assert_eq!(
+            fork.hooks, git.hooks,
+            "{format}/{label}: hooks are called with the same arguments, input and environment"
+        );
         assert!(
             !git.report.is_empty(),
             "{format}/{label}: Git reported, so the comparison isn't vacuous"
         );
+        results.push(git);
     }
-    Ok(())
+    Ok(results)
 }
 
 #[test]
@@ -417,14 +570,14 @@ fn creating_updating_and_deleting_references() -> TestResult {
     )
 }
 
-fn push(commands: &[Cmd]) -> Push {
+pub(super) fn push(commands: &[Cmd]) -> Push {
     Push {
         commands: commands.to_vec(),
         ..Default::default()
     }
 }
 
-fn with_setup(mut push: Push, setup: &[&'static str]) -> Push {
+pub(super) fn with_setup(mut push: Push, setup: &[&'static str]) -> Push {
     push.setup = setup.to_vec();
     push
 }

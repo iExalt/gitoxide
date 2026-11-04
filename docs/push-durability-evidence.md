@@ -163,6 +163,16 @@ The fixed identity differs on purpose from the rule of the reference store, that
 receiver must not fail a push for lack of an identity, which servers often don't have, so it supplies one itself.
 Deleting a branch through a symbolic reference deletes both the reference and the branch in Git and in the receiver.
 
+Hooks are compared as well, with scripts that record their arguments, input, environment and position in the sequence
+(`gix/tests/gix/receive/hooks.rs`). `GIT_DIR` is the absolute path where Git passes `.`, which the comparison treats as the
+same. These differences remain, for the network phase to decide about:
+
+* What a hook prints is captured and relayed on the side band when it has exited, where Git streams it. A hook that prints
+  without bound makes the receiver's memory grow without bound.
+* Keep-alive packets are sent every `receive.keepAlive` seconds from the start of each hook, where Git sends one after that
+  many seconds of silence. None are sent while connectivity is checked or deltas are resolved, which Git does as well, and
+  which matters to clients with timeouts for large pushes.
+
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
 unsupported: hooks, `updateInstead`, signed pushes, `proc-receive`, namespaces, shallow and partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully

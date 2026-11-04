@@ -39,6 +39,8 @@ pub struct Options {
     pub advertise_push_options: bool,
     /// `repack.useDeltaBaseOffset`.
     pub prefer_ofs_delta: bool,
+    /// `receive.keepAlive`: how long a client is left waiting while hooks run, before it is told that all is well, if at all.
+    pub keep_alive: Option<std::time::Duration>,
     /// `receive.autogc`: whether maintenance is due after objects were received, as Git runs `gc --auto` then.
     pub auto_gc: bool,
     /// How to store received objects.
@@ -186,6 +188,13 @@ impl Options {
             advertise_atomic: boolean("receive.advertiseAtomic", true)?,
             advertise_push_options: boolean("receive.advertisePushOptions", false)?,
             prefer_ofs_delta: boolean("repack.useDeltaBaseOffset", true)?,
+            keep_alive: {
+                let seconds = config.integer("receive.keepAlive").unwrap_or(5);
+                u64::try_from(seconds)
+                    .ok()
+                    .filter(|seconds| *seconds > 0)
+                    .map(std::time::Duration::from_secs)
+            },
             auto_gc: boolean("receive.autogc", true)?,
             quarantine,
         })
@@ -200,14 +209,7 @@ fn reject_hooks(repo: &Repository) -> Result<()> {
     let dir = repo
         .hooks_dir(gix_hook::Side::Receive)
         .or_raise(|| message("Could not find out where hooks are"))?;
-    for event in [
-        "pre-receive",
-        "update",
-        "post-receive",
-        "post-update",
-        "push-to-checkout",
-        "reference-transaction",
-    ] {
+    for event in ["push-to-checkout", "reference-transaction"] {
         if !gix_hook::Hooks::resolve(event, &dir, Some(&settings)).is_empty() {
             bail!(unsupported(format!(
                 "a '{event}' hook is defined, and hooks aren't supported yet"
