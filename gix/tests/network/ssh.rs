@@ -6,7 +6,7 @@ use gix_testtools::{
     sshd::Sshd,
 };
 
-use crate::{HASHES, Helper, PASSWORD, Setup, USER, isolated};
+use crate::{HASHES, Helper, PASSWORD, Setup, USER, isolated, push_scenarios::push_scenarios};
 
 fn ssh_url(setup: &Setup) -> String {
     format!("ssh://host.example{}/remote.git", setup.path(".").display())
@@ -163,5 +163,64 @@ fn a_real_server_refuses_an_unknown_key_without_involving_credential_helpers() -
         format!("{err:?}").contains("Permission denied"),
         "the reason that `ssh` gave is part of the error: {err:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn leases_and_atomic_pushes_work_over_ssh_for_both_hashes() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    for hash in HASHES {
+        let setup = Setup::new(hash)?;
+        let ssh = FakeSsh::new(Behavior::RunCommand)?;
+        let helper = Helper::new(&setup.path("."), USER, PASSWORD)?;
+        let url = ssh_url(&setup);
+        // `client()` configures the program that is run instead of `ssh`, in the repository that pushes.
+        push_scenarios!(
+            &setup,
+            hash,
+            url.as_str(),
+            repo = client(&setup, &ssh, &helper)?,
+            |remote| remote.connect(gix::remote::Direction::Push)?
+        );
+        assert!(
+            ssh.invocations().iter().all(|invocation| invocation
+                .remote_command()
+                .is_some_and(|cmd| cmd.contains("git-receive-pack"))),
+            "{hash}: every connection ran the receiving side"
+        );
+        assert!(
+            helper.actions().is_empty(),
+            "{hash}: credential helpers have no say in ssh logins"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn leases_and_atomic_pushes_work_through_a_real_server_for_both_hashes() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    let Some(server) = sshd()? else {
+        return Ok(());
+    };
+    for hash in HASHES {
+        let setup = Setup::new(hash)?;
+        let helper = Helper::new(&setup.path("."), USER, PASSWORD)?;
+        let url = Sshd::url(&setup.path("remote.git"));
+        push_scenarios!(
+            &setup,
+            hash,
+            url.as_str(),
+            repo = real_ssh_client(&setup, &server.client_config(), &helper)?,
+            |remote| remote.connect(gix::remote::Direction::Push)?
+        );
+        assert!(
+            helper.actions().is_empty(),
+            "{hash}: credential helpers have no say in ssh logins"
+        );
+    }
     Ok(())
 }
