@@ -208,6 +208,8 @@ impl ThreadSafeRepository {
         let _span = gix_trace::detail!("open_from_paths()");
         options.open_path_as_is = false;
         let retain_inferred_worktree_when_bare = std::mem::take(&mut options.retain_inferred_worktree_when_bare);
+        let config = options.config_permissions();
+        let use_repository_local_environment = options.uses_repository_local_environment();
         let Options {
             ref mut git_dir_trust,
             object_store_slots,
@@ -220,14 +222,14 @@ impl ThreadSafeRepository {
             permissions:
                 Permissions {
                     ref env,
-                    config,
+                    config: _,
                     attributes,
                 },
             ref api_config_overrides,
             ref cli_config_overrides,
             ref git_installation_config_path,
             ref system_config_path,
-            use_repository_local_environment,
+            repository_environment: _,
             ref mut current_dir,
         } = options;
         let git_dir_trust = git_dir_trust.as_mut().expect("trust must be determined by now");
