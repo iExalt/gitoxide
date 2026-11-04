@@ -18,6 +18,9 @@ pub(crate) struct ConnectionState {
     pub(in crate::client) desired_version: Protocol,
     custom_url: Option<BString>,
     pub(in crate::client) mode: ConnectMode,
+    /// A way to end what the connection blocks on, for connections that know one.
+    #[cfg(feature = "blocking-client")]
+    pub(in crate::client) interrupt: Option<crate::client::InterruptHandle>,
 }
 
 mod message {

@@ -67,6 +67,10 @@ where
     fn configure(&mut self, _config: &dyn Any) -> Result {
         Ok(())
     }
+
+    fn interrupt_handle(&self) -> Option<client::InterruptHandle> {
+        self.state.interrupt.clone()
+    }
 }
 
 impl<R, W> client::blocking_io::Transport for Connection<R, W>
@@ -148,6 +152,8 @@ where
                 desired_version,
                 custom_url: None,
                 mode,
+                #[cfg(feature = "blocking-client")]
+                interrupt: None,
             },
         }
     }
@@ -237,7 +243,10 @@ pub mod connect {
             .map(parse_host)
             .transpose()?
             .unwrap_or_else(|| (virtual_host.to_owned(), port));
-        Ok(Connection::new(
+        let socket = read
+            .try_clone()
+            .or_raise(|| message("Could not clone git server connection"))?;
+        let mut connection = Connection::new(
             read,
             write,
             desired_version,
@@ -245,7 +254,12 @@ pub mod connect {
             Some(vhost),
             git::ConnectMode::Daemon,
             trace,
-        ))
+        );
+        // Closing the socket from another thread ends reads and writes that block on it, which then fail.
+        connection.state.interrupt = Some(crate::client::InterruptHandle::new(move || {
+            socket.shutdown(std::net::Shutdown::Both).ok();
+        }));
+        Ok(connection)
     }
 }
 

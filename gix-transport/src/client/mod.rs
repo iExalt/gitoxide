@@ -3,7 +3,9 @@
 pub mod async_io;
 
 mod traits;
-pub use traits::TransportWithoutIO;
+#[cfg(feature = "blocking-client")]
+pub(crate) use traits::interrupted_error;
+pub use traits::{InterruptHandle, TransportWithoutIO};
 
 ///
 #[cfg(feature = "blocking-client")]

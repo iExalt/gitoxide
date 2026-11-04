@@ -5,6 +5,10 @@ use std::{
     ffi::OsString,
     io::Write,
     process::{self, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use bstr::{BStr, BString, ByteSlice, io::BufReadExt};
@@ -50,8 +54,29 @@ pub struct SpawnProcessOnDemand {
     envs: Vec<(&'static str, String)>,
     ssh_disallow_shell: bool,
     connection: Option<Connection<Box<dyn std::io::Read + Send>, process::ChildStdin>>,
-    child: Option<process::Child>,
+    /// The server process, shared with the handles that interrupt the transport.
+    child: Arc<ChildProcess>,
     trace: bool,
+}
+
+/// The child process of a transport, and whether the transport was interrupted, so that no process starts after that.
+#[derive(Default)]
+struct ChildProcess {
+    interrupted: AtomicBool,
+    process: Mutex<Option<process::Child>>,
+}
+
+impl ChildProcess {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<process::Child>> {
+        self.process.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn interrupt(&self) {
+        self.interrupted.store(true, Ordering::SeqCst);
+        if let Some(child) = self.lock().as_mut() {
+            child.kill().ok();
+        }
+    }
 }
 
 impl SpawnProcessOnDemand {
@@ -70,7 +95,7 @@ impl SpawnProcessOnDemand {
             ssh_cmd: Some((program.into(), ssh_kind)),
             envs: Default::default(),
             ssh_disallow_shell,
-            child: None,
+            child: Default::default(),
             connection: None,
             desired_version: version,
             trace,
@@ -89,7 +114,7 @@ impl SpawnProcessOnDemand {
                 Default::default()
             },
             ssh_disallow_shell: false,
-            child: None,
+            child: Default::default(),
             connection: None,
             desired_version: version,
             trace,
@@ -181,10 +206,15 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
         Ok(())
     }
 
+    fn interrupt_handle(&self) -> Option<client::InterruptHandle> {
+        let child = self.child.clone();
+        Some(client::InterruptHandle::new(move || child.interrupt()))
+    }
+
     fn wait_for_server(&mut self, deadline: std::time::Duration) -> Result<bool> {
-        let Some(child) = self.child.as_mut() else {
+        if self.child.lock().is_none() {
             return Ok(true);
-        };
+        }
         // Closing the input ends servers that wait for more of it, like one that received an incomplete request. The output
         // stays open until the server is done, as it would get a signal if it wrote to it after we closed it, and it is read
         // to its end, as a server with more to say than a pipe holds would block and never finish otherwise.
@@ -198,26 +228,37 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
                 }))
                 .or_raise(|| message("Could not start a thread to read what the server still has to say"))?;
         }
-        let exited = wait_for_exit(child, deadline).or_raise(|| {
+        let exited = wait_for_exit(&self.child, deadline).or_raise(|| {
             message!(
                 "Could not wait for the server process of {} to finish",
                 self.url.to_bstring()
             )
         })?;
         if exited {
-            self.child = None;
+            *self.child.lock() = None;
         }
         Ok(exited)
     }
 }
 
+fn interrupted() -> client::Error {
+    client::Error::Io(crate::client::interrupted_error())
+}
+
 /// Wait for `child` to exit for at most `deadline` and return `true` if it did, which also reaps it.
-fn wait_for_exit(child: &mut process::Child, deadline: std::time::Duration) -> std::io::Result<bool> {
+///
+/// The child isn't locked while waiting, so it can be interrupted.
+fn wait_for_exit(child: &ChildProcess, deadline: std::time::Duration) -> std::io::Result<bool> {
     let start = std::time::Instant::now();
     let mut pause = std::time::Duration::from_millis(1);
     loop {
-        if child.try_wait()?.is_some() {
-            return Ok(true);
+        match child.lock().as_mut() {
+            Some(child) => {
+                if child.try_wait()?.is_some() {
+                    return Ok(true);
+                }
+            }
+            None => return Ok(true),
         }
         let remaining = deadline.saturating_sub(start.elapsed());
         if remaining.is_zero() {
@@ -230,7 +271,7 @@ fn wait_for_exit(child: &mut process::Child, deadline: std::time::Duration) -> s
 
 impl Drop for SpawnProcessOnDemand {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
+        if let Some(mut child) = self.child.lock().take() {
             // The child process (e.g. `ssh`) may still be running at this point, so kill it before joining/waiting.
             // In the happy-path case, it should have already exited gracefully, but in error cases or if the user
             // interrupted the operation, it will likely still be running.
@@ -315,6 +356,9 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         service: Service,
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
     ) -> std::result::Result<SetServiceResponse<'_>, client::Error> {
+        if self.child.interrupted.load(Ordering::SeqCst) {
+            return Err(interrupted());
+        }
         let (cmd, ssh_kind, cmd_name) = self.prepare_command(service)?;
         let envs = std::mem::take(&mut self.envs);
         let into_std_command = |mut cmd: gix_command::Prepare, command: &std::ffi::OsStr| {
@@ -369,7 +413,16 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
             self.path.clone(),
             self.trace,
         ));
-        self.child = Some(child);
+        {
+            let mut shared = self.child.lock();
+            // An interruption that came in while the process started has seen no child to end.
+            if self.child.interrupted.load(Ordering::SeqCst) {
+                child.kill().ok();
+                child.wait().ok();
+                return Err(interrupted());
+            }
+            *shared = Some(child);
+        }
         self.connection
             .as_mut()
             .expect("connection to be there right after setting it")
@@ -407,17 +460,28 @@ mod tests {
     mod wait_for_exit {
         use std::{process::Command, time::Duration};
 
-        use super::super::wait_for_exit;
+        use super::super::{ChildProcess, wait_for_exit};
+
+        fn spawn(script: &str) -> ChildProcess {
+            let child = Command::new("sh").args(["-c", script]).spawn().expect("sh exists");
+            ChildProcess {
+                process: std::sync::Mutex::new(Some(child)),
+                ..Default::default()
+            }
+        }
 
         #[test]
         fn a_process_that_exits_in_time_is_reaped() {
-            let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().expect("sh exists");
+            let child = spawn("exit 0");
             assert!(
-                wait_for_exit(&mut child, Duration::from_secs(30)).expect("polling works"),
+                wait_for_exit(&child, Duration::from_secs(30)).expect("polling works"),
                 "the process finished well before the deadline"
             );
             assert!(
                 child
+                    .lock()
+                    .as_mut()
+                    .expect("the process is still held")
                     .try_wait()
                     .expect("reaped processes can be polled again")
                     .is_some(),
@@ -427,16 +491,18 @@ mod tests {
 
         #[test]
         fn a_process_that_runs_on_is_left_alone_at_the_deadline() {
-            let mut child = Command::new("sh").args(["-c", "sleep 30"]).spawn().expect("sh exists");
+            let child = spawn("sleep 30");
             let start = std::time::Instant::now();
             assert!(
-                !wait_for_exit(&mut child, Duration::from_millis(100)).expect("polling works"),
+                !wait_for_exit(&child, Duration::from_millis(100)).expect("polling works"),
                 "the process is still sleeping"
             );
             assert!(
                 start.elapsed() < Duration::from_secs(10),
                 "the deadline is honored instead of waiting for the process"
             );
+            let mut guard = child.lock();
+            let child = guard.as_mut().expect("the process is still held");
             assert!(child.try_wait().expect("polling works").is_none(), "it wasn't killed");
             child.kill().expect("it is still running");
             child.wait().expect("reaped after the kill");

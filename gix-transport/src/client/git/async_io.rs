@@ -153,6 +153,8 @@ where
                 desired_version,
                 custom_url: None,
                 mode,
+                #[cfg(feature = "blocking-client")]
+                interrupt: None,
             },
         }
     }
