@@ -17,6 +17,10 @@ use crate::{Protocol, client::Error};
 /// Interrupting makes the operation that blocks fail, as promptly as the transport can notice, with an error that says so
 /// if the transport can tell, and every later operation fail as well. The transport can't be used afterwards.
 /// Calling it more than once, or after the transport was dropped, is fine.
+///
+/// The operation fails within about 25 ms for processes, sockets and the `reqwest` backend, and within about a second for
+/// `curl`, which looks at the interrupt once a second while it transfers. Drop the response readers of the transport after
+/// an interrupt: a thread that reports the failure to a reader that doesn't read lives until the reader is dropped.
 #[derive(Clone)]
 pub struct InterruptHandle(Arc<dyn Fn() + Send + Sync>);
 
@@ -36,6 +40,9 @@ impl InterruptHandle {
     ///
     /// This is how a flag that is set elsewhere, such as by a handler for `Ctrl+C`, reaches I/O that blocks on a peer that doesn't
     /// answer. Operations that take such a flag see it set only when they get to look at it.
+    ///
+    /// A flag that is set already interrupts before `operation` starts. The thread costs one spawn per call, also if the flag
+    /// is never set.
     pub fn watch<R>(&self, should_interrupt: &std::sync::atomic::AtomicBool, operation: impl FnOnce() -> R) -> R {
         use std::sync::atomic::Ordering;
 

@@ -525,6 +525,21 @@ sequencing; the overseer proposes each as its dependencies finish.
     and no password. Both are fixed. A push handshake now ends with Git's probe, a `POST` of `0000`, after `info/refs`.
   - Not done in this thread: Digest, Negotiate and NTLM proxy authentication on `reqwest`, `http.<url>.*` scoping, `http.sslCAPath`,
     and the lower bound of a TLS range on `rustls`, which has nothing older than 1.2.
+- 2026-11-04: thread 10 made transfers cancellable and fixed two bugs of the `curl` backend that its push tests found.
+  `TransportWithoutIO::interrupt_handle()` ends processes, sockets and both HTTP backends from another thread, and
+  `InterruptHandle::watch()` ties a flag to it. `Prepare::receive()`, `Prepare::send()` and `gix free pack receive` use it, so a
+  flag ends them while the server is silent. An interrupt before the pack is sent is a plain failure, later it is an uncertain
+  outcome. Each fix has a test whose removal makes it fail or hang. Findings of the review: 2 material of 6 in the first round,
+  0 of 3 in the second. Decisions and deviations:
+  - The `curl` backend dropped a failure of a transfer when its pipe was full, so a reader saw a body that ended early and not
+    the reason; this failed the CI of the previous chunk once and 11 of 24 parallel runs on the build host. It also kept the size
+    of a buffered upload for the next, streamed one, so a push over HTTP with `curl` never finished. Both are fixed.
+  - A consumer that reads late doesn't trip the low-speed limits on either backend, which the plan asked to pin. A silent
+    `pre-receive` hook is not tested against the limits, as the peer relays the output of `git http-backend` once it is complete;
+    the keep-alive packets that Git sends meanwhile are read past by both backends, which is tested.
+  - A kernel quirk keeps the low-speed limit from ending a stalled upload to a loopback peer with `curl`, so that is pinned for
+    `reqwest` only. An interrupt ends it with both.
+  - Cancellation of `curl` takes up to a second. Not done: interrupting the opening of a connection, and a flag for the handshake.
 - 2026-11-04: thread 8 (local consumer backend), progress and what it left open so far. Merged: the files store's reflog
   messages are cleaned like Git's (#50), `HEAD` gets the reflog entry that Git writes when the branch it points to changes,
   in both stores, with `HeadLog::CallerDecides` as the explicit opt-in for the one consumer that edits `HEAD` and its branch
