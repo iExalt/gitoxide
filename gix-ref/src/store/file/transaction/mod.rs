@@ -5,8 +5,11 @@ use gix_object::bstr::BString;
 
 use crate::{
     store_impl::{file, file::Transaction},
-    transaction::RefEdit,
+    transaction::{RefEdit, observe::Observer},
 };
+
+pub(in crate::store_impl::file) mod notifier;
+pub(in crate::store_impl::file) use notifier::Notifier;
 
 /// How to handle packed refs during a transaction
 #[derive(Default)]
@@ -73,6 +76,7 @@ impl file::Store {
             packed_transaction: None,
             updates: None,
             packed_refs: PackedRefs::default(),
+            observer: Notifier::default(),
         }
     }
 }
@@ -81,6 +85,15 @@ impl<'p> Transaction<'_, 'p> {
     /// Configure the way packed refs are handled during the transaction
     pub fn packed_refs(mut self, packed_refs: PackedRefs<'p>) -> Self {
         self.packed_refs = packed_refs;
+        self
+    }
+
+    /// Tell `observer` about the states of the transaction, and let it refuse to prepare it.
+    ///
+    /// See [`observe`](crate::transaction::observe) for what is reported. A transaction has at most one observer,
+    /// the last one set.
+    pub fn observer(mut self, observer: impl Observer + 'p) -> Self {
+        self.observer.set(observer);
         self
     }
 }

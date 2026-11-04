@@ -18,6 +18,7 @@ mod availability;
 pub use availability::NameConflict;
 pub(crate) use availability::{ExistingRefs, verify_available};
 pub mod commit_failure;
+pub mod observe;
 
 use crate::{FullName, Target};
 

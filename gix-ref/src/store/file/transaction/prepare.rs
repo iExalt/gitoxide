@@ -10,11 +10,12 @@ use crate::{
         file,
         file::{
             Transaction, loose,
-            transaction::{Edit, PackedRefs},
+            transaction::{Edit, PackedRefs, notifier},
         },
     },
     transaction::{
-        Change, ExistingRefs, LogChange, NameConflict, PreviousValue, RefEdit, RefEditsExt, RefLog, verify_available,
+        Change, ExistingRefs, LogChange, NameConflict, PreviousValue, RefEdit, RefEditsExt, RefLog, observe::Update,
+        verify_available,
     },
 };
 
@@ -358,8 +359,21 @@ impl Transaction<'_, '_> {
                 leaf_referent_previous_oid: None,
             })
             .collect();
+        let duplicate = |name: BString| validation(format!("A reference named '{name}' has multiple edits")).raise();
+        // Git rejects the same name twice before it tells anybody, but not a name that is also the target of a
+        // symbolic reference, which it finds while locking.
+        updates.assure_one_name_has_one_edit().map_err(duplicate)?;
+        if self.observer.is_observing() {
+            // The caller's view of the edits, before they are split along symbolic references.
+            let previous: Vec<_> = updates.iter().map(|edit| notifier::expected(&edit.update)).collect();
+            let requested = notifier::updates(&updates, &previous);
+            if let Err(vetoed) = self.observer.preparing(&requested) {
+                bail!(vetoed);
+            }
+            self.observer.locking(notifier::deletions(&updates, &previous));
+        }
         updates
-            .pre_process(
+            .extend_with_splits_of_symbolic_refs(
                 &mut |name| {
                     let symbolic_refs_are_never_packed = None;
                     store
@@ -374,11 +388,36 @@ impl Transaction<'_, '_> {
                     leaf_referent_previous_oid: None,
                 },
             )
-            .map_err(|err| match err.kind() {
-                std::io::ErrorKind::AlreadyExists => validation(err.to_string()).raise(),
-                _ => err.and_raise(message("Could not preprocess reference edits")),
-            })?;
+            .or_raise(|| message("Could not preprocess reference edits"))?;
+        if let Err(name) = updates.assure_one_name_has_one_edit() {
+            // Git finds this when it splits the symbolic reference, which is when the deletions before it were locked.
+            if let Some(split) = updates
+                .iter()
+                .find(|edit| edit.name() == name && edit.parent_index.is_some())
+            {
+                let mut position = split.parent_index;
+                let mut first = position;
+                while let Some(parent) = position {
+                    first = Some(parent);
+                    position = updates[parent].parent_index;
+                }
+                self.observer.locked_before(first.unwrap_or(0));
+            }
+            return Err(duplicate(name));
+        }
 
+        // What each caller expects is lost while locking, so remember it now.
+        let previous: Vec<_> = if self.observer.is_observing() {
+            updates.iter().map(|edit| notifier::expected(&edit.update)).collect()
+        } else {
+            Vec::new()
+        };
+        if self.observer.is_observing() {
+            self.observer.locking(notifier::deletions(&updates, &previous));
+            // The order of locks differs from Git, which locks `packed-refs` last: failing to prepare it is reported
+            // as if all deletions were locked before.
+            self.observer.locked_before(usize::MAX);
+        }
         let mut maybe_updates_for_packed_refs = match self.packed_refs {
             PackedRefs::DeletionsAndNonSymbolicUpdates(_)
             | PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_) => Some(0_usize),
@@ -471,6 +510,7 @@ impl Transaction<'_, '_> {
             }
         }
 
+        self.observer.locked_before(0);
         let mut names_in_transaction: Vec<BString> = updates
             .iter()
             .map(|edit| edit.update.name.as_bstr().to_owned())
@@ -510,6 +550,7 @@ impl Transaction<'_, '_> {
                 }
                 return Err(err.and_raise(context));
             }
+            self.observer.locked_before(cid + 1);
 
             // traverse parent chain from leaf/peeled ref and set the leaf previous oid accordingly
             // to help with their reflog entries
@@ -522,6 +563,33 @@ impl Transaction<'_, '_> {
                     parent_idx_cursor = parent.parent_index;
                     parent.leaf_referent_previous_oid = Some(oid);
                 }
+            }
+        }
+        if self.observer.is_observing() {
+            let observed = notifier::updates(&updates, &previous);
+            // As in Git, deletions need a transaction on `packed-refs`, which has work to do if it has them.
+            let packed_mode = !matches!(self.packed_refs, PackedRefs::DeletionsOnly);
+            let packed_updates: Vec<_> = observed
+                .iter()
+                .filter(|update| update.new.is_none() || (packed_mode && matches!(update.new, Some(Target::Object(_)))))
+                .map(|update| Update {
+                    previous: None,
+                    ..update.clone()
+                })
+                .collect();
+            let buffer = self.packed_transaction.as_ref().and_then(packed::Transaction::buffer);
+            let packed_is_needed = packed_updates.iter().any(|update| {
+                update.new.is_some()
+                    || buffer.is_some_and(|buffer| {
+                        buffer
+                            .try_find(update.name.as_ref())
+                            .is_ok_and(|reference| reference.is_some())
+                    })
+            });
+            let packed_updates = (!packed_updates.is_empty()).then_some(packed_updates);
+            if let Err(vetoed) = self.observer.prepared(observed, packed_updates, packed_is_needed) {
+                // The locks are released and the observer told about it when `self` is dropped.
+                bail!(vetoed);
             }
         }
         self.updates = Some(updates);
