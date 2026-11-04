@@ -1,6 +1,12 @@
 #!/bin/bash
 # P5: which flush calls Git issues, and in which order, under core.fsync/core.fsyncMethod.
 # Linux only (strace). Usage: p5.sh <scratch-root>
+#
+# The output of one pinned Git is kept in golden/ as evidence of Git's flush protocol, which a native receiver has to follow.
+# Regenerate it with the Git it is named after, and compare by hand, before changing the name to a new version:
+#   GIT_BIN_DIR=<dir of git 2.56.0> bash p5.sh /tmp/p5 2>&1 | bash normalize.sh > /tmp/p5-new.txt
+#   diff golden/p5-git-2.56.0.txt /tmp/p5-new.txt
+# normalize.sh removes random names and ids and the lines that only show scheduling, so that runs are identical.
 set -u
 PROBE_ROOT=$1; mkdir -p "$PROBE_ROOT"; PROBE_ROOT=$(cd "$PROBE_ROOT" && pwd)
 . "$(dirname "$0")/env.sh"

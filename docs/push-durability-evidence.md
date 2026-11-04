@@ -15,6 +15,7 @@ and 3.5 where the two differ. The fork's tests that follow from it live next to 
 | `strace` | 6.8, with `-f` so that child processes are followed |
 | Isolation | no system or global configuration, no inherited `GIT_*` variables, `GIT_TEST_FSYNC` unset |
 | Scripts | [`etc/scripts/durability/`](../etc/scripts/durability) (`p1.sh`, `p3.sh`, `p5.sh` take a scratch directory) |
+| Golden | [`golden/p5-git-2.56.0.txt`](../etc/scripts/durability/golden/p5-git-2.56.0.txt) is the normalized output of `p5.sh` for the pinned Git, which a native receiver is to follow. Regenerate it as described in `p5.sh` |
 
 Process-kill evidence comes from `SIGKILL` sent from a `reference-transaction` hook and by `strace` fault injection.
 **Power loss is not tested and its behaviour is unproven**: no probe here can show what survives a power failure.
@@ -116,3 +117,23 @@ how far each edit got, which Git can't tell its caller. The tests that follow ar
 `gix-ref/tests/refs/file/transaction/prepare_and_commit/commit_failure.rs`. Two differences remain by design. Git derives
 an identity when the committer is missing. And updating the branch `HEAD` points at without changing it still appends to
 the `HEAD` reflog in Git, which the fork doesn't do.
+
+## Objects and packs in the fork
+
+Git's flushes of objects and packs are followed by the stores that write them. The tests run Git and the fork under `strace`,
+on the same input and for a table of `core.fsync` and `core.fsyncMethod` values, and compare the abstract sequence of what
+happened to the files:
+
+* **Loose objects** (`gix-odb/tests/odb/durability.rs`): the temporary file is written, flushed if `loose-object` or
+  `core.fsyncObjectFiles` select it, and made visible. Git links where the fork renames, which the comparison abstracts from.
+  With `core.fsyncMethod=batch`, Git batches flushes only within a multi-object operation, so a single object is flushed
+  fully by both. The fork has no such operation yet, and `gix_fs::fsync::Options::barrier()` and `loose_object_batch()` wait
+  for it. Git dies when the flush fails and leaves its temporary file, where the fork returns an error and removes it.
+* **Packs** (`gix-pack/tests/pack/durability.rs`): the index is flushed as `pack-metadata`, then the pack as `pack`, then the
+  unflushed `.keep` file is written, and the pack becomes visible before its index, like `git index-pack --stdin --keep`. Git
+  also writes and flushes a reverse index, which the fork doesn't write at all. This is not a durability gap.
+* **Configuration**: `gix` passes `core.fsync`, `core.fsyncMethod` and `core.fsyncObjectFiles` to the object database when it
+  opens a repository, which makes changing them require reopening it, and to the writer of fetched packs.
+
+`receive-pack` flushes a barrier file once before it moves quarantined objects into place. The fork has no receiver, so this
+is kept as the golden only.
