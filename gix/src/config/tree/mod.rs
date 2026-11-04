@@ -63,6 +63,8 @@ pub(crate) mod root {
         pub const PROTOCOL: sections::Protocol = sections::Protocol;
         /// The `push` section.
         pub const PUSH: sections::Push = sections::Push;
+        /// The `reftable` section.
+        pub const REFTABLE: sections::Reftable = sections::Reftable;
         /// The `remote` section.
         pub const REMOTE: sections::Remote = sections::Remote;
         /// The `safe` section.
@@ -106,6 +108,7 @@ pub(crate) mod root {
                 &Self::PACK,
                 &Self::PROTOCOL,
                 &Self::PUSH,
+                &Self::REFTABLE,
                 &Self::REMOTE,
                 &Self::SAFE,
                 &Self::SSH,
@@ -122,9 +125,9 @@ pub(crate) mod root {
 mod sections;
 pub use sections::{
     Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Feature, Fetch, Gitoxide, Gpg,
-    Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch,
-    checkout, commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push, remote,
-    ssh,
+    Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Reftable, Remote, Safe, Ssh, Url, User, Worktree,
+    branch, checkout, commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push,
+    reftable, remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

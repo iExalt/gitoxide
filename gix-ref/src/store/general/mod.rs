@@ -135,6 +135,15 @@ impl crate::Store {
         }
     }
 
+    /// Change how reftable stacks are changed from now on, see [`reftable::Store::set_stack_options()`](crate::reftable::Store::set_stack_options()).
+    /// Storage that isn't reftables ignores this.
+    #[cfg(feature = "reftable")]
+    pub fn set_reftable_options(&mut self, options: gix_error::Result<crate::reftable::StackOptions>) {
+        if let store::State::Reftable { store } = &mut self.inner {
+            store.set_stack_options(options);
+        }
+    }
+
     /// Refuse every operation on references as the storage named `backend` is unsupported, or reset that with `None`.
     ///
     /// See [`file::Store::set_unsupported_backend()`] for details.
