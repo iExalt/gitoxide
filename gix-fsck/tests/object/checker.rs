@@ -443,3 +443,132 @@ fn blobs_are_only_looked_at_if_a_tree_says_they_are_special() -> TestResult {
     ));
     Ok(())
 }
+
+/// Check `.gitmodules` as it is part of a tree that comes first, and return what is reported about it.
+fn gitmodules_reports(content: &[u8], options: Options) -> TestResult<Vec<gix_fsck::Report>> {
+    let blob_id = id_of(Kind::Blob, content);
+    let mut checker = Checker::new(options, hash());
+    let mut out = Vec::new();
+    check(&mut checker, Kind::Tree, &tree(&[("100644", b".gitmodules", &blob_id)]))?;
+    let mut failed = checker.needs_blob_content(&blob_id, content.len() as u64);
+    if failed {
+        let data = check(&mut checker, Kind::Blob, content)?;
+        out = data.1;
+        failed = data.0;
+    } else {
+        // Too large to be read, which is reported when it is received.
+        checker.check(&blob_id, Kind::Blob, content.len() as u64, None, &mut out)?;
+    }
+    let _ = failed;
+    Ok(out
+        .into_iter()
+        .filter_map(|d| match d {
+            Diagnostic::Report(r) => Some(r),
+            Diagnostic::Note(_) => None,
+        })
+        .collect())
+}
+
+fn gitmodules_ids(content: &[u8]) -> TestResult<Vec<(MessageId, Severity)>> {
+    Ok(gitmodules_reports(content, Options::strict())?
+        .into_iter()
+        .map(|r| (r.id, r.severity))
+        .collect())
+}
+
+#[test]
+fn gitmodules_are_parsed_like_the_file_that_is_checked_out_is() -> TestResult {
+    let bad = [(MessageId::GitmodulesUrl, Severity::Error)];
+    let parse_error = [(MessageId::GitmodulesParse, Severity::Warn)];
+    let entry = b"[submodule \"a\"]\n\turl = -oProxyCommand=x\n";
+    assert_eq!(gitmodules_ids(entry)?, bad, "the baseline is refused");
+
+    // Git's check reads the buffer as signed `char`, which turns `0xff` into the end of the file, and doesn't skip the byte order mark.
+    // The file that is read after the checkout isn't like that, so the entry would be found there while it wasn't during the check.
+    for (name, content) in [
+        ("bom", [&[0xef, 0xbb, 0xbf][..], entry].concat()),
+        (
+            "0xff in an earlier value",
+            [&b"[submodule \"b\"]\n\tpath = ok\xff\n"[..], entry].concat(),
+        ),
+        ("0xff in a comment", [&b"# c\xff\n"[..], entry].concat()),
+        (
+            "0xff in an earlier name",
+            [&b"[submodule \"b\xff\"]\n"[..], entry].concat(),
+        ),
+        ("0xff at the start", [&b"\xff"[..], entry].concat()),
+    ] {
+        let ids = gitmodules_ids(&content)?;
+        if name == "0xff at the start" {
+            // That's not a valid file, which Git only warns about as a file that can't be parsed can't do harm.
+            assert_eq!(ids, parse_error, "{name}");
+        } else {
+            assert_eq!(ids, bad, "{name}: the entry is found");
+        }
+    }
+
+    for (name, content) in [
+        ("partial mark", [&[0xef, 0xbb][..], entry].concat()),
+        ("just the first byte", vec![0xef]),
+        (
+            "mark twice",
+            [&[0xef, 0xbb, 0xbf, 0xef, 0xbb, 0xbf][..], entry].concat(),
+        ),
+    ] {
+        assert_eq!(gitmodules_ids(&content)?, parse_error, "{name} can't be parsed");
+    }
+
+    let reports = gitmodules_reports(b"[submodule \"a\"]\n\turl = -x\xff\xc3\n", Options::strict())?;
+    assert_eq!(
+        reports.iter().map(|r| r.message.as_slice()).collect::<Vec<_>>(),
+        [&b"disallowed submodule url: -x\xff\xc3"[..]],
+        "values are shown as they are, even though they aren't UTF-8"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_byte_order_mark_doesnt_change_what_is_found() -> TestResult {
+    let mut compared = 0;
+    for (name, content) in super::gitmodules::syntax_variants() {
+        if content.first() == Some(&0xef) {
+            continue;
+        }
+        let with_mark = [&[0xef, 0xbb, 0xbf][..], &content].concat();
+        assert_eq!(
+            gitmodules_ids(&with_mark)?,
+            gitmodules_ids(&content)?,
+            "{name}: a byte order mark is skipped"
+        );
+        compared += 1;
+    }
+    assert!(compared > 50, "there is a lot to compare: {compared}");
+    Ok(())
+}
+
+#[test]
+fn gitmodules_that_are_too_large_are_never_parsed_regardless_of_the_order() -> TestResult {
+    let content = b"[submodule \"a\"]\n\turl = -x\n";
+    let blob_id = id_of(Kind::Blob, content);
+    let mut options = Options::strict();
+    options.set_big_file_threshold(content.len() as u64 - 1);
+    let large = [(MessageId::GitmodulesLarge, Severity::Error)];
+
+    // The tree is first, so nothing has to be read.
+    assert_eq!(gitmodules_reports(content, options.clone())?.len(), 1);
+    assert_eq!(
+        gitmodules_reports(content, options.clone())?[0].id,
+        MessageId::GitmodulesLarge
+    );
+
+    // The blob is first, which makes it a deferred check that must not be read by `finish()`.
+    let mut db = Db::default();
+    db.add(Kind::Blob, content);
+    let mut checker = Checker::new(options, hash());
+    let mut out = Vec::new();
+    checker.check(&blob_id, Kind::Blob, content.len() as u64, None, &mut out)?;
+    check(&mut checker, Kind::Tree, &tree(&[("100644", b".gitmodules", &blob_id)]))?;
+    assert!(checker.finish(&db, &mut out)?);
+    assert_eq!(ids(&out), large);
+    Ok(())
+}

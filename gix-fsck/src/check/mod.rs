@@ -3,7 +3,10 @@ use std::fmt;
 
 use gix_hash::{ObjectId, oid};
 use gix_hashtable::{HashMap, HashSet};
-use gix_object::Kind;
+use gix_object::{
+    Kind,
+    bstr::{BStr, BString},
+};
 
 use crate::{MessageId, Options, Severity};
 
@@ -11,8 +14,10 @@ mod blob;
 mod commit;
 mod ident;
 mod links;
+mod submodule;
 mod tag;
 mod tree;
+mod url;
 
 pub use links::LinkError;
 
@@ -39,8 +44,9 @@ pub struct Report {
     /// How bad the problem is, which is either [`Severity::Error`] or [`Severity::Warn`] as the other severities are
     /// reported as one of them, or not at all.
     pub severity: Severity,
-    /// The explanation as Git words it, without the name of `id`. It may contain parts of the object, like a name or a URL.
-    pub message: String,
+    /// The explanation as Git words it, without the name of `id`. It may contain parts of the object, like a name or a URL,
+    /// which are bytes as nothing makes them UTF-8, and which Git prints without regard for control characters.
+    pub message: BString,
 }
 
 impl fmt::Display for Report {
@@ -101,13 +107,6 @@ impl std::error::Error for Refusal {}
 /// links between them and of blobs that need a look at their contents.
 ///
 /// Feed each object to [`check()`](Checker::check()) in any order and once all are known, call [`finish()`](Checker::finish()).
-///
-/// ### Status
-///
-/// The content of `.gitmodules` files is not checked yet, so a checker doesn't find `gitmodulesUrl`, `gitmodulesName`,
-/// `gitmodulesPath`, `gitmodulesUpdate` and `gitmodulesParse`. The bookkeeping for them is in place: trees that name such files
-/// are recorded, and symlinks with that name are reported. Don't rely on a checker to protect against
-/// malicious `.gitmodules` files until then.
 ///
 /// ### Memory
 ///
@@ -270,25 +269,48 @@ impl<'a> Reporter<'a> {
         self.options.is_skipped(self.oid)
     }
 
-    /// Report `id` with `message` unless it's configured to be ignored or the object is on the skip list.
-    /// Return `true` if the report is an error, which is Git's non-zero return value of `report()`.
-    fn report(&mut self, id: MessageId, message: fmt::Arguments<'_>) -> bool {
+    /// The severity to report `id` with, or `None` if nothing is to be reported for it.
+    fn severity_of(&self, id: MessageId) -> Option<Severity> {
         if self.is_skipped() {
-            return false;
+            return None;
         }
-        let severity = match self.options.severity(id) {
-            Severity::Ignore => return false,
-            Severity::Fatal | Severity::Error => Severity::Error,
-            Severity::Info | Severity::Warn => Severity::Warn,
-        };
+        match self.options.severity(id) {
+            Severity::Ignore => None,
+            Severity::Fatal | Severity::Error => Some(Severity::Error),
+            Severity::Info | Severity::Warn => Some(Severity::Warn),
+        }
+    }
+
+    fn push(&mut self, id: MessageId, severity: Severity, message: BString) -> bool {
         self.out.push(Diagnostic::Report(Report {
             oid: self.oid.to_owned(),
             kind: self.kind,
             id,
             severity,
-            message: message.to_string(),
+            message,
         }));
         severity == Severity::Error
+    }
+
+    /// Report `id` with `message` unless it's configured to be ignored or the object is on the skip list.
+    /// Return `true` if the report is an error, which is Git's non-zero return value of `report()`.
+    fn report(&mut self, id: MessageId, message: fmt::Arguments<'_>) -> bool {
+        match self.severity_of(id) {
+            Some(severity) => self.push(id, severity, message.to_string().into()),
+            None => false,
+        }
+    }
+
+    /// Like [`report()`](Self::report()), but with `text` followed by `value`, which can be any bytes.
+    fn report_value(&mut self, id: MessageId, text: &str, value: &BStr) -> bool {
+        match self.severity_of(id) {
+            Some(severity) => {
+                let mut message = BString::from(text);
+                message.extend_from_slice(value);
+                self.push(id, severity, message)
+            }
+            None => false,
+        }
     }
 
     fn note(&mut self, text: &str) {
