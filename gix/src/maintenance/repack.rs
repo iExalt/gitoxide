@@ -4,9 +4,9 @@
 //! loose or in a pack that has no `.keep` file, and then removes the packs it replaces. [`Scope::Incremental`] only packs
 //! the reachable loose objects, and doesn't remove packs. Packs and objects of alternates are never looked at.
 //!
-//! Objects aren't deltified: an object that is in a pack is copied as it is, with its delta if the base is in the new pack
-//! as well, and a loose object is stored whole. A repository that is repacked after loose objects accumulated is thus
-//! about as big as it was, while Git would find deltas between them.
+//! Objects are put into deltas of each other as [`Deltas`] describes: what is in a pack as a delta stays one if its base is in the
+//! new pack, and the others are searched for bases, so that a repository that is repacked after loose objects accumulated gets
+//! about as small as with Git.
 //!
 //! [`Scope::Geometric`] is for keeping the number of packs low at a cost that doesn't grow with the repository, like
 //! `git repack -d --geometric`: it rolls up all loose objects and the smallest packs, as many as it takes for the sizes of
