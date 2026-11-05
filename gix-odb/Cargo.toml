@@ -23,8 +23,10 @@ sha1 = ["gix-hash/sha1", "gix-pack/sha1"]
 sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
+## Provide the `inspect` module to look at a pack that was written to disk before it is accepted.
+inspect = ["gix-pack/pack-cache-lru-static"]
 ## Provide the `quarantine` module to receive packs the way `git receive-pack` does. It writes packs, which isn't possible when targeting WASM.
-quarantine = ["gix-pack/streaming-input", "gix-pack/pack-cache-lru-static"]
+quarantine = ["gix-pack/streaming-input", "gix-pack/pack-cache-lru-static", "inspect"]
 
 [dependencies]
 crc32fast = "1.5.0"
@@ -79,6 +81,7 @@ features = ["sha1", "document-features", "serde"]
 [package.metadata.qa]
 checks = [
     { args = ["--features", "sha1,serde"] },
+    { args = ["--features", "sha1,inspect"] },
     { args = ["--features", "sha1,quarantine"] },
 ]
 tests = [
