@@ -174,10 +174,21 @@ impl<'repo> Receiver<'repo> {
                 }
             }
         }
+        // Git lists every entry of the `shallow` file, once and in order, whether the repository has the commit or not.
+        let mut shallow = gix_shallow::read(&self.repo.shallow_file()?)
+            .or_raise(|| message("Could not read the shallow file"))?
+            .map_or_else(Vec::new, Vec::from);
+        shallow.dedup();
+        // An entry of the other hash would be advertised to a client that can't read it, where Git refuses the file.
+        if let Some(id) = shallow.iter().find(|id| id.kind() != self.repo.object_hash()) {
+            bail!(message!(
+                "The shallow file has {id}, which isn't an id of the hash of the repository"
+            ));
+        }
         Ok(Advertisement {
             capabilities,
             references,
-            shallow: Vec::new(),
+            shallow,
         })
     }
 

@@ -77,7 +77,7 @@ impl Options {
     /// Fail if a setting has an invalid value or can't be honored, which is to refuse to receive instead of receiving in a
     /// way that differs from what the configuration says. That's the case if there are push certificates,
     /// `proc-receive`, `updateInstead` for a work tree that the receiver can't update faithfully, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
-    /// can't handle, and if the repository is shallow.
+    /// can't handle.
     pub fn from_repository(repo: &Repository) -> Result<Self> {
         let config = repo.config_snapshot();
         let get = |key: &str| config.string(key).map(|value| value.to_string());

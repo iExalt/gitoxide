@@ -190,6 +190,8 @@ pub fn verify(repo: &Repository, cutoffs: &Cutoffs, tips: &[ObjectId]) -> Result
     }
 
     // What the parents that aren't new have is there, and it is not checked for being there once more.
+    // A parent that isn't new is a cutoff, which references reach and which is there, or it is behind a shallow commit and not
+    // there, which is why a parent that can't be read is skipped here: nothing below it is walked either.
     let mut known = HashSet::<ObjectId>::new();
     let mut edges = HashSet::new();
     for (_, parents) in &new_commits {
