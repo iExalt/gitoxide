@@ -8,6 +8,10 @@
 //! as well, and a loose object is stored whole. A repository that is repacked after loose objects accumulated is thus
 //! about as big as it was, while Git would find deltas between them.
 //!
+//! [`Scope::Geometric`] is for keeping the number of packs low at a cost that doesn't grow with the repository, like
+//! `git repack -d --geometric`: it rolls up all loose objects and the smallest packs, as many as it takes for the sizes of
+//! the packs that remain to grow by the factor, and looks at no reference, so unreachable objects are carried along.
+//!
 //! # What happens to what is unreachable
 //!
 //! Objects of removed packs that aren't reachable are [loosened](Unreachable::Loosen) by default, with the time of the pack they
@@ -58,7 +62,12 @@
 //! * `gc.maxCruftSize` and `--max-cruft-size` aren't supported, so there is one cruft pack, which is what Git writes without them.
 //! * With an expiry, the objects that are kept for something that is newer are found with a second walk over the repository,
 //!   which doubles the time it takes to look for them.
-//! * What `.keep` files and `gc.bigPackThreshold` do to Git's choice of packs doesn't apply: there are two scopes only.
+//! * A geometric roll-up packs every loose object that no staying pack has, while Git leaves out those that any pack has,
+//!   including a cruft pack, and `prune-packed` removes their loose copies. A loose copy of an object that only a cruft
+//!   pack has is what a writer leaves when it freshens the object, so it is kept this way, and the object gets the time of the
+//!   new pack instead of its old cruft time. Loose unreachable objects get that time as well, as in Git.
+//! * What `.keep` files and `gc.bigPackThreshold` do to Git's choice of packs doesn't apply: there are three scopes only, and
+//!   `repack.midx` and `--write-midx` aren't supported, so a geometric progression doesn't get a multi-pack-index either.
 use std::{
     collections::BTreeSet,
     io::{BufReader, BufWriter, Write},
@@ -137,6 +146,17 @@ pub enum Scope {
     All,
     /// Pack the reachable loose objects that are in no pack, like `git repack`, and leave all packs alone.
     Incremental,
+    /// Roll up the smallest packs, and all loose objects, into one pack so that each pack has at least `factor` times as
+    /// many objects as the next smaller one, like `git repack -d --geometric=<factor>`. The packs that already are such a
+    /// progression stay as they are, so the cost of a run grows with what is new and not with the size of the repository.
+    ///
+    /// Objects are packed whether they are reachable or not, and no walk is done: loose objects are all rolled up, and
+    /// everything that is in a pack that is rolled up stays in the new pack. A pack with a `.keep` file or `.mtimes` file is
+    /// left alone, and [`Options::unreachable`] doesn't matter.
+    Geometric {
+        /// The factor, which Git calls the split factor. It is `2` in Git's `maintenance` task.
+        factor: u32,
+    },
 }
 
 /// What to do with the objects of the removed packs that aren't reachable.
@@ -233,6 +253,8 @@ struct ListedPack {
     stem: PathBuf,
     name: String,
     kept: bool,
+    /// `true` if the pack has a `.mtimes` file, which makes it a cruft pack.
+    cruft: bool,
     mtime: i64,
     size: u64,
 }
@@ -277,6 +299,30 @@ impl ListedPack {
     }
 }
 
+/// Return how many of the packs, which have the given number of objects in ascending order, are rolled up so that each pack
+/// that remains has at least `factor` times the objects of the next smaller one, as `git repack --geometric` does.
+fn geometric_split(counts: &[usize], factor: u32) -> usize {
+    let factor = factor as usize;
+    let weight = |idx: usize| counts[idx];
+    if counts.is_empty() {
+        return 0;
+    }
+    // The packs from the largest down that are a progression already.
+    let mut idx = counts.len() - 1;
+    while idx > 0 && weight(idx) >= factor.saturating_mul(weight(idx - 1)) {
+        idx -= 1;
+    }
+    // The one that broke the progression can't be part of it.
+    let mut split = if idx > 0 { idx + 1 } else { idx };
+    // What is rolled up grows, and may catch up with the packs that remain.
+    let mut total: usize = counts[..split].iter().sum();
+    while split < counts.len() && weight(split) < factor.saturating_mul(total) {
+        total += weight(split);
+        split += 1;
+    }
+    split
+}
+
 /// List the packs of this repository, which are the ones with an index and a pack file.
 fn local_packs(pack_dir: &Path) -> Result<Vec<ListedPack>> {
     let entries = match std::fs::read_dir(pack_dir) {
@@ -300,6 +346,7 @@ fn local_packs(pack_dir: &Path) -> Result<Vec<ListedPack>> {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             kept: stem.with_extension("keep").exists(),
+            cruft: stem.with_extension("mtimes").exists(),
             mtime: mtime_of(&metadata),
             size: metadata.len(),
             stem,
@@ -504,20 +551,46 @@ impl Repository {
         // 1. The packs that may be replaced, before the roots are looked at.
         let packs = local_packs(&pack_dir)?;
         let (kept, replaceable): (Vec<_>, Vec<_>) = packs.into_iter().partition(|pack| pack.kept);
-        let replaceable = if options.scope == Scope::All {
-            replaceable
-        } else {
-            Vec::new()
+        // The packs that stay but whose objects don't go into the new pack, which are the kept ones and for a geometric
+        // progression, the large ones.
+        let mut staying = kept;
+        let replaceable = match options.scope {
+            Scope::All => replaceable,
+            Scope::Incremental => Vec::new(),
+            Scope::Geometric { factor } => {
+                // a cruft pack is left as it is
+                let mut weighted = Vec::new();
+                for pack in replaceable.into_iter().filter(|pack| !pack.cruft) {
+                    weighted.push((pack.objects(hash)?.len(), pack));
+                }
+                weighted.sort_by(|(a_count, a), (b_count, b)| a_count.cmp(b_count).then_with(|| a.name.cmp(&b.name)));
+                let counts: Vec<_> = weighted.iter().map(|(count, _)| *count).collect();
+                let split = geometric_split(&counts, factor);
+                let mut rolled_up = Vec::new();
+                for (idx, (_, pack)) in weighted.into_iter().enumerate() {
+                    if idx < split {
+                        rolled_up.push(pack);
+                    } else {
+                        staying.push(pack);
+                    }
+                }
+                rolled_up
+            }
         };
 
-        // 2. What is wanted.
-        let roots = self.reachability_roots(Default::default())?;
-        let reachable = self.reachable_objects(roots)?;
+        // 2. What is wanted, which for a geometric progression is what is there.
+        let reachable = if matches!(options.scope, Scope::Geometric { .. }) {
+            None
+        } else {
+            let roots = self.reachability_roots(Default::default())?;
+            Some(self.reachable_objects(roots)?)
+        };
+        let is_reachable = |id: &gix_hash::oid| reachable.as_ref().is_some_and(|reachable| reachable.contains(id));
         interrupted()?;
 
         // The objects that are in packs which stay.
         let mut in_stay: HashSet<ObjectId> = HashSet::default();
-        for pack in &kept {
+        for pack in &staying {
             in_stay.extend(pack.objects(hash)?.into_iter().map(|(id, _)| id));
         }
         let (loose, _temporary) = scan_loose(&objects_dir, hash)?;
@@ -535,15 +608,19 @@ impl Repository {
                 candidates.extend(
                     in_replaced
                         .keys()
-                        .filter(|id| reachable.contains(id) && !in_stay.contains(*id))
+                        .filter(|id| is_reachable(id) && !in_stay.contains(*id))
                         .copied(),
                 );
                 candidates.extend(
                     loose
                         .iter()
                         .map(|object| object.id)
-                        .filter(|id| reachable.contains(id) && !in_stay.contains(id)),
+                        .filter(|id| is_reachable(id) && !in_stay.contains(id)),
                 );
+            }
+            Scope::Geometric { .. } => {
+                candidates.extend(in_replaced.keys().filter(|id| !in_stay.contains(*id)).copied());
+                candidates.extend(loose.iter().map(|object| object.id).filter(|id| !in_stay.contains(id)));
             }
             Scope::Incremental => {
                 // Objects of any pack are not loose ones that this is for.
@@ -555,7 +632,7 @@ impl Repository {
                     loose
                         .iter()
                         .map(|object| object.id)
-                        .filter(|id| reachable.contains(id) && !in_any_pack.contains(id)),
+                        .filter(|id| is_reachable(id) && !in_any_pack.contains(id)),
                 );
             }
         }
@@ -587,7 +664,7 @@ impl Repository {
         let mut to_loosen: Vec<(ObjectId, i64)> = Vec::new();
         if options.scope == Scope::All {
             for (id, time) in &in_replaced {
-                if !reachable.contains(id) && !in_stay.contains(id) {
+                if !is_reachable(id) && !in_stay.contains(id) {
                     unreachable_with_time.insert(*id, *time);
                 }
             }
@@ -598,7 +675,7 @@ impl Repository {
                 Unreachable::Drop => dropped_ids = unreachable_with_time.keys().copied().collect(),
                 Unreachable::Cruft { expire } => {
                     for object in &loose {
-                        if !reachable.contains(&object.id) && !in_stay.contains(&object.id) {
+                        if !is_reachable(&object.id) && !in_stay.contains(&object.id) {
                             let time = unreachable_with_time.entry(object.id).or_insert(object.mtime);
                             *time = (*time).max(object.mtime);
                         }
@@ -964,4 +1041,39 @@ fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version> {
         .with_leniency(repo.options.lenient_config)
         .or_raise(|| message("The configured pack index version is invalid"))?
         .unwrap_or(gix_pack::index::Version::V2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::geometric_split;
+
+    #[test]
+    fn packs_are_rolled_up_until_each_has_the_factor_times_the_one_below() {
+        for (counts, factor, expected, why) in [
+            (&[][..], 2, 0, "there is nothing to roll up"),
+            (&[5][..], 2, 0, "a single pack is a progression"),
+            (&[1, 2, 4, 8][..], 2, 0, "a progression stays as it is"),
+            (&[5, 100][..], 2, 0, "a pack that is large enough isn't touched"),
+            (&[8, 13][..], 2, 2, "13 isn't twice 8, so both are rolled up"),
+            (
+                &[3, 4, 100][..],
+                2,
+                2,
+                "only the small ones are rolled up, as 100 is more than twice their sum",
+            ),
+            (
+                &[3, 4, 10][..],
+                2,
+                3,
+                "the pack that results from rolling up is 7 and 10 isn't twice that",
+            ),
+            (&[8, 13], 1, 0, "a factor of one never rolls up"),
+        ] {
+            assert_eq!(
+                geometric_split(counts, factor),
+                expected,
+                "{counts:?} with factor {factor}: {why}"
+            );
+        }
+    }
 }
