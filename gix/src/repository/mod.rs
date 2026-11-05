@@ -130,6 +130,8 @@ mod object;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
+#[cfg(feature = "maintenance")]
+mod write_pack;
 #[cfg(feature = "receive")]
 pub(crate) use reference::ReferenceTransactionHook;
 mod remote;
