@@ -126,7 +126,8 @@ impl crate::Repository {
     }
 
     /// Edit one or more references as described by their `edits`. This fails while `GIT_QUARANTINE_PATH` is set, as Git
-    /// doesn't allow to change references in the hooks that check what is received.
+    /// doesn't allow to change references in the hooks that check what is received, unless the repository was opened with
+    /// [`ignore_repository_environment()`](crate::open::Options::ignore_repository_environment()).
     /// Note that one can set the committer name for use in the ref-log by temporarily
     /// [overriding the git-config](crate::Repository::config_snapshot_mut()), or use
     /// [`edit_references_as(committer)`](Self::edit_references_as()) for convenience.
@@ -172,7 +173,8 @@ impl crate::Repository {
     ///
     /// Hooks are programs, so it's an error to use this in a repository that isn't fully trusted, as
     /// [`hook()`](Self::hook()) has it. Like all methods that edit references, this fails while `GIT_QUARANTINE_PATH` is
-    /// set, as it is in the hooks that check what is received, where Git doesn't allow to change references either.
+    /// set, as it is in the hooks that check what is received, where Git doesn't allow to change references either, unless the
+    /// repository was opened with [`ignore_repository_environment()`](crate::open::Options::ignore_repository_environment()).
     #[cfg(feature = "hook")]
     pub fn edit_references_with_hooks(
         &self,
@@ -196,8 +198,9 @@ impl crate::Repository {
                  milliseconds to wait for locks or negative to wait forever",
             )
         })?;
-        // Git doesn't let a process that checks what is received, and has this variable, change references.
-        if std::env::var_os("GIT_QUARANTINE_PATH").is_some() {
+        // Git doesn't let a process that checks what is received, and has this variable, change references,
+        // unless it was told to ignore the environment of the process that started it.
+        if !self.options.ignores_repository_environment() && std::env::var_os("GIT_QUARANTINE_PATH").is_some() {
             gix_error::bail!(gix_error::message(
                 "ref updates forbidden inside quarantine environment"
             ));

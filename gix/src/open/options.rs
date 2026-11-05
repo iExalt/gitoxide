@@ -221,6 +221,10 @@ impl Options {
     /// `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` as well. Setting `ignore` makes the repository
     /// that is opened independent of these, so that the repository at `path` is opened with its own configuration.
     ///
+    /// It also lifts the refusal to change references while `GIT_QUARANTINE_PATH` is set. Git refuses it in the hooks that
+    /// check what is received, and so does this crate by default. A process that was started by such a hook, and edits
+    /// the repository it was told to open and not the one that is being received into, needs to be able to.
+    ///
     /// Everything else of the environment keeps being used as the [`permissions`](Self::permissions()) allow, including
     /// the identity, `HOME`, `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL`, so that the configuration of the user and the system
     /// applies as it does for Git. Nested repositories, like worktrees and submodules, are opened without the redirecting
@@ -242,6 +246,15 @@ impl Options {
             self.repository_environment = RepositoryEnvironment::NestedRepository;
         }
         self
+    }
+
+    /// Whether the environment was ignored on purpose, with [`ignore_repository_environment()`](Self::ignore_repository_environment()).
+    ///
+    /// A nested repository, like a worktree, that is opened from a repository that ignores it does as well. One that is opened from a
+    /// repository that doesn't ignore the environment only ignores what redirects it, and keeps the refusal to change references
+    /// in a quarantine environment.
+    pub(crate) fn ignores_repository_environment(&self) -> bool {
+        self.repository_environment == RepositoryEnvironment::Ignored
     }
 
     /// Whether variables like `GIT_WORK_TREE` and `GIT_INDEX_FILE`, which redirect the repository, are applied.
