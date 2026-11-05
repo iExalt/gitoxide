@@ -78,9 +78,38 @@ fn state(repo_dir: &Path) -> TestResult<State> {
     Ok(State { objects, loose, packs })
 }
 
+/// Compare two states, and say what differs instead of printing both of them.
+#[track_caller]
+fn assert_same_state(actual: &State, expected: &State, what: &str) {
+    if actual == expected {
+        return;
+    }
+    let loose_differences: Vec<_> = actual
+        .loose
+        .iter()
+        .filter(|(id, time)| expected.loose.get(*id) != Some(time))
+        .map(|(id, time)| format!("{id} actual {time} expected {:?}", expected.loose.get(id)))
+        .chain(
+            expected
+                .loose
+                .keys()
+                .filter(|id| !actual.loose.contains_key(*id))
+                .map(|id| format!("{id} is missing")),
+        )
+        .collect();
+    panic!(
+        "{what}\nonly in actual: {:?}\nonly in expected: {:?}\nloose differences: {loose_differences:?}\npacks and keeps actual {:?} expected {:?}",
+        actual.objects.difference(&expected.objects).collect::<Vec<_>>(),
+        expected.objects.difference(&actual.objects).collect::<Vec<_>>(),
+        actual.packs,
+        expected.packs
+    );
+}
+
 /// Git can read everything, no object is missing, and nothing is left behind that it would complain about.
 fn assert_healthy(repo_dir: &Path, what: &str) -> TestResult {
     gix_testtools::git(repo_dir, "fsck --full --strict")?;
+    gix_testtools::git(repo_dir, "commit-graph verify")?;
     let count = gix_testtools::git(repo_dir, "count-objects -v")?;
     assert!(
         count.lines().any(|line| line == "garbage: 0"),
@@ -110,9 +139,12 @@ fn what_remains_is_what_git_keeps() -> TestResult {
                 before, actual,
                 "{kind} {name}: something changed, or the fixture is wrong"
             );
-            assert_eq!(
-                actual, expected,
-                "{kind} {name}: the same objects, loose objects with their times, and packs as with `git {git_args}`"
+            assert_same_state(
+                &actual,
+                &expected,
+                &format!(
+                    "{kind} {name}: the same objects, loose objects with their times, and packs as with `git {git_args}`"
+                ),
             );
             assert_healthy(&native.path().join("repo"), &format!("{kind} {name}"))?;
         }
@@ -190,63 +222,255 @@ fn a_pack_with_a_keep_file_and_its_objects_are_left_alone() -> TestResult {
 
 #[test]
 fn stopping_after_any_step_loses_nothing_and_the_next_run_finishes_the_job() -> TestResult {
+    let cruft = |year_2010: bool| {
+        let mut options = Options::default();
+        let expire = if year_2010 { 1_262_304_000 } else { 4_102_444_800 };
+        options.unreachable = Unreachable::Cruft {
+            expire: Some(gix_date::Time::new(expire, 0)),
+        };
+        options
+    };
     for kind in kinds() {
-        let finished = fixture(kind)?;
-        gix::open_opts(finished.path().join("repo"), crate::restricted())?.repack(Options::default(), &never())?;
-        let expected = state(&finished.path().join("repo"))?;
-
-        for stop_at in ["written", "loosened", "derived files", "pack removed", "loose removed"] {
-            let dir = fixture(kind)?;
-            let repo_dir = dir.path().join("repo");
-            let before = state(&repo_dir)?;
-            let repo = gix::open_opts(&repo_dir, crate::restricted())?;
-            let mut stopped = false;
-            let result = repo.repack_observed(Options::default(), &never(), &mut |phase| {
-                let name = match phase {
-                    Phase::PackWritten(_) => "written",
-                    Phase::Loosened(_) => "loosened",
-                    Phase::DerivedFilesRemoved => "derived files",
-                    Phase::PackRemoved(_) => "pack removed",
-                    Phase::LooseRemoved(_) => "loose removed",
-                    _ => return Ok(()),
-                };
-                if name == stop_at && !stopped {
-                    stopped = true;
-                    return Err(gix_error::message("stopped for the test").raise());
-                }
-                Ok(())
-            });
-            assert!(stopped, "{kind}: the step '{stop_at}' was reached");
-            assert!(result.is_err(), "{kind} {stop_at}: the observer's error is the result");
-
-            let after = state(&repo_dir)?;
-            assert!(
-                after.objects.is_superset(&before.objects),
-                "{kind} {stop_at}: no object is lost, missing: {:?}",
-                before.objects.difference(&after.objects).collect::<Vec<_>>()
-            );
-            assert!(
-                gix_testtools::git(&repo_dir, "fsck --full --strict").is_ok(),
-                "{kind} {stop_at}: Git finds the repository to be complete"
+        // what each way of repacking doesn't do: with the expiry in 2010, nothing is written loose, and with the one in 2100
+        // nothing is kept, so that there is no cruft pack and unreachable objects of the packs are dropped
+        for (how, options, absent) in [
+            ("loosening", Options::default(), &["cruft written"][..]),
+            ("with a cruft pack", cruft(true), &["loosened"][..]),
+            (
+                "dropping expired objects",
+                cruft(false),
+                &["loosened", "cruft written"][..],
+            ),
+        ] {
+            let finished = fixture(kind)?;
+            gix::open_opts(finished.path().join("repo"), crate::restricted())?.repack(options, &never())?;
+            let expected = (
+                state(&finished.path().join("repo"))?,
+                cruft_times(&finished.path().join("repo"), kind)?,
             );
 
-            // the process that was stopped here would be gone, which its marker tells by the time
-            for entry in std::fs::read_dir(repo_dir.join(".git/objects/pack"))? {
-                let path = entry?.path();
-                if path.extension().is_some_and(|ext| ext == "keep")
-                    && std::fs::read_to_string(&path)?.starts_with("gix repack in progress")
-                {
-                    std::fs::write(&path, "gix repack in progress\npid 1\nhost nowhere\ntime 1\n")?;
+            for stop_at in [
+                "written",
+                "cruft written",
+                "loosened",
+                "derived files",
+                "pack removed",
+                "loose removed",
+            ] {
+                let dir = fixture(kind)?;
+                let repo_dir = dir.path().join("repo");
+                let before = state(&repo_dir)?;
+                let repo = gix::open_opts(&repo_dir, crate::restricted())?;
+                let mut stopped = false;
+                let result = repo.repack_observed(options, &never(), &mut |phase| {
+                    let name = match phase {
+                        Phase::PackWritten(_) => "written",
+                        Phase::CruftPackWritten(_) => "cruft written",
+                        Phase::Loosened(_) => "loosened",
+                        Phase::DerivedFilesRemoved => "derived files",
+                        Phase::PackRemoved(_) => "pack removed",
+                        Phase::LooseRemoved(_) => "loose removed",
+                        _ => return Ok(()),
+                    };
+                    if name == stop_at && !stopped {
+                        stopped = true;
+                        return Err(gix_error::message("stopped for the test").raise());
+                    }
+                    Ok(())
+                });
+                if !stopped {
+                    // a step that this way of repacking doesn't have
+                    assert!(result.is_ok(), "{kind} {how} {stop_at}: {result:?}");
+                    assert!(
+                        absent.contains(&stop_at),
+                        "{kind} {how}: the step '{stop_at}' was reached"
+                    );
+                    continue;
                 }
+                assert!(
+                    result.is_err(),
+                    "{kind} {how} {stop_at}: the observer's error is the result"
+                );
+
+                let after = state(&repo_dir)?;
+                // what is dropped is only gone once its pack is, and nothing else is ever gone
+                let lost: Vec<_> = before
+                    .objects
+                    .difference(&after.objects)
+                    .filter(|object| expected.0.objects.contains(*object))
+                    .collect();
+                assert!(
+                    lost.is_empty(),
+                    "{kind} {how} {stop_at}: no object that stays is lost: {lost:?}"
+                );
+                assert!(
+                    gix_testtools::git(&repo_dir, "fsck --full --strict").is_ok(),
+                    "{kind} {how} {stop_at}: Git finds the repository to be complete"
+                );
+
+                // the process that was stopped here would be gone, which its marker tells by the time
+                for entry in std::fs::read_dir(repo_dir.join(".git/objects/pack"))? {
+                    let path = entry?.path();
+                    if path.extension().is_some_and(|ext| ext == "keep")
+                        && std::fs::read_to_string(&path)?.starts_with("gix repack in progress")
+                    {
+                        std::fs::write(&path, "gix repack in progress\npid 1\nhost nowhere\ntime 1\n")?;
+                    }
+                }
+                gix::open_opts(&repo_dir, crate::restricted())?.repack(options, &never())?;
+                let what =
+                    format!("{kind} {how} {stop_at}: the run that follows ends with what an uninterrupted one has");
+                assert_same_state(&state(&repo_dir)?, &expected.0, &what);
+                assert_eq!(cruft_times(&repo_dir, kind)?, expected.1, "{what}, including the times");
+                assert_healthy(&repo_dir, &format!("{kind} {how} {stop_at}"))?;
             }
-            gix::open_opts(&repo_dir, crate::restricted())?.repack(Options::default(), &never())?;
-            assert_eq!(
-                state(&repo_dir)?,
-                expected,
-                "{kind} {stop_at}: the run that follows ends with what an uninterrupted one has"
-            );
-            assert_healthy(&repo_dir, &format!("{kind} {stop_at}"))?;
         }
+    }
+    Ok(())
+}
+
+/// The time of each object of the cruft packs, which `.mtimes` files have in the order of the index of their pack. Their format
+/// is checked as well: the header, and the checksum of the pack, which Git uses to see that the file belongs to the pack.
+fn cruft_times(repo_dir: &Path, kind: Kind) -> TestResult<BTreeMap<String, u32>> {
+    let mut times = BTreeMap::new();
+    for entry in std::fs::read_dir(repo_dir.join(".git/objects/pack"))? {
+        let path = entry?.path();
+        if path.extension().is_none_or(|ext| ext != "mtimes") {
+            continue;
+        }
+        let index = gix::odb::pack::index::File::at(path.with_extension("idx"), kind)?;
+        let data = std::fs::read(&path)?;
+        let id_len = kind.len_in_bytes();
+        let count = index.num_objects() as usize;
+        assert_eq!(
+            data.len(),
+            12 + count * 4 + 2 * id_len,
+            "the size is that of the header, times, and two hashes"
+        );
+        assert_eq!(&data[..4], b"MTME", "{}: the signature", path.display());
+        assert_eq!(&data[4..8], &1u32.to_be_bytes(), "{}: the version", path.display());
+        let hash_version: u32 = if kind == Kind::Sha1 { 1 } else { 2 };
+        assert_eq!(
+            &data[8..12],
+            &hash_version.to_be_bytes(),
+            "{}: the hash",
+            path.display()
+        );
+        let checksum_at = 12 + count * 4;
+        assert_eq!(
+            &data[checksum_at..checksum_at + id_len],
+            index.pack_checksum().as_slice(),
+            "{}: the file says which pack it belongs to",
+            path.display()
+        );
+        for (idx, entry) in index.iter().enumerate() {
+            let at = 12 + idx * 4;
+            let time = u32::from_be_bytes(data[at..at + 4].try_into().expect("4 bytes"));
+            times.insert(entry.oid.to_string(), time);
+        }
+    }
+    Ok(times)
+}
+
+#[test]
+fn a_cruft_pack_has_what_git_puts_in_it_with_the_times_of_the_objects() -> TestResult {
+    for kind in kinds() {
+        // the year 2010, which what the fixture has made is newer than, so that all of it stays, and the year 2100, which
+        // nothing is newer than
+        for (name, expire, git_args) in [
+            ("no expiry", None, "repack -a -d --cruft"),
+            (
+                "2010",
+                Some(gix_date::Time::new(1_262_304_000, 0)),
+                "repack -a -d --cruft --cruft-expiration=2010-01-01T00:00:00Z",
+            ),
+            (
+                "2100",
+                Some(gix_date::Time::new(4_102_444_800, 0)),
+                "repack -a -d --cruft --cruft-expiration=2100-01-01T00:00:00Z",
+            ),
+        ] {
+            let (git, native) = (fixture(kind)?, fixture(kind)?);
+            let (git_dir, native_dir) = (git.path().join("repo"), native.path().join("repo"));
+            let before = state(&native_dir)?;
+            gix_testtools::git(&git_dir, git_args)?;
+
+            let mut options = Options::default();
+            options.unreachable = Unreachable::Cruft { expire };
+            let outcome = gix::open_opts(&native_dir, crate::restricted())?.repack(options, &never())?;
+            assert!(outcome.failed.is_empty(), "{kind} {name}: {:?}", outcome.failed);
+
+            let (expected, actual) = (state(&git_dir)?, state(&native_dir)?);
+            assert_ne!(
+                before, actual,
+                "{kind} {name}: something changed, or the fixture is wrong"
+            );
+            assert_same_state(
+                &actual,
+                &expected,
+                &format!(
+                    "{kind} {name}: the same objects, loose objects with their times, and packs as with `git {git_args}`"
+                ),
+            );
+            assert_eq!(
+                cruft_times(&native_dir, kind)?,
+                cruft_times(&git_dir, kind)?,
+                "{kind} {name}: each object of a cruft pack has the time that Git gives it"
+            );
+            assert_healthy(&native_dir, &format!("{kind} {name}"))?;
+            assert_eq!(
+                native_dir.join(".git/objects/info/commit-graph").exists(),
+                name != "2100",
+                "{kind} {name}: the commit-graph that has the commit of `scratch` is gone if that commit was dropped, and is kept otherwise"
+            );
+
+            // Git reads what was written, and has nothing to change when it repeats what was done
+            gix_testtools::git(&native_dir, git_args)?;
+            assert_eq!(
+                (state(&native_dir)?, cruft_times(&native_dir, kind)?),
+                (expected, cruft_times(&git_dir, kind)?),
+                "{kind} {name}: Git accepts the cruft pack and its times, and repeating the repack with it changes nothing"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_loose_object_that_was_modified_while_the_cruft_pack_was_written_stays_as_the_pack_has_an_older_time() -> TestResult
+{
+    for kind in kinds() {
+        let dir = fixture(kind)?;
+        let repo_dir = dir.path().join("repo");
+        let dangling = blob_id(kind, "dangling\n");
+        let dangling_path = repo_dir
+            .join(".git/objects")
+            .join(&dangling.to_hex().to_string()[..2])
+            .join(&dangling.to_hex().to_string()[2..]);
+        assert!(dangling_path.is_file(), "{kind}: the fixture has the blob loose");
+
+        let mut options = Options::default();
+        options.unreachable = Unreachable::Cruft { expire: None };
+        let mut touched = false;
+        gix::open_opts(&repo_dir, crate::restricted())?.repack_observed(options, &never(), &mut |phase| {
+            if matches!(phase, Phase::CruftPackWritten(_)) {
+                // somebody freshens the object, as a writer of the same content does
+                std::fs::File::open(&dangling_path)
+                    .and_then(|file| file.set_modified(std::time::SystemTime::now()))
+                    .map_err(|err| err.and_raise(gix_error::message("Could not touch the loose object")))?;
+                touched = true;
+            }
+            Ok(())
+        })?;
+        assert!(touched, "{kind}: the cruft pack was written, with the blob in it");
+        assert!(
+            dangling_path.is_file(),
+            "{kind}: the loose copy is newer than the time in the cruft pack, so it isn't removed"
+        );
+        assert!(
+            cruft_times(&repo_dir, kind)?.contains_key(&dangling.to_string()),
+            "{kind}: the cruft pack has the object, with its older time"
+        );
     }
     Ok(())
 }
