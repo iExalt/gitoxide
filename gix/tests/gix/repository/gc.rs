@@ -694,3 +694,28 @@ fn a_reference_that_cannot_be_packed_does_not_keep_gc_from_reclaiming_objects() 
     );
     Ok(())
 }
+
+#[test]
+fn a_repository_with_precious_objects_is_left_alone_without_an_error() -> TestResult {
+    let (_dir, repo_dir) = fixture(Kind::Sha1, "files")?;
+    git_config(
+        &repo_dir,
+        &[
+            ("core.repositoryformatversion", "1"),
+            ("extensions.preciousObjects", "true"),
+        ],
+    )?;
+    let before = state(&repo_dir)?;
+    let outcome = open(&repo_dir)?.gc(gc::Options::default(), &never())?;
+    assert!(
+        outcome.objects_not_touched.is_some() && outcome.repack.is_none() && outcome.prune.is_none(),
+        "nothing is repacked or pruned, and it says why: {outcome:?}"
+    );
+    let after = state(&repo_dir)?;
+    assert_eq!(
+        (after.objects, after.loose, after.packs),
+        (before.objects, before.loose, before.packs),
+        "no object is removed or moved"
+    );
+    Ok(())
+}
