@@ -23,7 +23,7 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use gix_error::{Result, ResultExt, bail, message};
+use gix_error::{ErrorExt, Result, ResultExt, bail, message};
 
 pub use super::lock::{Busy, Holder};
 use super::{
@@ -404,8 +404,17 @@ impl Repository {
             self.gc_foreground_tasks(&settings, options.auto, &mut outcome)
         };
         self.gc_unsupported(&mut outcome);
-        self.gc_objects(&settings, options, should_interrupt, &mut outcome)?;
-        foreground?;
+        let objects = self.gc_objects(&settings, options, should_interrupt, &mut outcome);
+        match (foreground, objects) {
+            (Ok(()), objects) => objects?,
+            (Err(foreground), Ok(())) => return Err(foreground),
+            // both are reported, with the one that came first as context
+            (Err(foreground), Err(objects)) => {
+                return Err(objects.and_raise(message!(
+                    "Packing references or expiring reflogs failed before: {foreground}"
+                )));
+            }
+        }
         // Holding `gc.pid` keeps a detached `git gc`, which writes the file, from running, so this can't remove what it wrote.
         std::fs::remove_file(git_dir.join("gc.log")).ok();
         Ok(outcome)
