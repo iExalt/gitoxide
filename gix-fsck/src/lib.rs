@@ -10,6 +10,9 @@ pub use options::{ConfigEntry, Options};
 mod check;
 pub use check::{Checker, Diagnostic, LinkError, Refusal, Report};
 
+mod transfer;
+pub use transfer::{Outcome, Program, Transfer};
+
 use gix_error::Result;
 use std::collections::VecDeque;
 
