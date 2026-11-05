@@ -1,3 +1,4 @@
+mod dotfile;
 mod path;
 mod reference;
 mod submodule;
