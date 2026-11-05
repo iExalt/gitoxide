@@ -547,8 +547,19 @@ fn a_process_that_is_killed_while_repacking_leaves_a_repository_that_the_next_ru
     // The same test is the program that is killed, which repacks slowly so that the kill falls into every step.
     if let Ok(repo_dir) = std::env::var(CRASH_CHILD) {
         let options = crash_options(&std::env::var("GIX_REPACK_TEST_CRASH_OPTIONS")?);
+        // With a number of observations to stop after, the process ends at that one without cleaning up, like a kill does.
+        let stop_after: Option<usize> = std::env::var("GIX_REPACK_TEST_CRASH_AFTER")
+            .ok()
+            .and_then(|n| n.parse().ok());
+        let mut observed = 0;
         gix::open_opts(repo_dir, crate::restricted())?.repack_observed(options, &never(), &mut |_| {
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            observed += 1;
+            if stop_after == Some(observed) {
+                std::process::exit(86);
+            }
+            if stop_after.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             Ok(())
         })?;
         return Ok(());
@@ -567,22 +578,43 @@ fn a_process_that_is_killed_while_repacking_leaves_a_repository_that_the_next_ru
                 state(&finished.path().join("repo"))?,
                 cruft_times(&finished.path().join("repo"), kind)?,
             );
-            for delay_ms in (0..=140).step_by(20) {
+            // Every point between two steps of a repack, which is where the process ends for `After`, and some points in time, which
+            // also find the ones in the middle of a step.
+            let mut cases: Vec<(Option<usize>, u64)> = (1..=40).map(|after| (Some(after), 0)).collect();
+            cases.extend((0..=140).step_by(20).map(|delay| (None, delay)));
+            let mut steps = None;
+            for (after, delay_ms) in cases {
+                if after.is_some_and(|after| steps.is_some_and(|steps| after > steps)) {
+                    continue;
+                }
                 let dir = fixture(kind)?;
                 let repo_dir = dir.path().join("repo");
                 let before = state(&repo_dir)?;
-                let mut child = std::process::Command::new(std::env::current_exe()?)
+                let mut child = std::process::Command::new(std::env::current_exe()?);
+                child
                     .args(["--exact", &test_name, "--nocapture", "--test-threads=1"])
                     .env(CRASH_CHILD, &repo_dir)
                     .env("GIX_REPACK_TEST_CRASH_OPTIONS", how)
                     .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()?;
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                child.kill()?; // SIGKILL on Unix: nothing is cleaned up
-                child.wait()?;
-
-                let what = format!("{kind} {how} killed after {delay_ms}ms");
+                    .stderr(std::process::Stdio::null());
+                if let Some(after) = after {
+                    child.env("GIX_REPACK_TEST_CRASH_AFTER", after.to_string());
+                }
+                let mut child = child.spawn()?;
+                let what = if after.is_some() {
+                    let status = child.wait()?;
+                    if status.success() {
+                        // It ran to its end, so there are no more steps to stop after.
+                        steps = after.map(|after| after - 1);
+                        continue;
+                    }
+                    format!("{kind} {how} ended after step {}", after.unwrap_or_default())
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    child.kill()?; // SIGKILL on Unix: nothing is cleaned up
+                    child.wait()?;
+                    format!("{kind} {how} killed after {delay_ms}ms")
+                };
                 let after = state(&repo_dir)?;
                 assert!(
                     after.objects.is_superset(&before.objects),
@@ -788,6 +820,64 @@ fn what_an_interrupted_run_left_to_mark_its_pack_is_removed_by_the_next_one_and_
         assert!(
             received.exists(),
             "{kind}: a `.keep` file of somebody else is not touched"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn what_a_killed_removal_of_a_pack_left_is_finished_and_a_pack_that_only_has_no_index_stays() -> TestResult {
+    for kind in kinds() {
+        let dir = fixture(kind)?;
+        let repo_dir = dir.path().join("repo");
+        let pack_dir = repo_dir.join(".git/objects/pack");
+        // The index of a pack that is removed is renamed first, so that nobody finds it, and what is left is told by that.
+        let (interrupted, reinstalled, index_removed_by_somebody) = (
+            pack_dir.join("pack-interrupted"),
+            pack_dir.join("pack-reinstalled"),
+            pack_dir.join("pack-to-be-reindexed"),
+        );
+        for stem in [&interrupted, &reinstalled, &index_removed_by_somebody] {
+            std::fs::write(stem.with_extension("pack"), "what is left of a pack")?;
+        }
+        for stem in [&interrupted, &reinstalled] {
+            std::fs::write(stem.with_extension("idx.removing"), "")?;
+        }
+        std::fs::write(interrupted.with_extension("mtimes"), "what is left of times")?;
+        // a pack of that name that was put into place again, which is complete, and a copy of one that is there, which a `.keep` file
+        // protects from the repack
+        let existing = std::fs::read_dir(&pack_dir)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "idx"))
+            .expect("the fixture has a pack");
+        std::fs::copy(&existing, reinstalled.with_extension("idx"))?;
+        std::fs::copy(existing.with_extension("pack"), reinstalled.with_extension("pack"))?;
+        std::fs::write(reinstalled.with_extension("keep"), "")?;
+        // somebody took the index away to make a new one with `git index-pack`, however long ago
+        std::fs::File::options()
+            .write(true)
+            .open(index_removed_by_somebody.with_extension("pack"))?
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60))?;
+
+        gix::open_opts(&repo_dir, crate::restricted())?.repack(Options::default(), &never())?;
+        for extension in ["pack", "mtimes", "idx.removing"] {
+            assert!(
+                !interrupted.with_extension(extension).exists(),
+                "{kind}: {extension} of a pack that was being removed is gone"
+            );
+        }
+        assert!(
+            reinstalled.with_extension("pack").exists() && reinstalled.with_extension("idx").exists(),
+            "{kind}: a pack that is there again under the same name stays whole"
+        );
+        assert!(
+            !reinstalled.with_extension("idx.removing").exists(),
+            "{kind}: but the name that said it is on its way out goes"
+        );
+        assert!(
+            index_removed_by_somebody.with_extension("pack").exists(),
+            "{kind}: a pack without an index that this didn't remove stays however old, as in Git, as it may be what the index is made from"
         );
     }
     Ok(())
