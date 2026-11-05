@@ -208,3 +208,22 @@ unsupported: a `push-to-checkout` hook, `updateInstead`, signed pushes, `proc-re
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.
+
+## Maintenance
+
+What Git 2.56 does that the fork's `gc()` and `run_maintenance()` follow or deliberately differ from. The fork's tests
+compare `git gc`, `git gc --auto` and `git maintenance run` with the native code in repositories of both hashes and both
+reference formats (`gix/tests/gix/repository/gc.rs`). Statements marked *(source)* come from reading Git's `builtin/gc.c`
+and `odb/source-files.c` and were not run.
+
+| Case | Git | The fork |
+| --- | --- | --- |
+| Reflog ages with nothing configured | The documentation says 90 days, or 30 if unreachable. The code sets 30 and 90, so everything older than 30 days expires | Removes an entry only if the documented and the actual rule both would, which is the documented one, and says so in the module documentation. Configuring `gc.reflogExpire` and `gc.reflogExpireUnreachable` removes the difference |
+| `maintenance.auto=false` and `maintenance run --auto` | Caller commands like `receive-pack` and `commit` consult `maintenance.auto`, falling back to `gc.auto > 0`, before they start it. `maintenance run --auto` itself doesn't *(source)* | `Repository::auto_maintenance()` answers for the callers, `run_maintenance()` ignores it |
+| Taking `gc.pid` | Creates `gc.pid.lock`, reads `gc.pid` under it (ignored after 12 hours, or if the process on this host is gone), writes the lock, renames it. Dies if `gc.pid.lock` exists *(source)* | The same sequence, and an existing `gc.pid.lock` skips an automatic run and fails an explicit one. The process check is only made on Linux |
+| `objects/maintenance.lock` | Has no age limit. A run finding it skips quietly with `--auto` *(source)* | The same, and `gc()` takes it too, which Git's `gc` doesn't, so a lock that a killed `git maintenance` left also blocks `gc()`. `force` doesn't override it |
+| Which tasks a manual `maintenance run` has | `maintenance.strategy`, `geometric` by default: `commit-graph`, `geometric-repack`, `pack-refs`, `rerere-gc`, `reflog-expire`, `worktree-prune`, then `maintenance.<task>.enabled` *(source)* | The same selection. `commit-graph`, `rerere-gc` and `worktree-prune`, and `prefetch` and `incremental-repack`, are reported as unsupported |
+| Are there too many loose objects | Counts those in `objects/17` and compares with `gc.auto` divided by 256, rounded up *(source)* | The same estimate |
+| `geometric-repack` when all packs would be rolled up | Does a full `repack -a -d --cruft` with `gc.pruneExpire` instead, which is the only place where the default strategy expires unreachable objects *(source, and ran)* | The same, with `now` meaning that they are dropped |
+| `pre-auto-gc` | Runs it for `gc --auto`, and a second time inside the `gc` that `maintenance run --auto` starts *(source)* | Runs it once |
+| Index files without a pack | Removes all files of that name, including `.keep` *(source)*. Names that are not known, like the fork's `*.idx.removing`, stay | The same |

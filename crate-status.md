@@ -210,6 +210,24 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [ ] write configuration back
         * [ ] auto-refresh configuration values after they changed on disk
         * [ ] facilities to apply the [url-match](https://git-scm.com/docs/git-config#Documentation/git-config.txt-httplturlgt) algorithm and to [normalize urls](https://github.com/git/git/blob/be1a02a17ede4082a86dfbfee0f54f345e8b43ac/urlmatch.c#L109:L109) before comparison.
+    * **maintenance** (feature `maintenance`, tested against Git 2.56 for both hashes and both reference formats)
+        * [x] find what is reachable from references, the `HEAD` of each worktree, reflogs, indices and interrupted rebases, in `gix::maintenance::reachable`
+        * [x] `prune` and `prune-packed`, with expiry, temporary files and the shallow file
+        * [x] expire reflogs like `git reflog expire --all`, with the ages from `gc.reflogExpire*`
+        * [x] repack like `git repack -a -d`, `-A -d`, `-d` and `-d --geometric`, with cruft packs, `.keep` files, deltas and recovery after a kill at any step
+        * [x] `Repository::gc()`, with `--auto`, `gc.pid` and `objects/maintenance.lock` taken as Git takes them, `pre-auto-gc`, `gc.log`, and pack garbage
+        * [x] `Repository::run_maintenance()` with the tasks `gc`, `loose-objects`, `geometric-repack`, `pack-refs` and `reflog-expire`, and `--auto` conditions
+        * [x] `Repository::auto_maintenance()` for the `maintenance run --auto` that callers like a receiver ask for
+        * [ ] the tasks `prefetch`, `incremental-repack`, `commit-graph`, `worktree-prune` and `rerere-gc`, which are reported as unsupported
+        * [ ] `gc.bigPackThreshold`, `--keep-largest-pack`, `--aggressive`, `gc.repackFilter`, `gc.maxCruftSize`, `--expire-to`
+        * [ ] detaching into the background, and writing `gc.log`
+        * [ ] multi-pack-index and commit-graph writing, bitmaps, promisor repositories (which are refused)
+        - **deviation**
+            * `gc.pid` is trusted on platforms other than Linux, where whether a process is alive can't be told.
+            * The `reflog-expire` task counts the entries of `HEAD` that expire with the documented ages, which can be fewer than Git counts, so the task may become due later than in Git, but never earlier.
+            * The `gc` task of `maintenance run` doesn't run `pre-auto-gc` a second time.
+            * Loose objects that a repack found to be unreachable are written with the time of their pack, but a kill leaves one that is dated now.
+            * Delta search follows Git's choices but isn't Git's code, and finds packs a few percent larger than Git's, which the tests of `repack` bound.
     * [x] mailmap
     * [x] object replacements (`git replace`)
     * [x] read git configuration
