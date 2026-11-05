@@ -93,7 +93,7 @@ impl std::fmt::Display for Message {
 pub(super) struct Messages(pub Vec<Message>);
 
 impl Messages {
-    fn error(&mut self, text: impl Into<String>) {
+    pub(super) fn error(&mut self, text: impl Into<String>) {
         self.0.push(Message {
             level: Level::Error,
             text: text.into().into(),
@@ -156,6 +156,11 @@ pub(super) trait World {
     /// Bring the work tree that has the branch `name` checked out up to the new value of `command`, which is what
     /// `receive.denyCurrentBranch=updateInstead` is for, and return the reason to refuse the update with if that isn't possible.
     fn update_worktree(&self, name: &BStr, command: &Command, messages: &mut Messages) -> Option<&'static str>;
+    /// Take what `command` needs of the shallow boundary of a client into the `shallow` file, which is what
+    /// `receive.shallowUpdate` is for, and return `true` if that failed, as it does if what the command brings isn't connected.
+    fn update_shallow(&self, _command: &Command, _messages: &mut Messages) -> bool {
+        false
+    }
     /// The name of the reference that `name` leads to if it is a symbolic reference, following all of them.
     fn alias_target(&self, name: &BStr) -> Option<BString>;
     /// Whether the object exists.
@@ -374,6 +379,10 @@ pub(super) fn check_update(
 
     if update_worktree && let Some(reason) = world.update_worktree(protected, command, messages) {
         return Err(reason);
+    }
+
+    if !deleting && world.update_shallow(command, messages) {
+        return Err("shallow error");
     }
 
     if !deleting {

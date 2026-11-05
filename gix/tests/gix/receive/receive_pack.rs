@@ -136,6 +136,8 @@ impl Hook {
   echo "cwd=$(pwd -P)"
   echo "GIT_DIR=${{GIT_DIR-unset}}"
   echo "GIT_WORK_TREE=${{GIT_WORK_TREE-unset}}"
+  echo "GIT_SHALLOW_FILE=$([ -n "${{GIT_SHALLOW_FILE-}}" ] && echo set || echo unset)"
+  [ -z "${{GIT_SHALLOW_FILE-}}" ] || echo "shallow-file: $(tr '\n' ' ' < "$GIT_SHALLOW_FILE")"
   echo "GIT_NAMESPACE=${{GIT_NAMESPACE-unset}}"
   echo "GIT_REPLACE_REF_BASE=${{GIT_REPLACE_REF_BASE-unset}}"
   echo "GIT_PUSH_OPTION_COUNT=${{GIT_PUSH_OPTION_COUNT-unset}}"
@@ -341,7 +343,19 @@ impl World {
                     .map(|rev| self.id(format, rev).map(|id| format!("{id}\n")))
                     .collect::<TestResult<String>>()?;
             }
-            let mut child = gix_testtools::git_command(self.client(format))
+            let mut pack_objects = gix_testtools::git_command(self.client(format));
+            if !push.shallow.is_empty() {
+                // The client has no parents for its shallow commits, so that it sends everything that they have.
+                let file = self.dir.path().join(format!("{format}-client-shallow"));
+                let ids = push
+                    .shallow
+                    .iter()
+                    .map(|rev| self.id(format, rev).map(|id| format!("{id}\n")))
+                    .collect::<TestResult<String>>()?;
+                std::fs::write(&file, ids)?;
+                pack_objects.env("GIT_SHALLOW_FILE", file);
+            }
+            let mut child = pack_objects
                 .env("LC_ALL", "C")
                 .env("LANG", "C")
                 .args(["pack-objects", "--revs", "--stdout"])
@@ -809,16 +823,10 @@ pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&st
     let mut results = Vec::new();
     for format in formats.iter().copied() {
         let request = world.request(format, push)?;
-        let git = git_receive(
-            &world.remote(format, &format!("git-{label}"), push)?,
-            &request,
-            !push.no_side_band,
-        )?;
-        let fork = fork_receive(
-            &world.remote(format, &format!("fork-{label}"), push)?,
-            &request,
-            !push.no_side_band,
-        )?;
+        let git_remote = world.remote(format, &format!("git-{label}"), push)?;
+        let git = git_receive(&git_remote, &request, !push.no_side_band)?;
+        let fork_remote = world.remote(format, &format!("fork-{label}"), push)?;
+        let fork = fork_receive(&fork_remote, &request, !push.no_side_band)?;
         let (git_report, fork_report) = (report_lines(&git.report), report_lines(&fork.report));
         let fork_report = if push.namespace.is_some() {
             tell_what_git_tells_in_a_namespace(&git_report, fork_report)
@@ -829,6 +837,18 @@ pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&st
         assert_eq!(
             fork.messages, git.messages,
             "{format}/{label}: people are told the same"
+        );
+        // Git leaves an empty file where it takes nothing into it, which makes the repository shallow without a commit, and
+        // which the receiver doesn't.
+        let shallow_file = |remote: &Path| {
+            std::fs::read_to_string(remote.join("shallow"))
+                .ok()
+                .filter(|text| !text.is_empty())
+        };
+        assert_eq!(
+            shallow_file(&fork_remote),
+            shallow_file(&git_remote),
+            "{format}/{label}: the receiver is shallow at the same commits afterwards"
         );
         let is_head_entry = |line: &String| line.starts_with("reflog HEAD@");
         assert_eq!(

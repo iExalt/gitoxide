@@ -4,11 +4,13 @@
 //!
 //! The only commits without parents are the entries of the `shallow` file. Anything below them is missing, and a client that
 //! assumes that the receiver has it, because it can reach it from what the receiver advertised, is told so.
-use std::path::Path;
+use std::{io::Write as _, path::Path};
 
 use gix_testtools::TestResult;
 
-use super::receive_pack::{Cmd, Push, World, add_alternate_of_client, assert_advertisement_same, compare_on};
+use super::receive_pack::{
+    Cmd, Hook, Push, World, add_alternate_of_client, assert_advertisement_same, compare_on, fork_receive,
+};
 
 const FORMATS: &[&str] = &["files", "reftable"];
 
@@ -405,4 +407,348 @@ fn what_a_shallow_client_says_that_doesnt_matter_is_ignored() -> TestResult {
 
 fn on_c4(remote: &'static str) -> Push {
     to(remote, vec![Cmd("0", "ff", "refs/heads/topic")], vec!["ff", "^main"])
+}
+
+const UPDATE: &str = "config receive.shallowUpdate true";
+
+fn lines(file: Option<String>) -> Vec<String> {
+    file.map(|text| text.lines().map(ToOwned::to_owned).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_receiver_that_is_told_to_becomes_shallow_where_the_client_is() -> TestResult {
+    let world = world()?;
+    let to_update = |push: Push| with_config(push, UPDATE);
+    // What the pack brings of the boundary is written to the `shallow` file, which compares as it is a file of the receiver.
+    let bringing_the_boundary = to(
+        "empty.git",
+        vec![Cmd("0", "ff", "refs/heads/main")],
+        vec!["ff", "^main~1"],
+    );
+    same(
+        &world,
+        "new-boundary",
+        &to_update(shallow_at(bringing_the_boundary, &["main"])),
+        OK_MAIN,
+    )?;
+    // Not what a reference reaches, or what is the boundary of the receiver already.
+    same(
+        &world,
+        "nothing-to-take",
+        &to_update(shallow_at(on_c4("moved.git"), &["main"])),
+        "ok refs/heads/topic",
+    )?;
+    same(
+        &world,
+        "own-boundary",
+        &to_update(shallow_at(
+            to(
+                "remote.git",
+                vec![Cmd("main", "ff", "refs/heads/main")],
+                vec!["ff", "^main"],
+            ),
+            &["main"],
+        )),
+        OK_MAIN,
+    )?;
+    // What is added to what the file has, with what was there first and the new commits after it.
+    let beside_the_old = |atomic| Push {
+        atomic,
+        ..to_update(shallow_at(
+            to(
+                "remote.git",
+                vec![Cmd("0", "side", "refs/heads/side2")],
+                vec!["side", "^main"],
+            ),
+            &["main", "side"],
+        ))
+    };
+    same(
+        &world,
+        "added-to-the-file",
+        &beside_the_old(false),
+        "ok refs/heads/side2",
+    )?;
+    // The command that needs it is the last one, as Git forgets about those that follow it.
+    let last = |atomic| Push {
+        atomic,
+        ..to_update(shallow_at(
+            to(
+                "full.git",
+                vec![
+                    Cmd("main", "ff", "refs/heads/main"),
+                    Cmd("0", "side", "refs/heads/side2"),
+                ],
+                vec!["ff", "side", "^main"],
+            ),
+            &["main", "side"],
+        ))
+    };
+    same_all(
+        &world,
+        "needed-by-the-last",
+        &last(false),
+        &[OK_MAIN, "ok refs/heads/side2"],
+    )?;
+    same_all(
+        &world,
+        "needed-by-the-last-atomic",
+        &last(true),
+        &[OK_MAIN, "ok refs/heads/side2"],
+    )?;
+    // What reached the boundary through the reference that is deleted doesn't any more, which Git looks at after the deletion.
+    let deleted = with_config(
+        with_config(
+            to_update(shallow_at(
+                to(
+                    "moved.git",
+                    vec![Cmd("moved", "0", "refs/heads/keep"), Cmd("0", "ff", "refs/heads/topic")],
+                    vec!["ff", "^main"],
+                ),
+                &["main"],
+            )),
+            "update-ref refs/heads/keep main",
+        ),
+        "update-ref refs/heads/main main~4",
+    );
+    same_all(
+        &world,
+        "reached-by-what-is-deleted",
+        &deleted,
+        &["ok refs/heads/keep", "ok refs/heads/topic"],
+    )?;
+    // Without the setting it is decided before the deletion, and nothing is needed as the reference is still there.
+    let without = Push {
+        setup: deleted.setup.iter().copied().filter(|setup| *setup != UPDATE).collect(),
+        ..deleted.clone()
+    };
+    same_all(
+        &world,
+        "reached-by-what-is-deleted-without-the-setting",
+        &without,
+        &["ok refs/heads/keep", "ok refs/heads/topic"],
+    )
+}
+
+#[test]
+fn every_command_of_a_push_that_needs_the_boundary_is_applied_unlike_in_git() -> TestResult {
+    // Git gives the check of the command that it applies a pointer to the command and not the command, which makes it
+    // check the one after it, or none, and forget about those that follow: pushing two new branches where the first needs
+    // the boundary ends with a report that has only the first. Each command is checked here, and each is told.
+    let world = world()?;
+    let format = "files";
+    let push = with_config(
+        shallow_at(
+            to(
+                "empty.git",
+                vec![Cmd("0", "side", "refs/heads/side2"), Cmd("0", "on-c3", "refs/heads/t1")],
+                vec!["side", "on-c3", "^main~3"],
+            ),
+            &["side", "main~1"],
+        ),
+        UPDATE,
+    );
+    let remote = world.remote(format, "two-needing-the-boundary", &push)?;
+    let fork = fork_receive(&remote, &world.request(format, &push)?, true)?;
+    let report = String::from_utf8_lossy(&fork.report);
+    assert!(
+        report.contains("ok refs/heads/side2") && report.contains("ok refs/heads/t1"),
+        "both are updated and told: {report}"
+    );
+    assert_eq!(
+        lines(std::fs::read_to_string(remote.join("shallow")).ok()),
+        [world.id(format, "side")?, world.id(format, "main~1")?],
+        "the file has what each command needed, in the order of the commands"
+    );
+    Ok(())
+}
+
+fn hooks_of_a_receive() -> Vec<Hook> {
+    ["pre-receive", "update", "post-receive", "post-update"]
+        .into_iter()
+        .map(Hook::new)
+        .collect()
+}
+
+#[test]
+fn hooks_are_told_about_the_shallow_commits_of_the_client_in_a_file_when_the_receiver_is_to_update() -> TestResult {
+    let world = world()?;
+    let with_hooks = |mut push: Push| {
+        push.hooks = hooks_of_a_receive();
+        with_config(push, UPDATE)
+    };
+    // Whether it is needed or not, as long as something of what the client said is there.
+    same(
+        &world,
+        "hooks-needed",
+        &with_hooks(shallow_at(
+            to(
+                "empty.git",
+                vec![Cmd("0", "ff", "refs/heads/main")],
+                vec!["ff", "^main~1"],
+            ),
+            &["main"],
+        )),
+        OK_MAIN,
+    )?;
+    same(
+        &world,
+        "hooks-not-needed",
+        &with_hooks(shallow_at(
+            to(
+                "full.git",
+                vec![Cmd("main", "ff", "refs/heads/main")],
+                vec!["ff", "^main"],
+            ),
+            &["main"],
+        )),
+        OK_MAIN,
+    )?;
+    // Nothing of it is there, so Git doesn't mean to update, and there is no file.
+    same(
+        &world,
+        "hooks-unknown-line",
+        &with_hooks(shallow_at(
+            to(
+                "full.git",
+                vec![Cmd("main", "ff", "refs/heads/main")],
+                vec!["ff", "^main"],
+            ),
+            &["main~3"],
+        )),
+        OK_MAIN,
+    )?;
+    // The file has what the receiver has, and then what the client said as it said it, whether it is there or not and twice.
+    same(
+        &world,
+        "hooks-what-the-client-said",
+        &with_hooks(shallow_at(
+            to(
+                "remote.git",
+                vec![Cmd("0", "side", "refs/heads/side2")],
+                vec!["side", "^main"],
+            ),
+            &["side", "main~3", "side"],
+        )),
+        "ok refs/heads/side2",
+    )?;
+    // The `update` hook decides before anything is written.
+    let mut declined = to(
+        "empty.git",
+        vec![Cmd("0", "ff", "refs/heads/main")],
+        vec!["ff", "^main~1"],
+    );
+    declined.hooks = vec![Hook::new("update").declining("refs/heads/main")];
+    same(
+        &world,
+        "declined-by-the-hook",
+        &with_config(shallow_at(declined, &["main"]), UPDATE),
+        "ng refs/heads/main hook declined",
+    )
+}
+
+fn lock_the_shallow_file(remote: &Path, _client: &Path) -> TestResult {
+    let git_dir = Path::new(gix_testtools::git(remote, "rev-parse --absolute-git-dir")?.trim()).to_owned();
+    std::fs::write(git_dir.join("shallow.lock"), "")?;
+    Ok(())
+}
+
+#[test]
+fn a_shallow_file_that_cannot_be_updated_fails_the_command_instead_of_the_receiver_unlike_git() -> TestResult {
+    // Git dies if the file changed after it read it, or is locked, which ends the push without a report. The command that needs
+    // the file is rejected here, and what it said is told.
+    let world = world()?;
+    let format = "files";
+    let bringing_the_boundary = || {
+        shallow_at(
+            with_config(
+                to(
+                    "empty.git",
+                    vec![Cmd("0", "ff", "refs/heads/main")],
+                    vec!["ff", "^main~1"],
+                ),
+                UPDATE,
+            ),
+            &["main"],
+        )
+    };
+    let locked = Push {
+        prepare: Some(lock_the_shallow_file),
+        ..bringing_the_boundary()
+    };
+    let changed = Push {
+        hooks: vec![Hook::new("update").running("echo changed > ./shallow")],
+        ..bringing_the_boundary()
+    };
+    for (label, push, reason) in [
+        ("locked", locked, "Could not lock the shallow file"),
+        ("changed", changed, "the shallow file has changed since it was read"),
+    ] {
+        let remote = world.remote(format, label, &push)?;
+        let fork = fork_receive(&remote, &world.request(format, &push)?, true)?;
+        let report = String::from_utf8_lossy(&fork.report);
+        assert!(
+            report.contains("ng refs/heads/main shallow error"),
+            "{label}: the command is rejected: {report}"
+        );
+        assert!(
+            fork.messages.contains(reason),
+            "{label}: and it is told why: {}",
+            fork.messages
+        );
+        assert!(
+            !fork.refs.iter().any(|line| line.starts_with("refs/heads/main ")),
+            "{label}: and nothing is updated"
+        );
+    }
+    Ok(())
+}
+
+/// The receiver has the commit `c4` of the client, and not its tree, as if objects were lost.
+fn only_the_commit_of_the_boundary(remote: &Path, client: &Path) -> TestResult {
+    let commit = gix_testtools::git_command(client)
+        .args(["cat-file", "commit", "main"])
+        .output()?;
+    assert!(commit.status.success(), "the commit can be read");
+    let mut write = gix_testtools::git_command(remote)
+        .args(["hash-object", "-w", "-t", "commit", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()?;
+    write.stdin.take().expect("piped").write_all(&commit.stdout)?;
+    assert!(write.wait()?.success(), "the commit can be written");
+    Ok(())
+}
+
+#[test]
+fn a_boundary_that_does_not_connect_fails_the_command_and_leaves_the_file_alone_unlike_git() -> TestResult {
+    // Git accepts this push, as it checks the wrong command, and then has a repository with a commit that lacks its tree and
+    // is a root.
+    let world = world()?;
+    let format = "files";
+    let push = Push {
+        prepare: Some(only_the_commit_of_the_boundary),
+        ..shallow_at(
+            with_config(
+                to(
+                    "empty.git",
+                    vec![Cmd("0", "ff", "refs/heads/main")],
+                    vec!["ff", "^main"],
+                ),
+                UPDATE,
+            ),
+            &["main"],
+        )
+    };
+    let remote = world.remote(format, "boundary-without-tree", &push)?;
+    let fork = fork_receive(&remote, &world.request(format, &push)?, true)?;
+    let report = String::from_utf8_lossy(&fork.report);
+    assert!(
+        report.contains("ng refs/heads/main shallow error"),
+        "the command is rejected: {report}"
+    );
+    assert!(!remote.join("shallow").exists(), "no commit became a boundary");
+    assert!(!remote.join("shallow.lock").exists(), "and the lock was let go of");
+    Ok(())
 }

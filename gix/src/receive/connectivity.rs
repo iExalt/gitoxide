@@ -81,10 +81,11 @@ impl Cutoffs {
     }
 
     /// Collect the commits that `HEAD` and all references of `repo` lead to, including the hidden ones and those of other namespaces,
-    /// and not those of alternates. These are the references that Git decides with whether a shallow update is needed.
+    /// and not those of alternates, except for the references that `skip` says to leave out. These are the references that Git
+    /// decides with whether a shallow update is needed.
     ///
     /// Like Git does there, skip what can't be read or isn't a commit.
-    pub(super) fn of_all_references(repo: &Repository) -> Self {
+    pub(super) fn of_all_references(repo: &Repository, skip: &dyn Fn(&BStr) -> bool) -> Self {
         let mut ids = Vec::new();
         if let Some(id) = repo.head().ok().and_then(|head| head.id()) {
             ids.push(id.detach());
@@ -94,6 +95,7 @@ impl Cutoffs {
         {
             ids.extend(
                 all.flatten()
+                    .filter(|reference| !skip(reference.name().as_bstr()))
                     .filter_map(|reference| reference.try_id().map(crate::Id::detach)),
             );
         }
@@ -174,6 +176,17 @@ impl Cutoffs {
 ///
 /// `cutoffs` are what the references of the repository lead to.
 pub fn verify(repo: &Repository, cutoffs: &Cutoffs, tips: &[ObjectId]) -> Result<(), Disconnected> {
+    verify_with_roots(repo, cutoffs, tips, None)
+}
+
+/// Like [`verify()`], but with the commits in `roots`, if there are any, taken for what has no parents, in addition to those that
+/// are the shallow commits of `repo`. That is what a shallow file that is about to be written makes of them.
+pub(super) fn verify_with_roots(
+    repo: &Repository,
+    cutoffs: &Cutoffs,
+    tips: &[ObjectId],
+    roots: Option<&HashSet<ObjectId>>,
+) -> Result<(), Disconnected> {
     let mut commit_tips = Vec::new();
     let mut tree_tips = Vec::new();
     for &tip in tips {
@@ -208,11 +221,33 @@ pub fn verify(repo: &Repository, cutoffs: &Cutoffs, tips: &[ObjectId]) -> Result
     let mut new_commits = Vec::new();
     let mut new_ids = HashSet::new();
     if !commit_tips.is_empty() {
-        let walk = repo
-            .rev_walk(commit_tips)
-            .with_hidden(cutoffs.commits.iter().copied())
-            .all()
-            .map_err(|err| disconnected(None, format!("Could not start to walk the history: {err}")))?;
+        let hidden = cutoffs.commits.iter().copied();
+        let walk: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info, String>> + '_> = match roots {
+            None => Box::new(
+                repo.rev_walk(commit_tips)
+                    .with_hidden(hidden)
+                    .all()
+                    .map_err(|err| disconnected(None, format!("Could not start to walk the history: {err}")))?
+                    .map(|info| {
+                        info.map(crate::revision::walk::Info::detach)
+                            .map_err(|err| err.to_string())
+                    }),
+            ),
+            Some(roots) => {
+                let mut all_roots = roots.clone();
+                all_roots.extend(
+                    repo.shallow_commits()
+                        .map_err(|err| disconnected(None, format!("Could not read the shallow file: {err}")))?
+                        .iter()
+                        .flat_map(|commits| commits.iter().copied()),
+                );
+                Box::new(
+                    super::shallow::walk_without_parents(repo, commit_tips, hidden, all_roots)
+                        .map_err(|err| disconnected(None, format!("Could not start to walk the history: {err}")))?
+                        .map(|info| info.map_err(|err| err.to_string())),
+                )
+            }
+        };
         for info in walk {
             let info = info.map_err(|err| disconnected(None, format!("History is incomplete: {err}")))?;
             new_ids.insert(info.id);
