@@ -344,6 +344,35 @@ impl<'a> StoreRef<'a> {
         }
     }
 
+    /// Pack references the way `git pack-refs --all --prune` does, unless `options` say otherwise.
+    ///
+    /// For files, all loose references that are shared between worktrees and point to objects that exist in `objects`, which
+    /// is also used to peel them, are written to `packed-refs` with one commit, and the loose files are deleted afterwards if their
+    /// value is still the one that was packed and nobody holds their lock, which is checked for each of them separately, like
+    /// Git does. Symbolic references, per-worktree references and those that point to missing objects are left alone, and so are
+    /// reflogs. The namespace of the store is ignored.
+    ///
+    /// An `observer` is told what Git's `reference-transaction` hook is: a transaction with all references that are packed,
+    /// even if there are none, whose `preparing` and `prepared` states may be refused, which fails packing before anything
+    /// is written. Then, one transaction for each loose reference that is pruned, in the opposite order, which is
+    /// reported as `preparing` and nothing else if it can't be locked or has changed, and where refusing leaves the
+    /// reference alone. `reftable` doesn't tell its observer anything, as Git doesn't run the hook there either.
+    ///
+    /// For `reftable`, the tables of the stack of this worktree, or of the shared one if it has none, are merged, as many as the
+    /// [geometric policy](crate::pack_refs::Options::auto) suggests with `auto`, otherwise all, and stale ones are removed.
+    pub fn pack_refs(
+        self,
+        objects: &dyn gix_object::Find,
+        options: crate::pack_refs::Options,
+        observer: Option<&mut dyn crate::transaction::observe::Observer>,
+    ) -> Result<crate::pack_refs::Outcome> {
+        match self.backend {
+            Backend::File(store) => store.pack_refs_inner(objects, options, observer),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.pack_refs_inner(options),
+        }
+    }
+
     /// Start a transaction to edit references.
     ///
     /// The transaction inherits the namespace of the store.

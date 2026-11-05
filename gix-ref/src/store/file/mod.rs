@@ -176,6 +176,7 @@ pub mod transaction;
 ///
 pub mod packed;
 
+mod pack_refs;
 mod reflog_edit;
 mod reflog_names;
 mod unsupported;

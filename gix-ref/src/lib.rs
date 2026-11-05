@@ -70,6 +70,8 @@ mod target;
 ///
 pub mod log;
 
+pub mod pack_refs;
+
 ///
 pub mod store {
     ///
