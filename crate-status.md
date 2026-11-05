@@ -227,7 +227,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
             * The `reflog-expire` task counts the entries of `HEAD` that expire with the documented ages, which can be fewer than Git counts, so the task may become due later than in Git, but never earlier.
             * The `gc` task of `maintenance run` doesn't run `pre-auto-gc` a second time.
             * Loose objects that a repack found to be unreachable are written with the time of their pack, but a kill leaves one that is dated now.
-            * Delta search follows Git's choices but isn't Git's code, and finds packs a few percent larger than Git's, which the tests of `repack` bound.
+            * Delta search follows Git's choices but isn't Git's code, and finds packs within about 0.3% of Git's with the default `zlib-sirocco`, which the tests of `repack` bound; with `zlib-rs` the remaining gap is compression and base choice.
     * [x] mailmap
     * [x] object replacements (`git replace`)
     * [x] read git configuration
