@@ -206,7 +206,14 @@ fn automatic_gc_is_due_when_git_says_so() -> TestResult {
         ),
     ];
     for kind in kinds() {
-        for (what, settings, due) in configs {
+        // the configurations that disable it or limit it by packs have nothing to do with the hash, which only decides how
+        // many loose objects Git finds in `objects/17`
+        let configs = if kind == Kind::Sha1 {
+            &configs[..]
+        } else {
+            &configs[..2]
+        };
+        for &(what, settings, due) in configs {
             let (_git, git_dir) = fixture(kind, "files")?;
             let (_native, native_dir) = fixture(kind, "files")?;
             for dir in [&git_dir, &native_dir] {

@@ -341,7 +341,10 @@ source copies. Feature/hash variants also run in an isolated copy, sharing compa
 caches within their task and continuing after individual failures. Their fixture caches cannot
 reuse a previous local run's extracted archives. Archive changes cause
 a failure and retain the changed copy for inspection. Explicit archive-only fixtures keep
-their normal semantics.
+their normal semantics. Tests that have no archives to check, which `GENERATED_FIXTURES_ONLY`
+in the runner names, skip the archived pass. A test that doesn't depend on a feature stays out of
+the variants of `[package.metadata.qa] tests` with a `-E` filter, so that each runs where
+a feature or a fixture hash can change what it does.
 
 Source copies include current tracked and visible untracked files, preserving local edits,
 deletions, permissions and safe relative symlinks. MSRV resolution changes only its copied

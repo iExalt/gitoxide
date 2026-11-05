@@ -585,14 +585,16 @@ checks = [
 ]
 tests = [
     { args = ["--no-default-features", "--features", "basic,comfort,max-performance,sha1,sha256"] },
-    { args = ["--no-default-features", "--features", "basic,extras,comfort,reftable,sha1,sha256"] },
-    { args = ["--features", "async-network-client,sha256"] },
-    { args = ["--features", "async-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
-    { args = ["--features", "blocking-network-client,sha256"] },
-    { args = ["--features", "blocking-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "basic,extras,comfort,reftable,sha1,sha256", "-E", "not test(/^repository::(prune|repack|repack_deltas)::/)"] },
+    # Maintenance knows both hashes itself and depends on no feature but `reftable`, which only `gc` and `reflog_expire` use. All of it runs
+    # in the workspace pass with generated fixtures, and those two run in the case above, so the cases below leave it out.
+    { args = ["--features", "async-network-client,sha256", "-E", "not test(/^repository::(gc|prune|repack|repack_deltas|reflog_expire)::/)"] },
+    { args = ["--features", "async-network-client,sha256", "-E", "not test(/^repository::(gc|prune|repack|repack_deltas|reflog_expire)::/)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "blocking-network-client,sha256", "-E", "not test(/^repository::(gc|prune|repack|repack_deltas|reflog_expire)::/)"] },
+    { args = ["--features", "blocking-network-client,sha256", "-E", "not test(/^repository::(gc|prune|repack|repack_deltas|reflog_expire)::/)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     # Peers with authentication, over both HTTP backends and SSH; they cover both hashes themselves.
     { args = ["--features", "blocking-http-transport-curl,blocking-http-transport-reqwest,sha256", "--test", "network"] },
-    { args = ["--features", "reftable,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "reftable,sha256", "-E", "not test(/^repository::(gc|prune|repack|repack_deltas|reflog_expire)::/)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     { args = ["--no-default-features", "--features", "sha256", "--lib"] },
 ]
 doctests = [

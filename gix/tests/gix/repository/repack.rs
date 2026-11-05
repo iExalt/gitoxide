@@ -581,7 +581,10 @@ fn a_process_that_is_killed_while_repacking_leaves_a_repository_that_the_next_ru
             // Every point between two steps of a repack, which is where the process ends for `After`, and some points in time, which
             // also find the ones in the middle of a step.
             let mut cases: Vec<(Option<usize>, u64)> = (1..=40).map(|after| (Some(after), 0)).collect();
-            cases.extend((0..=140).step_by(20).map(|delay| (None, delay)));
+            if kind == Kind::Sha1 {
+                // where in time the kill falls has nothing to do with the hash, and each of these costs its delay
+                cases.extend((0..=140).step_by(20).map(|delay| (None, delay)));
+            }
             let mut steps = None;
             for (after, delay_ms) in cases {
                 if after.is_some_and(|after| steps.is_some_and(|steps| after > steps)) {
