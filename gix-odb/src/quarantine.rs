@@ -38,16 +38,15 @@ use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
     io::{self, Read},
-    ops::ControlFlow,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use gix_error::{ErrorExt, Result, ResultExt, bail, message, unsupported, validation};
 use gix_hash::{ObjectId, oid};
-use gix_object::{Find, FindHeader};
 use gix_parallel::OwnShared;
 
+pub use crate::inspect::{Inspection, Object, RecordingFind};
 use crate::{Store, loose};
 
 /// The configuration of a [`Quarantine`], which can be derived from the configuration of a repository with
@@ -108,164 +107,6 @@ impl Inspector {
 impl std::fmt::Debug for Inspector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Inspector(..)")
-    }
-}
-
-/// The pack that was received, as seen by an [`Inspector`].
-pub struct Inspection<'a> {
-    bundle: &'a gix_pack::Bundle,
-    thin_bases: &'a HashSet<ObjectId>,
-    odb: crate::store::Handle<OwnShared<Store>>,
-    kept: bool,
-}
-
-impl Inspection<'_> {
-    /// `true` if the pack is kept as pack, and `false` if it will be exploded into loose objects.
-    /// This is the difference between `index-pack` and `unpack-objects`.
-    pub fn kept(&self) -> bool {
-        self.kept
-    }
-
-    /// Call `each` with every object that was received, in the order of the pack, until it breaks.
-    /// The kind and size of the object are known without more ado, while its data is only decoded if [`Object::data()`] is called,
-    /// which saves much of the work if what is looked at are only some of the objects.
-    ///
-    /// The objects that were added to complete a thin pack aren't received, and are left out.
-    pub fn objects(&self, each: &mut dyn FnMut(&mut Object<'_>) -> Result<ControlFlow<()>>) -> Result {
-        let mut by_offset: Vec<_> = (0..self.bundle.index.num_objects())
-            .map(|index| (self.bundle.index.pack_offset_at_index(index), index))
-            .collect();
-        by_offset.sort_unstable();
-        let mut inflate = gix_zlib::Inflate::default();
-        let mut buf = Vec::new();
-        // Objects are decoded in the order of the pack, in which what a delta is based on is usually close by.
-        let mut cache = gix_pack::cache::lru::StaticLinkedList::<64>::new(64 * 1024 * 1024);
-        for (offset, index) in by_offset {
-            let id = self.bundle.index.oid_at_index(index);
-            if self.thin_bases.contains(id) {
-                continue;
-            }
-            let header = pack_header(self.bundle, offset, &mut inflate)?;
-            let mut object = Object {
-                id,
-                kind: header.kind,
-                size: header.object_size,
-                index,
-                bundle: self.bundle,
-                buf: &mut buf,
-                inflate: &mut inflate,
-                cache: &mut cache,
-            };
-            if each(&mut object)?.is_break() {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    /// Find objects in what was received and in the repository with the quarantine that has no more than that.
-    pub fn find(&self) -> impl Find + FindHeader + '_ {
-        PackAndRepository {
-            bundle: self.bundle,
-            odb: &self.odb,
-            inflate: Default::default(),
-        }
-    }
-}
-
-/// An object of a received pack, which is only decoded if its [data](Object::data()) is asked for.
-pub struct Object<'a> {
-    id: &'a oid,
-    kind: gix_object::Kind,
-    size: u64,
-    index: u32,
-    bundle: &'a gix_pack::Bundle,
-    buf: &'a mut Vec<u8>,
-    inflate: &'a mut gix_zlib::Inflate,
-    cache: &'a mut dyn gix_pack::cache::DecodeEntry,
-}
-
-impl Object<'_> {
-    /// The id of the object.
-    pub fn id(&self) -> &oid {
-        self.id
-    }
-
-    /// The kind of the object.
-    pub fn kind(&self) -> gix_object::Kind {
-        self.kind
-    }
-
-    /// The size of the object in bytes, which is that of its [data](Self::data()).
-    pub fn size(&self) -> u64 {
-        self.size
-    }
-
-    /// Decode the object, which can be expensive if it's a delta, and return its data.
-    pub fn data(&mut self) -> Result<&[u8]> {
-        let (object, _) = self
-            .bundle
-            .get_object_by_index(self.index, self.buf, self.inflate, self.cache)?;
-        Ok(object.data)
-    }
-}
-
-/// Decode the header of the object whose entry is at `offset` in the pack of `bundle`, which is cheap as only as much of a delta
-/// is read as it takes to learn the size of the result, and the kind that its base has.
-fn pack_header(
-    bundle: &gix_pack::Bundle,
-    offset: gix_pack::data::Offset,
-    inflate: &mut gix_zlib::Inflate,
-) -> Result<gix_pack::data::decode::header::Outcome> {
-    let resolve = |base: &oid| -> Result<Option<gix_pack::data::decode::header::ResolvedBase>> {
-        bundle
-            .index
-            .lookup(base)
-            .map(|index| {
-                bundle
-                    .pack
-                    .entry(bundle.index.pack_offset_at_index(index))
-                    .map(gix_pack::data::decode::header::ResolvedBase::InPack)
-            })
-            .transpose()
-    };
-    bundle.pack.decode_header(bundle.pack.entry(offset)?, inflate, &resolve)
-}
-
-struct PackAndRepository<'a> {
-    bundle: &'a gix_pack::Bundle,
-    odb: &'a crate::store::Handle<OwnShared<Store>>,
-    /// Reused by all lookups of headers.
-    inflate: std::cell::RefCell<gix_zlib::Inflate>,
-}
-
-impl Find for PackAndRepository<'_> {
-    fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
-        let mut inflate = gix_zlib::Inflate::default();
-        // The borrow checker can't see that `buffer` isn't used if nothing is found in the pack.
-        if self.bundle.index.lookup(id).is_some() {
-            return Ok(self
-                .bundle
-                .find(id, buffer, &mut inflate, &mut gix_pack::cache::Never)?
-                .map(|(data, _)| data));
-        }
-        self.odb.try_find(id, buffer)
-    }
-}
-
-impl FindHeader for PackAndRepository<'_> {
-    /// Only the header is read, so that looking at the objects that something links to, which is most of the objects
-    /// that aren't new, doesn't mean to decode them.
-    fn try_header(&self, id: &oid) -> Result<Option<gix_object::Header>> {
-        if let Some(index) = self.bundle.index.lookup(id) {
-            let offset = self.bundle.index.pack_offset_at_index(index);
-            let header = pack_header(self.bundle, offset, &mut self.inflate.borrow_mut())?;
-            return Ok(Some(gix_object::Header {
-                kind: header.kind,
-                size: header.object_size,
-            }));
-        }
-        self.odb.try_header(id)
     }
 }
 
@@ -572,11 +413,8 @@ impl Quarantine {
     ///
     /// Only packs that are kept can be rejected for being thin as it's `index-pack` that is told to not fix them.
     /// `unpack-objects` takes the bases from the repository whatever the setting.
-    fn thin_lookup(&self, kept: bool) -> Option<RecordingFind> {
-        (!(kept && self.options.reject_thin)).then(|| RecordingFind {
-            odb: self.store.to_handle(),
-            requested: Arc::default(),
-        })
+    fn thin_lookup(&self, kept: bool) -> Option<RecordingFind<crate::store::Handle<OwnShared<Store>>>> {
+        (!(kept && self.options.reject_thin)).then(|| RecordingFind::new(self.store.to_handle()))
     }
 
     /// Let the inspector, if there is one, decide about the pack `bundle` whose objects that complete it are `thin_bases`,
@@ -585,12 +423,7 @@ impl Quarantine {
         let Some(inspector) = &self.options.inspector else {
             return Ok(Vec::new());
         };
-        let inspected = (inspector.0)(&Inspection {
-            bundle,
-            thin_bases,
-            odb: self.store.to_handle(),
-            kept,
-        })?;
+        let inspected = (inspector.0)(&Inspection::new(bundle, thin_bases, &self.store.to_handle(), kept))?;
         if inspected.accepted {
             Ok(inspected.report)
         } else {
@@ -601,7 +434,7 @@ impl Quarantine {
     fn keep(&mut self, stream: &mut dyn io::BufRead, interrupt: &AtomicBool) -> Result<Vec<u8>> {
         let directory = self.dir.path().join("pack");
         let thin_lookup = self.thin_lookup(true);
-        let requested = thin_lookup.as_ref().map(|lookup| lookup.requested.clone());
+        let requested = thin_lookup.clone();
         let outcome = gix_pack::Bundle::write_to_directory(
             stream,
             Some(&directory),
@@ -615,9 +448,7 @@ impl Quarantine {
         if self.options.inspector.is_some()
             && let Some(index_path) = &outcome.index_path
         {
-            let thin_bases = requested.map_or_else(HashSet::new, |bases| {
-                std::mem::take(&mut *bases.lock().expect("no panic while held"))
-            });
+            let thin_bases = requested.map_or_else(HashSet::new, |lookup| lookup.take_requested());
             let bundle = gix_pack::Bundle::at(index_path, self.options.object_hash)?;
             report = self.inspect(&bundle, &thin_bases, true)?;
         }
@@ -637,7 +468,7 @@ impl Quarantine {
             .tempdir_in(self.dir.path())
             .or_raise(|| message("Could not create a scratch directory for unpacking"))?;
         let thin_lookup = self.thin_lookup(false);
-        let requested = thin_lookup.as_ref().map(|lookup| lookup.requested.clone());
+        let requested = thin_lookup.clone();
         // The scratch pack is not to be made durable, the loose objects are.
         let no_fsync = gix_fs::fsync::Options {
             components: gix_fs::fsync::Components::NONE,
@@ -656,7 +487,7 @@ impl Quarantine {
             return Ok(Vec::new());
         };
         // Objects that were added to complete the pack aren't part of it and are only read, never written or freshened.
-        let thin_bases = requested.map(|bases| std::mem::take(&mut *bases.lock().expect("no panic while held")));
+        let thin_bases = requested.map(|lookup| lookup.take_requested());
         let bundle = gix_pack::Bundle::at(&index_path, self.options.object_hash)?;
         let report = self.inspect(&bundle, thin_bases.as_ref().unwrap_or(&HashSet::new()), false)?;
         let mut by_offset: Vec<_> = (0..bundle.index.num_objects())
@@ -852,25 +683,6 @@ impl std::fmt::Display for Refused {
 }
 
 impl std::error::Error for Refused {}
-
-/// Look up the bases to complete a thin pack and remember which ones were asked for.
-struct RecordingFind {
-    odb: crate::store::Handle<OwnShared<Store>>,
-    requested: Arc<Mutex<HashSet<ObjectId>>>,
-}
-
-impl Find for RecordingFind {
-    fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
-        let found = self.odb.try_find(id, buffer)?;
-        if found.is_some() {
-            self.requested
-                .lock()
-                .expect("no panic while held")
-                .insert(id.to_owned());
-        }
-        Ok(found)
-    }
-}
 
 /// Finds out if objects exist in any of the object directories, and refreshes their modification time if so, which
 /// is what keeps garbage collection from removing them while they are about to become reachable again.
