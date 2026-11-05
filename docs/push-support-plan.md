@@ -636,7 +636,9 @@ sequencing; the overseer proposes each as its dependencies finish.
     writing; no detaching and no `gc.log` written; on platforms other than Linux a `gc.pid` or marker is assumed to be alive; with an expiry, a second
     walk doubles the time that finding what a newer object needs takes; geometric and cruft packs get no delta search; `pack.depth` isn't clamped to 4095 and there is
     no `pack.deltaCacheSize`; a kill while loosening leaves one object dated now; the `reflog-expire` task can become due later than in Git; and the
-    delta encoder makes packs a few percent larger than Git's, which thread 13 owns.
+    delta encoder's packs were a few percent larger than Git's when this was written. Thread 13 has since brought them to within about 0.3% of Git's
+    with the default `zlib-sirocco` (heavy −0.2%, ordinary +0.3% on SHA-1 and −2.1% on SHA-256 in `repack_deltas`), and what remains with `zlib-rs` is compression and
+    base choice, see its entry below.
 - 2026-11-05: thread 13 (pack-size follow-ups) is done. Thread 12's packs were 1 to 5% larger than Git 2.56's `repack -a -d -f --window=10
   --depth=50`; the encoder's part of that gap is gone and the compression part is closed by making `sirocco` the default zlib backend.
   - Delta encoder (#92, merged as 393f6d0df). Per delta that Git chose in the `make_delta_repo.sh` fixtures (Git's 118 deltas for `heavy` and 590 for
