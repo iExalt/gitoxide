@@ -125,6 +125,8 @@ pub struct Checker {
     blobs: blob::Found,
     /// Look at blobs only when the check is [finished](Checker::finish()).
     defer_blobs: bool,
+    /// Don't require what is linked to in [`finish()`](Checker::finish()) to be there.
+    without_links: bool,
 }
 
 impl Checker {
@@ -138,6 +140,7 @@ impl Checker {
             pending: HashMap::default(),
             blobs: Default::default(),
             defer_blobs: false,
+            without_links: false,
         }
     }
 
@@ -151,6 +154,13 @@ impl Checker {
     /// The options the checker was created with.
     pub fn options(&self) -> &Options {
         &self.options
+    }
+
+    /// Don't look at what the objects link to when the check is [finished](Checker::finish()), which is what Git does when it
+    /// receives objects from a remote that may leave objects out on purpose, and checks the objects one by one.
+    pub fn without_links(mut self) -> Self {
+        self.without_links = true;
+        self
     }
 
     /// Treat the commits in `boundary` as if they had no parents when the links are checked, which is what Git does for
@@ -250,7 +260,7 @@ impl Checker {
     where
         F: gix_object::Find + gix_object::FindHeader + ?Sized,
     {
-        if self.options.is_strict() {
+        if self.options.is_strict() && !self.without_links {
             self.finish_links(find)?;
         }
         Ok(self.blobs.finish(&self.options, find, out))

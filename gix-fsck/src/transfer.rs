@@ -62,6 +62,13 @@ impl Transfer {
         self
     }
 
+    /// Don't require the objects that the received ones link to to exist, which is what Git does for objects it receives from a
+    /// remote that may leave objects out on purpose.
+    pub fn without_links(mut self) -> Self {
+        self.checker = self.checker.without_links();
+        self
+    }
+
     /// Return `true` if [`object()`](Self::object()) needs the data of the object `id` which has `kind` and `size` bytes.
     /// Only some blobs don't, and they can be passed with `None`.
     pub fn needs_content(&self, id: &oid, kind: Kind, size: u64) -> bool {
