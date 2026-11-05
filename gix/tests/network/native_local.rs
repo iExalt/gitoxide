@@ -203,6 +203,7 @@ fn a_fetch_from_a_local_path_runs_no_program_with_the_native_transport_and_what_
     dest.config_snapshot_mut()
         .set_raw_value("gitoxide.core.nativeLocalTransport", "true")?;
     fetch(&dest)?;
+
     assert!(
         dest.try_find_reference("refs/remotes/origin/main")?.is_some(),
         "the branch of the remote arrived, with the pack that the in-process server wrote"
@@ -221,5 +222,44 @@ fn a_fetch_from_a_local_path_runs_no_program_with_the_native_transport_and_what_
     let err = fetch(&dest).err().expect("a shallow repository isn't served");
     assert!(format!("{err:?}").contains("shallow"), "the error says why: {err:?}");
     assert!(!log.exists(), "there is no silent fallback to a program");
+    Ok(())
+}
+
+#[test]
+fn a_second_fetch_negotiates_with_the_server_and_annotated_tags_come_along_with_the_pack() -> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    let setup = Setup::new("sha1")?;
+    let url = setup.path("remote.git").display().to_string();
+    let fetch = |repo: &gix::Repository| -> TestResult<()> {
+        repo.remote_at(url.as_str())?
+            .with_refspecs(Some("+refs/heads/*:refs/remotes/origin/*"), Direction::Fetch)?
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .receive(gix::progress::Discard, &AtomicBool::new(false))?;
+        Ok(())
+    };
+    // An annotated tag on the branch only comes along if the server does what `include-tag` asks for.
+    gix_testtools::git(setup.path("remote.git"), "tag -a -m annotated annotated main")?;
+    let mut dest = setup.dest()?;
+    dest.config_snapshot_mut()
+        .set_raw_value("gitoxide.core.nativeLocalTransport", "true")?;
+    fetch(&dest)?;
+    assert!(
+        dest.try_find_reference("refs/tags/annotated")?.is_some(),
+        "the annotated tag arrived with the pack, as `include-tag` demands"
+    );
+
+    // The next fetch has references to negotiate with, which takes the acknowledgments of the server to find what is new.
+    gix_testtools::git(setup.path("work"), "push -q ../remote.git main")?;
+    let three = setup.work()?.head_id()?.detach();
+    fetch(&dest)?;
+    assert_eq!(
+        dest.find_reference("refs/remotes/origin/main")?.id().detach(),
+        three,
+        "the new commit arrived after the server and the client agreed on what the client has"
+    );
+    gix_testtools::git(setup.path("dest.git"), "fsck --connectivity-only --strict")?;
     Ok(())
 }
