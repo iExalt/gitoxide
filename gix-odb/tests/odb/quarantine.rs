@@ -1013,3 +1013,99 @@ fn dropping_what_was_migrated_releases_the_keep_files() -> TestResult {
     );
     Ok(())
 }
+
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<(gix_hash::ObjectId, gix_object::Kind, bool)>>>;
+
+/// An inspector that notes what it was shown and decides with `verdict`.
+fn inspecting(seen: &Seen, verdict: gix_odb::quarantine::Inspected) -> gix_odb::quarantine::Inspector {
+    let seen = seen.clone();
+    gix_odb::quarantine::Inspector::new(move |inspection| {
+        let mut seen = seen.lock().expect("no panic while held");
+        inspection.objects(&mut |object| {
+            seen.push((object.id().to_owned(), object.kind(), inspection.kept()));
+            assert_eq!(
+                object.data()?.len() as u64,
+                object.size(),
+                "the size that is known without decoding is that of the decoded object"
+            );
+            Ok(std::ops::ControlFlow::Continue(()))
+        })?;
+        Ok(verdict.clone())
+    })
+}
+
+#[test]
+fn an_inspector_sees_what_was_received_on_both_paths_before_anything_is_visible_and_can_refuse() -> TestResult {
+    use gix_odb::quarantine::Inspected;
+
+    let repos = Repos::new()?;
+    // The pack is thin: what its deltas are based on is the repository's and not part of what was received.
+    let pack = repos.pack("three", "one", true)?;
+    let count = entries(&pack);
+    for (limit, kept) in [(count + 1, false), (count, true)] {
+        let limit_config = format!("receive.unpackLimit={limit}");
+        let repo = repos.copy("target.git", &format!("inspected-{limit}"))?;
+        let before = state(&repo)?;
+
+        let seen = Default::default();
+        let mut options = options(&[&limit_config])?;
+        options.inspector = Some(inspecting(
+            &seen,
+            Inspected {
+                accepted: true,
+                report: b"warning: something\n".to_vec(),
+            },
+        ));
+        let received = quarantine_receive_with(&repo, options, &pack)?.expect("accepted");
+        assert_eq!(
+            received.report, b"warning: something\n",
+            "what the inspector says is passed on"
+        );
+        let seen = std::mem::take(&mut *seen.lock().expect("no panic while held"));
+        assert_eq!(
+            seen.len() as u32,
+            count,
+            "every entry of the pack is shown, and nothing else"
+        );
+        assert!(
+            seen.iter().all(|(_, _, was_kept)| *was_kept == kept),
+            "it is told which way the pack goes"
+        );
+        assert_ne!(state(&repo)?, before, "an accepted pack is part of the repository");
+
+        let repo = repos.copy("target.git", &format!("refused-{limit}"))?;
+        let seen = Default::default();
+        let mut options = self::options(&[&limit_config])?;
+        options.inspector = Some(inspecting(
+            &seen,
+            Inspected {
+                accepted: false,
+                report: b"fatal: no\n".to_vec(),
+            },
+        ));
+        let rejected = quarantine_receive_with(&repo, options, &pack)?.expect_err("refused");
+        assert_eq!(rejected.report, b"fatal: no\n");
+        assert_eq!(
+            rejected.reason,
+            if kept {
+                "index-pack abnormal exit"
+            } else {
+                "unpack-objects abnormal exit"
+            },
+            "the pack is refused like Git refuses what its checks fail"
+        );
+        assert!(rejected.cause.is_none(), "there is nothing to add to what was said");
+        assert_eq!(state(&repo)?, before, "nothing of a refused pack is left behind");
+
+        let mut options = self::options(&[&limit_config])?;
+        options.inspector = Some(gix_odb::quarantine::Inspector::new(|_| {
+            gix_error::bail!(gix_error::message("it can't decide"))
+        }));
+        let rejected = quarantine_receive_with(&repo, options, &pack)?.expect_err("failed");
+        assert!(
+            rejected.cause.is_some() && rejected.report.is_empty(),
+            "a failure is the reason of the refusal"
+        );
+    }
+    Ok(())
+}

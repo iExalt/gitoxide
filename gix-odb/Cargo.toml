@@ -24,7 +24,7 @@ sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
 ## Provide the `quarantine` module to receive packs the way `git receive-pack` does. It writes packs, which isn't possible when targeting WASM.
-quarantine = ["gix-pack/streaming-input"]
+quarantine = ["gix-pack/streaming-input", "gix-pack/pack-cache-lru-static"]
 
 [dependencies]
 crc32fast = "1.5.0"
