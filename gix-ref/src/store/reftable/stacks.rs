@@ -65,6 +65,38 @@ impl Cell {
     }
 }
 
+impl Cell {
+    /// Merge tables of the stack like `git pack-refs` does: the ones the geometric policy suggests if `auto` is set, all of them
+    /// otherwise, and remove the tables that nothing lists anymore. Return the number of tables that were merged away.
+    pub fn compact(&self, auto: bool) -> Result<usize> {
+        let mut guard = gix_parallel::lock(&self.stack);
+        match guard.as_mut() {
+            Some(stack) => {
+                stack
+                    .reload()
+                    .or_raise(|| message("Could not reload the reftable stack").with("path", self.dir.as_path()))?;
+            }
+            None => {
+                *guard = Some(
+                    Stack::open(&self.dir, self.hash)
+                        .or_raise(|| message("Could not read the reftable stack").with("path", self.dir.as_path()))?,
+                );
+            }
+        }
+        let stack = guard.as_mut().expect("the stack was opened above");
+        let compaction = if auto {
+            stack.auto_compact()
+        } else {
+            stack.compact_all()
+        }
+        .or_raise(|| message("Could not compact the reftable stack").with("path", self.dir.as_path()))?;
+        stack
+            .clean()
+            .or_raise(|| message("Could not remove unused reftables").with("path", self.dir.as_path()))?;
+        Ok(compaction.map_or(0, |compaction| compaction.replaced.len()))
+    }
+}
+
 /// All stacks a store may use.
 #[derive(Debug)]
 pub(crate) struct Stacks {
@@ -161,6 +193,21 @@ impl Store {
 
     pub(crate) fn has_worktree_stack(&self) -> bool {
         self.stacks.has_worktree_stack()
+    }
+
+    /// Merge the tables of the stack of this worktree, or of the main one if it has none of its own, which is what Git
+    /// does to pack references.
+    pub(crate) fn pack_refs_inner(&self, options: crate::pack_refs::Options) -> Result<crate::pack_refs::Outcome> {
+        self.assure_backend_supported()?;
+        let id = if self.stacks.has_worktree_stack() {
+            StackId::Worktree
+        } else {
+            StackId::Main
+        };
+        Ok(crate::pack_refs::Outcome {
+            merged_tables: self.stacks.cell(&id)?.compact(options.auto)?,
+            ..Default::default()
+        })
     }
 
     pub(crate) fn stack_snapshot(&self, id: &StackId, reload: bool) -> Result<Snapshot> {
