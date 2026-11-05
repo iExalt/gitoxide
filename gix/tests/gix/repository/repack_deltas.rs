@@ -178,7 +178,8 @@ fn deltas_that_exist_are_kept_and_what_is_new_is_searched_for() -> TestResult {
 
 #[test]
 fn the_configuration_decides_the_window_and_the_depth_unless_options_say_otherwise() -> TestResult {
-    for kind in kinds() {
+    // how the configuration is read has nothing to do with the hash, so the one that is always there is enough
+    for kind in kinds().take(1) {
         let run = |settings: &[(&str, &str)], deltas: Option<Deltas>| -> TestResult<(u64, usize, usize)> {
             let dir = fixture(kind)?;
             let repo_dir = dir.path().join("ordinary");

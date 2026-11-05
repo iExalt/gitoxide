@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
-# A repository with reflog entries of every age that matters for expiring them. The argument is the reference storage format,
-# `files` or `reftable`. Run it in place: dates are relative to when it ran, and copying doesn't change them, but the
+# A repository with reflog entries of every age that matters for expiring them. The arguments are the reference storage format,
+# `files` or `reftable`, and the object format, `sha1` by default. Run it in place: dates are relative to when it ran, and copying doesn't change them, but the
 # ages matter more than a few hours. The ages are 10, 45, 100 and 400 days.
 #
 # * `main` is a line of commits that are 400, 100, 45 and 10 days old, so everything its reflog mentions is reachable. The reflog of
@@ -19,8 +19,9 @@ set -eu -o pipefail
 # The config sets `gc.reflogExpire` and `gc.reflogExpireUnreachable` explicitly to the documented values, so that
 # Git and the native implementation are compared with the same ages. Without them, what Git does differs from what it documents.
 format=${1:?the reference format to use}
+object_format=${2:-sha1}
 
-git init -q --ref-format="$format" -b main repo
+git init -q --object-format="$object_format" --ref-format="$format" -b main repo
 cd repo
 
 now=$(date +%s)

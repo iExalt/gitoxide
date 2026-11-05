@@ -17,6 +17,12 @@ enum Fixtures {
     Generated,
 }
 
+/// Tests whose fixtures are all made by running their scripts, with no committed archive to extract or check, so that the archived
+/// pass would only repeat the generated one. These are the tests of maintenance of `gix`, which pay for hundreds of scripted
+/// repositories, each with Git to compare with; every test of another kind keeps both passes.
+const GENERATED_FIXTURES_ONLY: &str =
+    "package(=gix) & test(/^repository::(gc|prune|repack|repack_deltas|reflog_expire)::/)";
+
 fn fixture_modes(mode: &str) -> Result<&'static [Fixtures]> {
     match mode {
         "fast" => Ok(&[Fixtures::Generated]),
@@ -67,14 +73,14 @@ fn test_command(
         // which removing the variable cannot prevent; this marker makes the test tools use the archives regardless.
         command.env("GIX_TEST_USE_ARCHIVES", "1");
     }
-    command.args([
-        "-E",
-        if windows_arm {
-            "not ((package(=internal-tools) & binary(=qa)) | test(performance) | test(speed))"
-        } else {
-            "not (package(=internal-tools) & binary(=qa))"
-        },
-    ]);
+    let mut excluded = String::from("package(=internal-tools) & binary(=qa)");
+    if windows_arm {
+        excluded = format!("({excluded}) | test(performance) | test(speed)");
+    }
+    if fixtures == Fixtures::Archived {
+        excluded = format!("({excluded}) | ({GENERATED_FIXTURES_ONLY})");
+    }
+    command.args(["-E".to_owned(), format!("not ({excluded})")]);
     Ok(command)
 }
 
@@ -370,6 +376,12 @@ mod tests {
                 *fixtures,
                 false,
             )?;
+            let filter = match fixtures {
+                Fixtures::Generated => "not (package(=internal-tools) & binary(=qa))".to_owned(),
+                Fixtures::Archived => {
+                    format!("not ((package(=internal-tools) & binary(=qa)) | ({GENERATED_FIXTURES_ONLY}))")
+                }
+            };
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
                 [
@@ -385,10 +397,10 @@ mod tests {
                     "--no-tests",
                     "pass",
                     "-E",
-                    "not (package(=internal-tools) & binary(=qa))",
+                    filter.as_str(),
                 ]
                 .map(OsStr::new),
-                "both fixture modes run the exact saved binaries without rebuilding"
+                "both fixture modes run the exact saved binaries without rebuilding, and only the generated one runs the tests without archives"
             );
             let env: BTreeMap<_, _> = command.get_envs().collect();
             for (name, value) in [
