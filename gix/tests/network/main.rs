@@ -32,6 +32,8 @@ mod http_push;
 mod http_tls;
 mod interrupt;
 mod local_programs;
+#[cfg(feature = "receive")]
+mod native_local;
 mod no_git_dispatch;
 mod pre_push;
 mod push_scenarios;
@@ -130,6 +132,11 @@ impl Setup {
     /// The repository that clients work in, opened without any outside configuration.
     pub fn work(&self) -> TestResult<gix::Repository> {
         Ok(gix::open_opts(self.path("work"), gix::open::Options::isolated())?)
+    }
+
+    #[cfg(feature = "receive")]
+    pub fn remote(&self) -> TestResult<gix::Repository> {
+        Ok(gix::open_opts(self.path("remote.git"), gix::open::Options::isolated())?)
     }
 
     pub fn dest(&self) -> TestResult<gix::Repository> {

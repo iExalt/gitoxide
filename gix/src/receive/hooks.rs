@@ -22,6 +22,8 @@ pub(super) struct Runner<'r, 'h> {
     push_options: &'r [BString],
     /// The name of the namespace that hooks are told about with `GIT_NAMESPACE`, as the environment of Git passes it on.
     namespace: Option<String>,
+    /// Whether hooks are denied what describes the process of the client, as they are if a program was started by it.
+    without_local_repo_env: bool,
 }
 
 impl<'r, 'h> Runner<'r, 'h> {
@@ -29,6 +31,7 @@ impl<'r, 'h> Runner<'r, 'h> {
         repo: &'r Repository,
         push_options: &'r [BString],
         namespace: Option<String>,
+        without_local_repo_env: bool,
         heartbeat: Option<(Duration, Heartbeat<'h>)>,
     ) -> Result<Self> {
         let settings = gix_hook::Settings::from_config(&repo.config.resolved, &mut repo.filter_config_section())
@@ -43,6 +46,7 @@ impl<'r, 'h> Runner<'r, 'h> {
             heartbeat: heartbeat.map(|(interval, beat)| (interval, RefCell::new(beat))),
             push_options,
             namespace,
+            without_local_repo_env,
         })
     }
 
@@ -153,6 +157,11 @@ impl<'r, 'h> Runner<'r, 'h> {
             messages.diagnostic(format!("cannot run the '{event}' hook"));
             return 1;
         };
+        if self.without_local_repo_env {
+            for key in gix_command::LOCAL_REPO_ENV {
+                prepare = prepare.env_remove(*key);
+            }
+        }
         prepare = prepare
             .args(args)
             .stdin(Stdin::Feed(Arc::new(move |writer| writer.write_all(&stdin))))

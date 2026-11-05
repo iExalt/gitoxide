@@ -53,6 +53,9 @@ pub mod push;
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
 pub mod connect;
 
+#[cfg(all(feature = "blocking-network-client", feature = "receive"))]
+pub mod local_transport;
+
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
 mod connection;
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]

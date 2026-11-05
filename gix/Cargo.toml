@@ -245,7 +245,7 @@ blocking-network-client = [
     "credentials",
 ]
 ## Receive pushes into repositories on the local machine like `git receive-pack` does, without running Git and without network.
-receive = ["gix-protocol/blocking-server", "gix-odb/quarantine", "gix-pack/streaming-input", "hook", "revision"]
+receive = ["gix-protocol/blocking-server", "gix-odb/quarantine", "gix-pack/streaming-input", "hook", "command", "revision"]
 ## Stacks with `blocking-network-client` to provide support for HTTP/S using **curl**, and implies blocking networking as a whole, making the `https://` transport available.
 blocking-http-transport-curl = [
     "blocking-network-client",

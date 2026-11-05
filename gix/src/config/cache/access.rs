@@ -175,6 +175,17 @@ impl Cache {
         ("agent", Some(gix_protocol::agent(agent)))
     }
 
+    /// Return `true` if local repositories are to be served in process, which is `gitoxide.core.nativeLocalTransport`.
+    /// Lenient and defaults to `false`.
+    #[cfg(all(feature = "blocking-network-client", feature = "receive"))]
+    pub(crate) fn native_local_transport(&self) -> bool {
+        self.resolved
+            .boolean(config::tree::gitoxide::Core::NATIVE_LOCAL_TRANSPORT)
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }
+
     /// Return `true` if packet-tracing is enabled. Lenient and defaults to `false`.
     #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
     pub(crate) fn trace_packet(&self) -> bool {

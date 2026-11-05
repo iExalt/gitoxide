@@ -22,26 +22,6 @@ use crate::{
     },
 };
 
-// from https://github.com/git/git/blob/20de7e7e4f4e9ae52e6cc7cfaa6469f186ddb0fa/environment.c#L115:L115
-const ENV_VARS_TO_REMOVE: &[&str] = &[
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CONFIG",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_GRAFT_FILE",
-    "GIT_INDEX_FILE",
-    "GIT_NO_REPLACE_OBJECTS",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_PREFIX",
-    "GIT_INTERNAL_SUPER_PREFIX",
-    "GIT_SHALLOW_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_CONFIG_COUNT",
-];
-
 /// A utility to spawn a helper process to actually transmit data, possibly over `ssh`.
 ///
 /// It can only be instantiated using the local [`connect()`] or [ssh connect][super::ssh::connect()].
@@ -369,7 +349,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
                 source: std::io::Error::new(std::io::ErrorKind::InvalidInput, err),
                 command: command.to_owned(),
             })?;
-            for env_to_remove in ENV_VARS_TO_REMOVE {
+            for env_to_remove in gix_command::LOCAL_REPO_ENV {
                 cmd.env_remove(env_to_remove);
             }
             cmd.envs(envs.iter().map(|(k, v)| (k, v)));
