@@ -29,6 +29,9 @@ pub enum Origin {
     Index(BString),
     /// The commit that a file of an interrupted rebase has saved.
     RebaseState(PathBuf),
+    /// An object that is too new to be removed, or that somebody asked to keep, and what it leads to, which is kept for as
+    /// long as it is the case even if the objects it leads to are older.
+    Recent,
 }
 
 /// An object that is wanted, and why.
@@ -46,10 +49,10 @@ impl Root {
     /// Return `true` if this root is allowed to point to objects that aren't there, and to lead to objects that aren't there.
     ///
     /// That's the case for what the reflogs and the index remember, which can mention objects that were removed on purpose or
-    /// that never were in this repository. Missing objects behind a reference, a `HEAD` and a saved rebase are an
+    /// that never were in this repository, and for objects that are recent. Missing objects behind a reference, a `HEAD` and a saved rebase are an
     /// error, as they mean that the repository is damaged and what is reachable can't be told.
     pub fn is_optional(&self) -> bool {
-        matches!(self.origin, Origin::Reflog(_) | Origin::Index(_))
+        matches!(self.origin, Origin::Reflog(_) | Origin::Index(_) | Origin::Recent)
     }
 }
 

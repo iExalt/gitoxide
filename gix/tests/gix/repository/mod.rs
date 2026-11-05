@@ -32,6 +32,8 @@ mod object;
 mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
+#[cfg(feature = "maintenance")]
+mod prune;
 mod ref_storage;
 mod reference;
 #[cfg(feature = "hook")]
