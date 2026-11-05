@@ -15,6 +15,17 @@ impl Pack {
 
     /// The `pack.compression` key.
     pub const COMPRESSION: keys::Compression = keys::Compression::new_compression("compression", &config::Tree::PACK);
+
+    /// The `pack.window` key, which is how many objects before an object are tried as the base of its delta. The default is 10.
+    pub const WINDOW: keys::UnsignedInteger =
+        keys::UnsignedInteger::new_unsigned_integer("window", &config::Tree::PACK);
+
+    /// The `pack.depth` key, which is the longest chain of deltas. The default is 50.
+    pub const DEPTH: keys::UnsignedInteger = keys::UnsignedInteger::new_unsigned_integer("depth", &config::Tree::PACK);
+
+    /// The `pack.windowMemory` key, which is the most memory that the window of objects may take up, `0` for no limit.
+    pub const WINDOW_MEMORY: keys::UnsignedInteger =
+        keys::UnsignedInteger::new_unsigned_integer("windowMemory", &config::Tree::PACK);
 }
 
 /// The `pack.indexVersion` key.
@@ -51,7 +62,14 @@ impl Section for Pack {
     }
 
     fn keys(&self) -> &[&dyn Key] {
-        &[&Self::THREADS, &Self::INDEX_VERSION, &Self::COMPRESSION]
+        &[
+            &Self::THREADS,
+            &Self::INDEX_VERSION,
+            &Self::COMPRESSION,
+            &Self::WINDOW,
+            &Self::DEPTH,
+            &Self::WINDOW_MEMORY,
+        ]
     }
 }
 

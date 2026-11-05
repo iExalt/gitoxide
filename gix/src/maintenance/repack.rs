@@ -30,7 +30,8 @@
 //!
 //! 1. The packs to replace are listed, before anything is looked at, so that a pack that arrives later is never removed.
 //! 2. The roots are found, and with them the objects for the new pack.
-//! 3. The new pack is written next to the others, under a name that doesn't count until the index has been moved into
+//! 3. The new pack is written and checked to have exactly the objects that were meant to be in it, as the packs that it
+//!    replaces are removed on the strength of that. It is put next to the others, under a name that doesn't count until the index has been moved into
 //!    place, and with a `.keep` file that has the process, host and time, and marks it as one that no other `repack` may replace
 //!    until this is done. The marker of a process that is gone, or of one that is over twelve hours old, is removed by the next run,
 //!    while a run that finds another marker stops before it changes anything.
@@ -53,7 +54,10 @@
 //!
 //! # Differences from Git
 //!
-//! * Objects in packs are never deltified, see above.
+//! * Deltas are made by an encoder of its own, which doesn't make the same deltas as Git's, though packs are as small. `pack.depth`
+//!   isn't limited to 4095 as in Git, and what an object may take shrinks with the depth that its base would have, without taking
+//!   the height of what hangs off an object that is a delta already into account. A delta that is found is kept in memory until
+//!   the pack is written, as there is no `pack.deltaCacheSize`.
 //! * There are no bitmaps, multi-pack-indices or reverse indices written.
 //! * Loose copies of objects that a kept pack has stay, while Git's `prune-packed` removes them.
 //! * The index of a pack that is removed is renamed to end in `.idx.removing` first, which Git ignores, and the next run finishes
@@ -84,7 +88,11 @@ use gix_hash::ObjectId;
 use gix_hashtable::{HashMap, HashSet};
 use gix_object::Find as _;
 
-use super::prune::{cruft_mtimes, mtime_of, remove_empty_fan_out_dirs, scan_loose};
+use super::{
+    pack_deltas,
+    prune::{cruft_mtimes, mtime_of, remove_empty_fan_out_dirs, scan_loose},
+    reachable::Reachable,
+};
 use crate::{
     Repository,
     config::{cache::util::ApplyLeniency, tree::Pack as PackKeys},
@@ -227,10 +235,48 @@ pub enum Unreachable {
     },
 }
 
+/// How the objects that are repacked are stored as deltas of each other, like `git repack` does with its `--window`, `--depth`
+/// and `--no-reuse-delta` (`-f`) options.
+///
+/// The objects that are packed are sorted by the name they had in a tree, and each is tried as a delta of the few before it.
+/// An object that is stored as a delta already in a pack stays one if its base is part of the new pack. Deltas are only searched
+/// for in the pack of reachable objects that [`Scope::All`] and [`Scope::Incremental`] write, and not for the unreachable
+/// objects of a cruft pack or for what a geometric or loose roll-up packs, which are copied as they are.
+///
+/// Memory is needed for the data of the objects of the window, and for the data of each delta that is found until the pack is
+/// written, which together are usually a small part of the repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Deltas {
+    /// How many objects before an object are tried as its base, or `None` for `pack.window`, which is 10 by default. `0`
+    /// finds no new deltas.
+    pub window: Option<usize>,
+    /// How many deltas an object takes at most, or `None` for `pack.depth`, which is 50 by default.
+    pub depth: Option<u32>,
+    /// The most memory that the window may take up, or `None` for `pack.windowMemory`, which has no limit by default.
+    pub window_memory: Option<u64>,
+    /// If `true`, which is the default, deltas that exist in the packs are kept, and only the others are searched for. If `false`,
+    /// all deltas are made anew, which is slower and finds the best deltas, like `git repack -f`.
+    pub reuse_deltas: bool,
+}
+
+impl Default for Deltas {
+    fn default() -> Self {
+        Deltas {
+            window: None,
+            depth: None,
+            window_memory: None,
+            reuse_deltas: true,
+        }
+    }
+}
+
 /// Options for [`Repository::repack()`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Options {
+    /// How to make objects deltas of each other, or `None` to store the objects that aren't deltas already whole.
+    pub deltas: Option<Deltas>,
     /// What to pack.
     pub scope: Scope,
     /// What to do with unreachable objects of packs that are removed.
@@ -245,6 +291,7 @@ impl Default for Options {
             scope: Scope::default(),
             unreachable: Unreachable::default(),
             delete_redundant: true,
+            deltas: Some(Deltas::default()),
         }
     }
 }
@@ -275,6 +322,8 @@ pub struct Outcome {
     pub pack: Option<PathBuf>,
     /// The number of objects in the new pack.
     pub packed: usize,
+    /// The number of objects of the new pack that are stored as deltas, whether they were found or existed.
+    pub deltas: usize,
     /// The cruft pack, if one was written. It is the path of the `.pack` file.
     pub cruft_pack: Option<PathBuf>,
     /// The number of objects in the cruft pack.
@@ -611,6 +660,8 @@ struct NewPack {
     /// `true` if this run marked the pack with a `.keep` file that it has to remove, which isn't the case if the pack was there
     /// already under the same name, or if somebody else's `.keep` file was there, which stays.
     marked: bool,
+    /// The number of entries that are deltas.
+    deltas: usize,
 }
 
 impl Repository {
@@ -685,7 +736,12 @@ impl Repository {
             None
         } else {
             let roots = self.reachability_roots(Default::default())?;
-            Some(self.reachable_objects(roots)?)
+            // The names that objects have in trees are only needed to find deltas.
+            Some(if options.deltas.is_some() {
+                self.reachable_objects_with_names(roots)?
+            } else {
+                self.reachable_objects(roots)?
+            })
         };
         let is_reachable = |id: &gix_hash::oid| reachable.as_ref().is_some_and(|reachable| reachable.contains(id));
         interrupted()?;
@@ -743,12 +799,21 @@ impl Repository {
         let main_pack = if candidates.is_empty() {
             None
         } else {
-            let ids: Vec<ObjectId> = candidates.iter().copied().collect();
-            Some(self.write_new_pack(&ids, &pack_dir, &fsync, should_interrupt, None)?)
+            let mut ids: Vec<ObjectId> = candidates.iter().copied().collect();
+            if let (Some(_), Some(reachable)) = (options.deltas, &reachable) {
+                // Of objects that are equally large, the newest is tried first as a base, as in Git. That is the order of the walk.
+                ids.sort_by_key(|id| reachable.rank(id));
+            }
+            let deltas = match (options.deltas, &reachable) {
+                (Some(deltas), Some(reachable)) => Some((deltas, reachable)),
+                _ => None,
+            };
+            Some(self.write_new_pack(&ids, &pack_dir, &fsync, should_interrupt, None, deltas)?)
         };
         if let Some(pack) = &main_pack {
             outcome.pack = Some(pack.stem.with_extension("pack"));
             outcome.packed = candidates.len();
+            outcome.deltas = pack.deltas;
             observer(Phase::PackWritten(&pack.stem.with_extension("pack")))?;
         }
         if !options.delete_redundant {
@@ -804,7 +869,14 @@ impl Repository {
         let cruft_pack = if cruft_ids.is_empty() {
             None
         } else {
-            let pack = self.write_new_pack(&cruft_ids, &pack_dir, &fsync, should_interrupt, Some(&cruft_times))?;
+            let pack = self.write_new_pack(
+                &cruft_ids,
+                &pack_dir,
+                &fsync,
+                should_interrupt,
+                Some(&cruft_times),
+                None,
+            )?;
             outcome.cruft_pack = Some(pack.stem.with_extension("pack"));
             outcome.cruft_packed = cruft_ids.len();
             observer(Phase::CruftPackWritten(&pack.stem.with_extension("pack")))?;
@@ -969,6 +1041,7 @@ impl Repository {
         fsync: &gix_fs::fsync::Options,
         should_interrupt: &AtomicBool,
         mtimes: Option<&HashMap<ObjectId, i64>>,
+        deltas: Option<(Deltas, &Reachable)>,
     ) -> Result<NewPack> {
         let hash = self.object_hash();
         let scratch = Scratch::new(pack_dir)?;
@@ -980,32 +1053,70 @@ impl Repository {
             .into_inner();
         db.prevent_pack_unload();
         db.ignore_replacements = true;
-        let (counts, _) = gix_pack::data::output::count::objects_unthreaded(
-            &db,
-            &mut ids.iter().map(|id| Ok(*id)),
-            &gix_utils::progress::Discard,
-            should_interrupt,
-            gix_pack::data::output::count::objects::ObjectExpansion::AsIs,
-        )
-        .or_raise(|| message("Could not find the objects that are to be packed, so nothing was repacked"))?;
-
+        let mut written_deltas = 0;
         let stream_path = scratch.0.join("stream");
         {
             let mut stream = BufWriter::new(
                 std::fs::File::create_new(&stream_path)
                     .or_raise(|| message!("Could not create {}", stream_path.display()))?,
             );
-            gix_pack::data::output::missing::write_pack(
-                db,
-                counts,
-                &mut stream,
-                hash,
-                gix_pack::data::output::missing::Options {
-                    compression: self.pack_compression()?,
-                    ..Default::default()
-                },
-            )
-            .or_raise(|| message("Could not write the objects into a pack, so nothing was repacked"))?;
+            if let Some((deltas, reachable)) = deltas {
+                let window_memory = deltas.window_memory.or(self
+                    .config_snapshot()
+                    .integer(PackKeys::WINDOW_MEMORY)
+                    .and_then(|bytes| u64::try_from(bytes).ok()));
+                let settings = pack_deltas::Settings {
+                    window: match deltas.window {
+                        Some(window) => window,
+                        None => self
+                            .config_snapshot()
+                            .integer(PackKeys::WINDOW)
+                            .map_or(10, |window| usize::try_from(window).unwrap_or(0)),
+                    },
+                    depth: match deltas.depth {
+                        Some(depth) => depth,
+                        None => self
+                            .config_snapshot()
+                            .integer(PackKeys::DEPTH)
+                            .map_or(50, |depth| u32::try_from(depth).unwrap_or(0)),
+                    },
+                    window_memory: window_memory.filter(|bytes| *bytes != 0),
+                    max_object_size: self.big_file_threshold()?,
+                    reuse: deltas.reuse_deltas,
+                };
+                let written = pack_deltas::write(
+                    &db,
+                    ids,
+                    &|id| reachable.name_hash(id),
+                    &settings,
+                    self.pack_compression()?,
+                    &mut stream,
+                    hash,
+                    should_interrupt,
+                )
+                .or_raise(|| message("Could not write the objects into a pack, so nothing was repacked"))?;
+                written_deltas = written.deltas;
+            } else {
+                let (counts, _) = gix_pack::data::output::count::objects_unthreaded(
+                    &db,
+                    &mut ids.iter().map(|id| Ok(*id)),
+                    &gix_utils::progress::Discard,
+                    should_interrupt,
+                    gix_pack::data::output::count::objects::ObjectExpansion::AsIs,
+                )
+                .or_raise(|| message("Could not find the objects that are to be packed, so nothing was repacked"))?;
+                gix_pack::data::output::missing::write_pack(
+                    db,
+                    counts,
+                    &mut stream,
+                    hash,
+                    gix_pack::data::output::missing::Options {
+                        compression: self.pack_compression()?,
+                        ..Default::default()
+                    },
+                )
+                .or_raise(|| message("Could not write the objects into a pack, so nothing was repacked"))?;
+            }
             stream
                 .flush()
                 .or_raise(|| message!("Could not write {}", stream_path.display()))?;
@@ -1035,6 +1146,21 @@ impl Repository {
                 "The new pack has no objects, which can't be as there are some to pack"
             ));
         };
+        // The packs that this one replaces are removed on the strength of it having what they had, so that is checked first. Indexing
+        // verifies the pack, but not that the object that is in it is the one that was meant to be: a delta that applies cleanly
+        // to something else than what it was made for is an object under another id.
+        {
+            let index = gix_pack::index::File::at(&index_path, hash)
+                .or_raise(|| message("Could not read the index of the new pack, so nothing was repacked"))?;
+            let packed: HashSet<ObjectId> = index.iter().map(|entry| entry.oid).collect();
+            if packed.len() != ids.len() || ids.iter().any(|id| !packed.contains(id)) {
+                bail!(message!(
+                    "The new pack has {} objects and not the {} that were meant to be in it, so nothing was repacked",
+                    packed.len(),
+                    ids.len()
+                ));
+            }
+        }
         let file_name = data_path.file_name().expect("a pack has a file name").to_owned();
         let stem = pack_dir.join(&file_name).with_extension("");
         let mtimes_path = match mtimes {
@@ -1049,7 +1175,11 @@ impl Repository {
                     .or_raise(|| message("Could not replace the times of the cruft pack that is there already"))?,
                 None => remove_if_there(&stem.with_extension("mtimes"))?,
             }
-            return Ok(NewPack { stem, marked: false });
+            return Ok(NewPack {
+                stem,
+                marked: false,
+                deltas: written_deltas,
+            });
         }
         // What a pack of the same name had that this one doesn't is wrong for it: a `.mtimes` file, for one, makes it a cruft pack.
         for extension in ["rev", "bitmap", "mtimes", "promisor"] {
@@ -1070,7 +1200,11 @@ impl Repository {
         std::fs::rename(&index_path, stem.with_extension("idx"))
             .or_raise(|| message("Could not move the index of the new pack into place"))?;
         flush_directory(pack_dir);
-        Ok(NewPack { stem, marked })
+        Ok(NewPack {
+            stem,
+            marked,
+            deltas: written_deltas,
+        })
     }
 
     /// Write the objects, each one with its time, unless they are loose already, which raises the time if they are older.
