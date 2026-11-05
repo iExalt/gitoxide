@@ -3,14 +3,15 @@
 //! A delta starts with the size of the source and the size of the target, each as a little-endian base-128 number, followed by
 //! instructions: *copy* a range of the source, or *insert* up to 127 bytes that the delta carries itself.
 //!
-//! Finding what to copy works with a rolling hash. The source is indexed in blocks of `BLOCK` bytes that start at multiples of
-//! that size, so the index is small. The target is scanned byte by byte for a window, the last `BLOCK` bytes, that has the hash
-//! of one of them, which like in Git can reach back into what the previous copy took, so that a copy can start right after a
-//! change. A match is extended forward as far as the two agree and backward into what would otherwise be inserted, and the
-//! longest candidate wins. This finds the same kind of delta as Git's does, but it isn't the same algorithm and doesn't make the
-//! same deltas.
+//! Finding what to copy works with a rolling hash, and makes the same choices as `git diff-delta` does, so that deltas come out
+//! about as large. The source is indexed in blocks of `BLOCK` bytes that start at multiples of that size, plus one as the first byte
+//! isn't part of any, so that the index is small. Of blocks that follow each other and are the same only the first is kept, and
+//! if a hash is shared by more than `BUCKET_LIMIT` blocks, evenly spread ones are kept. The target is scanned byte by byte for a
+//! window, the last `BLOCK` bytes, that has the hash of one of them. The first of the blocks that continue to agree for the
+//! longest is the one that is copied from, which prefers the lowest offsets as those are the smallest to write. A copy is
+//! extended backward into what would otherwise be inserted, and so a copy can start right after a change.
 
-/// The size of the blocks that are indexed, which is also the least that a copy is worth.
+/// The size of the blocks that are indexed, which is also the size of the window that is hashed.
 const BLOCK: usize = 16;
 /// How many places with the same hash are remembered, which limits the time spent on repetitive data.
 const BUCKET_LIMIT: usize = 64;
@@ -18,6 +19,10 @@ const BUCKET_LIMIT: usize = 64;
 const MAX_COPY: usize = 0x10000;
 /// The least that a copy is worth, which is as much as Git takes.
 const MIN_COPY: usize = 4;
+/// Once this much matches, nothing is looked up until it is copied, as nothing could be much better.
+const GOOD_ENOUGH: usize = 4096;
+/// The longest run of bytes that a single insert instruction carries.
+const MAX_INSERT: usize = 127;
 const MULTIPLIER: u32 = 0x0100_0193;
 
 fn hash_block(block: &[u8]) -> u32 {
@@ -31,69 +36,113 @@ fn leaving_factor() -> u32 {
     (1..BLOCK).fold(1u32, |factor, _| factor.wrapping_mul(MULTIPLIER))
 }
 
+/// The bucket of a hash. The low bits of a hash that is made by multiplying and adding only depend on the low bits of the
+/// bytes, so the high bits are folded in, or data whose bytes have the same low bits would end up in few buckets.
+fn bucket_of(hash: u32, mask: u32) -> usize {
+    ((hash ^ (hash >> 16)) & mask) as usize
+}
+
+/// A block of the source that is indexed.
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    hash: u32,
+    /// The offset of the last byte of the block, which is where a window that ends in its last byte continues.
+    last: u32,
+}
+
 /// The index of a source buffer, which is what a delta is made against. It can be used for any number of targets.
 #[derive(Debug, Clone)]
 pub struct Index {
-    shift: u32,
-    /// For each bucket, where its positions begin in `positions`, with one more at the end.
+    source_len: usize,
+    mask: u32,
+    /// For each bucket, where its entries begin in `entries`, with one more at the end. Entries of a bucket are ordered by
+    /// their offset, lowest first.
     starts: Vec<u32>,
-    positions: Vec<u32>,
+    entries: Vec<Entry>,
 }
 
 impl Index {
     /// Index `source`. One that is 4 GiB or larger has no deltas, so its index is empty.
     pub fn new(source: &[u8]) -> Index {
         let blocks = if u32::try_from(source.len()).is_ok() {
-            source.len() / BLOCK
+            source.len().saturating_sub(1) / BLOCK
         } else {
             0
         };
-        let bits = blocks.max(1).bit_width().clamp(4, 28);
-        let shift = 32 - bits;
-        let buckets = 1usize << bits;
-        let mut counts = vec![0u32; buckets + 1];
-        let hashes: Vec<u32> = (0..blocks)
-            .map(|block| hash_block(&source[block * BLOCK..(block + 1) * BLOCK]))
-            .collect();
-        for hash in &hashes {
-            let bucket = Self::bucket_of(*hash, shift);
-            if (counts[bucket] as usize) < BUCKET_LIMIT {
-                counts[bucket] += 1;
+        let mut buckets = 16usize;
+        while buckets < blocks / 4 {
+            buckets *= 2;
+        }
+        let mask = (buckets - 1) as u32;
+
+        // From the end, so that of identical blocks that follow each other the first one, which has the lowest offset, is left.
+        let mut found: Vec<Entry> = Vec::with_capacity(blocks);
+        for block in (0..blocks).rev() {
+            let first = block * BLOCK + 1;
+            let hash = hash_block(&source[first..first + BLOCK]);
+            let last = (first + BLOCK - 1) as u32;
+            match found.last_mut() {
+                Some(previous) if previous.hash == hash => previous.last = last,
+                _ => found.push(Entry { hash, last }),
             }
         }
+        // They are in order of decreasing offsets now.
+        found.reverse();
+
+        // Where a hash is shared by more blocks than `BUCKET_LIMIT`, drop some so that those that stay are spread out evenly:
+        // each block that stays earns `excess`, and each one that goes costs `BUCKET_LIMIT`, and while the balance is positive
+        // blocks go. This leaves exactly `BUCKET_LIMIT`.
+        let mut counts = vec![0i64; buckets];
+        for entry in &found {
+            counts[bucket_of(entry.hash, mask)] += 1;
+        }
+        let mut balance = vec![0i64; buckets];
+        found.retain(|entry| {
+            let bucket = bucket_of(entry.hash, mask);
+            let excess = counts[bucket] - BUCKET_LIMIT as i64;
+            if excess <= 0 {
+                return true;
+            }
+            if balance[bucket] > 0 {
+                balance[bucket] -= BUCKET_LIMIT as i64;
+                false
+            } else {
+                balance[bucket] += excess;
+                true
+            }
+        });
+
+        // A stable sort into buckets keeps the entries of each ordered by offset.
         let mut starts = vec![0u32; buckets + 1];
-        for bucket in 0..buckets {
-            starts[bucket + 1] = starts[bucket] + counts[bucket];
+        for entry in &found {
+            starts[bucket_of(entry.hash, mask) + 1] += 1;
         }
-        let mut positions = vec![0u32; starts[buckets] as usize];
-        let mut filled = vec![0u32; buckets];
-        // Later blocks first, as the end of a buffer is where what's new tends to be.
-        for (block, hash) in hashes.iter().enumerate().rev() {
-            let bucket = Self::bucket_of(*hash, shift);
-            if filled[bucket] < counts[bucket] {
-                positions[(starts[bucket] + filled[bucket]) as usize] = (block * BLOCK) as u32;
-                filled[bucket] += 1;
-            }
+        for bucket in 0..buckets {
+            starts[bucket + 1] += starts[bucket];
+        }
+        let mut filled = starts.clone();
+        let mut entries = vec![Entry { hash: 0, last: 0 }; found.len()];
+        for entry in &found {
+            let slot = &mut filled[bucket_of(entry.hash, mask)];
+            entries[*slot as usize] = *entry;
+            *slot += 1;
         }
         Index {
-            shift,
+            source_len: source.len(),
+            mask,
             starts,
-            positions,
+            entries,
         }
     }
 
     /// The memory the index occupies, in bytes.
     pub fn memory_size(&self) -> usize {
-        (self.starts.len() + self.positions.len()) * std::mem::size_of::<u32>()
+        self.starts.len() * std::mem::size_of::<u32>() + self.entries.len() * std::mem::size_of::<Entry>()
     }
 
-    fn bucket_of(hash: u32, shift: u32) -> usize {
-        (hash.wrapping_mul(0x9E37_79B1) >> shift) as usize
-    }
-
-    fn candidates(&self, hash: u32) -> &[u32] {
-        let bucket = Self::bucket_of(hash, self.shift);
-        &self.positions[self.starts[bucket] as usize..self.starts[bucket + 1] as usize]
+    fn candidates(&self, hash: u32) -> &[Entry] {
+        let bucket = bucket_of(hash, self.mask);
+        &self.entries[self.starts[bucket] as usize..self.starts[bucket + 1] as usize]
     }
 }
 
@@ -111,114 +160,131 @@ fn push_size(out: &mut Vec<u8>, mut size: usize) {
 
 fn push_inserts(out: &mut Vec<u8>, mut data: &[u8]) {
     while !data.is_empty() {
-        let (now, later) = data.split_at(data.len().min(127));
+        let (now, later) = data.split_at(data.len().min(MAX_INSERT));
         out.push(now.len() as u8);
         out.extend_from_slice(now);
         data = later;
     }
 }
 
-fn push_copy(out: &mut Vec<u8>, mut offset: usize, mut size: usize) {
-    while size > 0 {
-        let now = size.min(MAX_COPY);
-        let command_at = out.len();
-        out.push(0x80);
-        for byte in 0..4 {
-            let part = ((offset >> (8 * byte)) & 0xff) as u8;
+fn push_copy(out: &mut Vec<u8>, offset: usize, size: usize) {
+    let command_at = out.len();
+    out.push(0x80);
+    for byte in 0..4 {
+        let part = ((offset >> (8 * byte)) & 0xff) as u8;
+        if part != 0 {
+            out[command_at] |= 1 << byte;
+            out.push(part);
+        }
+    }
+    // A size of `MAX_COPY` is what no size bytes at all stand for.
+    if size != MAX_COPY {
+        for byte in 0..2 {
+            let part = ((size >> (8 * byte)) & 0xff) as u8;
             if part != 0 {
-                out[command_at] |= 1 << byte;
+                out[command_at] |= 0x10 << byte;
                 out.push(part);
             }
         }
-        // A size of `MAX_COPY` is what no size bytes at all stand for.
-        if now != MAX_COPY {
-            for byte in 0..2 {
-                let part = ((now >> (8 * byte)) & 0xff) as u8;
-                if part != 0 {
-                    out[command_at] |= 0x10 << byte;
-                    out.push(part);
-                }
-            }
-        }
-        offset += now;
-        size -= now;
     }
 }
 
 /// Write the delta that makes `target` out of `source`, for which `index` was made, into `out`, which is cleared first.
 ///
-/// Return `false` and leave `out` unspecified if the delta would be larger than `max_size`, or if `source` or `target` are
+/// Return `false` and leave `out` unspecified if the delta would be larger than `max_size`, if `index` is not the one of
+/// `source`, or if `source` or `target` are
 /// too large to be described, which is at 4 GiB.
 pub fn create(source: &[u8], index: &Index, target: &[u8], max_size: Option<usize>, out: &mut Vec<u8>) -> bool {
     out.clear();
-    if u32::try_from(source.len()).is_err() || u32::try_from(target.len()).is_err() {
+    // An index of another source would name places that aren't there.
+    if source.len() != index.source_len || u32::try_from(source.len()).is_err() || u32::try_from(target.len()).is_err()
+    {
         return false;
     }
     let too_large = |out: &Vec<u8>| max_size.is_some_and(|max| out.len() > max);
     push_size(out, source.len());
     push_size(out, target.len());
-
-    let leaving = leaving_factor();
-    // The window is the `BLOCK` bytes before `end`, and what comes before `pending_from` is dealt with. Like Git does, look for
-    // the window among the blocks of the source even when it reaches back into what a copy just took, so that a copy can start
-    // right after a change.
-    let mut pending_from = 0;
-    let mut end = BLOCK;
-    if target.len() < BLOCK {
+    if target.len() <= BLOCK {
         push_inserts(out, target);
         return !too_large(out);
     }
+
+    let leaving = leaving_factor();
+    // What is before `pending_from` is dealt with, and what is before `at` and not before `pending_from` is to be inserted
+    // unless a copy that reaches back takes it. The window is the `BLOCK` bytes up to and including the one at `at`. The first
+    // few bytes are never matched, as there is no window yet.
+    let mut pending_from = 0;
+    let mut at = BLOCK;
     let mut hash = hash_block(&target[..BLOCK]);
-    loop {
-        let mut best: Option<(usize, usize, usize)> = None; // where the source continues, bytes forward, bytes backward
-        for &candidate in index.candidates(hash) {
-            let source_end = candidate as usize + BLOCK;
-            // An index that doesn't belong to the source has positions that aren't in it, which is a mistake that finds no delta.
-            if source_end > source.len() {
-                continue;
-            }
-            let mut forward = 0;
-            while source_end + forward < source.len()
-                && end + forward < target.len()
-                && source[source_end + forward] == target[end + forward]
-            {
-                forward += 1;
-            }
-            let mut backward = 0;
-            while backward < end - pending_from
-                && backward < source_end
-                && source[source_end - 1 - backward] == target[end - 1 - backward]
-            {
-                backward += 1;
-            }
-            if best.is_none_or(|(_, f, b)| forward + backward > f + b) {
-                best = Some((source_end, forward, backward));
-            }
-        }
-        match best {
-            Some((source_end, forward, backward)) if forward + backward >= MIN_COPY => {
-                push_inserts(out, &target[pending_from..end - backward]);
-                push_copy(out, source_end - backward, forward + backward);
-                end += forward;
-                pending_from = end;
-                hash = hash_block(&target[end - BLOCK..end]);
-                if too_large(out) {
-                    return false;
+    // The size and the offset of what is to be copied, which continues where a copy of the largest size left off.
+    let (mut copy_size, mut copy_from) = (0usize, 0usize);
+    while at < target.len() {
+        if copy_size < GOOD_ENOUGH {
+            hash = hash
+                .wrapping_sub((u32::from(target[at - BLOCK]) + 1).wrapping_mul(leaving))
+                .wrapping_mul(MULTIPLIER)
+                .wrapping_add(u32::from(target[at]) + 1);
+            for entry in index.candidates(hash) {
+                if entry.hash != hash {
+                    continue;
                 }
-            }
-            _ => {
-                if end == target.len() {
+                let last = entry.last as usize;
+                // Where it can't be longer than what is known, neither can what comes after it, which is closer to the end.
+                if (source.len() - last).min(target.len() - at) <= copy_size {
                     break;
                 }
-                hash = hash
-                    .wrapping_sub((u32::from(target[end - BLOCK]) + 1).wrapping_mul(leaving))
-                    .wrapping_mul(MULTIPLIER)
-                    .wrapping_add(u32::from(target[end]) + 1);
-                end += 1;
-                if out.len() + (end - pending_from) > max_size.unwrap_or(usize::MAX) {
-                    return false;
+                let size = source[last..]
+                    .iter()
+                    .zip(&target[at..])
+                    .take_while(|(source_byte, target_byte)| source_byte == target_byte)
+                    .count();
+                if size > copy_size {
+                    copy_size = size;
+                    copy_from = last;
+                    if copy_size >= GOOD_ENOUGH {
+                        break;
+                    }
                 }
             }
+        }
+
+        if copy_size < MIN_COPY {
+            at += 1;
+            copy_size = 0;
+            if at - pending_from == MAX_INSERT {
+                push_inserts(out, &target[pending_from..at]);
+                pending_from = at;
+            }
+            if too_large(out) || out.len() + (at - pending_from) > max_size.unwrap_or(usize::MAX) {
+                return false;
+            }
+            continue;
+        }
+
+        // Reach back into what was going to be inserted, as far as source and target agree.
+        while copy_from > 0 && at > pending_from && source[copy_from - 1] == target[at - 1] {
+            copy_from -= 1;
+            at -= 1;
+            copy_size += 1;
+        }
+        push_inserts(out, &target[pending_from..at]);
+        let now = copy_size.min(MAX_COPY);
+        push_copy(out, copy_from, now);
+        at += now;
+        copy_from += now;
+        copy_size -= now;
+        pending_from = at;
+        if copy_from > u32::MAX as usize {
+            copy_size = 0;
+        }
+        if too_large(out) {
+            return false;
+        }
+        if copy_size < GOOD_ENOUGH {
+            if at >= target.len() {
+                break;
+            }
+            hash = hash_block(&target[at - BLOCK..at]);
         }
     }
     push_inserts(out, &target[pending_from..]);
@@ -347,5 +413,120 @@ mod tests {
             !create(&source, &index, &target, Some(10), &mut out),
             "a delta that can't be small enough is given up on"
         );
+    }
+
+    #[test]
+    fn of_equal_candidates_the_one_with_the_lowest_offset_is_copied_as_it_takes_the_fewest_bytes_to_name() {
+        let mut numbers = Numbers(3);
+        let copied = text(&mut numbers, 20);
+        let filler = text(&mut numbers, 400);
+        // The text is in the source twice, with enough in between to be a far offset, which needs more bytes to write.
+        let source = [&copied[..], &filler, b"=== a separator ===", &copied].concat();
+        let index = Index::new(&source);
+        let mut out = Vec::new();
+        assert!(create(&source, &index, &copied, None, &mut out));
+        assert_eq!(apply(&source, &out), copied, "the delta reproduces the target");
+        let size = copied.len();
+        assert!(
+            size > 255 && size < 0x10000 && size & 0xff != 0,
+            "the size takes two bytes to name"
+        );
+        let copy = [0x80 | 0x10 | 0x20, (size & 0xff) as u8, (size >> 8) as u8];
+        assert!(
+            out.ends_with(&copy),
+            "one copy from offset zero, which has no offset bytes at all, and no insert: {out:?}"
+        );
+    }
+
+    #[test]
+    fn identical_blocks_in_a_row_leave_the_first_and_a_crowded_hash_is_thinned_out_evenly() {
+        let run = [b"-".as_slice(), &[b'a'; 16 * 10], b"-end of the run"].concat();
+        let index = Index::new(&run);
+        let hash = super::hash_block(&[b'a'; super::BLOCK]);
+        assert_eq!(
+            index
+                .candidates(hash)
+                .iter()
+                .filter(|entry| entry.hash == hash)
+                .map(|entry| entry.last)
+                .collect::<Vec<_>>(),
+            [16],
+            "of ten blocks in a row only the one with the lowest offset is kept"
+        );
+
+        // A block that is in the source 100 times with something different between each, where blocks start at 1 + 16 * n.
+        let mut numbers = Numbers(5);
+        let block = *b"same block here!";
+        let mut source = vec![b'^'];
+        for _ in 0..100 {
+            source.extend_from_slice(&block);
+            source.extend_from_slice(&(numbers.next(1 << 30) as u128).to_le_bytes());
+        }
+        let hash = super::hash_block(&block);
+        let index = Index::new(&source);
+        let kept: Vec<_> = index
+            .candidates(hash)
+            .iter()
+            .filter(|entry| entry.hash == hash)
+            .map(|entry| entry.last)
+            .collect();
+        assert_eq!(
+            kept.len(),
+            super::BUCKET_LIMIT,
+            "exactly the limit is left of a crowded hash"
+        );
+        assert_eq!(kept[0], 16, "the lowest offset is kept");
+        assert!(
+            kept.windows(2).all(|pair| (32..=64).contains(&(pair[1] - pair[0]))),
+            "100 are thinned to 64 by dropping every third or so, not by cutting off one end: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn a_copy_of_more_than_the_largest_size_is_split_where_it_must() {
+        let mut numbers = Numbers(9);
+        let source = text(&mut numbers, 20_000);
+        assert!(source.len() > 3 * super::MAX_COPY, "the source takes several copies");
+        let mut target = source.clone();
+        target.splice(5..5, *b"x");
+        let index = Index::new(&source);
+        let mut out = Vec::new();
+        assert!(create(&source, &index, &target, None, &mut out));
+        assert_eq!(apply(&source, &out), target, "the delta reproduces the target");
+        assert!(
+            out.len() < 40,
+            "an insert and a few copies, nothing more: {} bytes",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn data_whose_bytes_share_their_low_bits_is_spread_over_the_buckets_all_the_same() {
+        let mut numbers = Numbers(13);
+        // Four values with the same low six bits, so that without the high bits of the hash few buckets would be in use.
+        let source: Vec<u8> = (0..64 * 1024).map(|_| (numbers.next(4) * 64) as u8).collect();
+        let mut target = source.clone();
+        let edits = 40;
+        for edit in 0..edits {
+            let at = (edit + 1) * (target.len() / (edits + 1));
+            target[at] ^= 0x40;
+        }
+        let index = Index::new(&source);
+        let mut out = Vec::new();
+        assert!(create(&source, &index, &target, None, &mut out));
+        assert_eq!(apply(&source, &out), target, "the delta reproduces the target");
+        assert!(
+            out.len() < edits * 12,
+            "{edits} single-byte edits cost about a copy and an insert each (289 bytes), not far more as when most blocks are lost (793): {} bytes",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn an_index_of_another_source_gives_up_instead_of_naming_places_that_are_not_there() {
+        let (long, short) = (vec![7u8; 1000], vec![7u8; 100]);
+        let index = Index::new(&long);
+        let mut out = Vec::new();
+        assert!(!create(&short, &index, &short, None, &mut out));
     }
 }
