@@ -128,3 +128,88 @@ fn a_client_that_goes_away_in_the_middle_of_a_pack_leaves_nothing_behind() -> Te
     );
     Ok(())
 }
+
+/// Maintenance that runs after a push in this process must not outlive the transport while it holds `objects/maintenance.lock`:
+/// a program that ends then leaves the lock behind, which has no age limit, and nobody can maintain the repository any more.
+/// A push client always reads until the server ends, so this client stops reading after the report, as one that is interrupted does.
+#[cfg(unix)]
+#[test]
+fn dropping_the_transport_while_maintenance_runs_ends_it_and_releases_its_lock() -> TestResult {
+    use std::{
+        io::{Read, Write},
+        os::unix::fs::PermissionsExt,
+        process::Stdio,
+    };
+
+    use gix::protocol::transport::client::{MessageKind, WriteMode};
+
+    let dir = gix_testtools::scripted_fixture_writable_with_args(
+        "make_push_repos.sh",
+        ["sha1"],
+        gix_testtools::Creation::CopyFromReadOnly,
+    )?;
+    let (remote, source) = (dir.path().join("remote.git"), dir.path().join("source"));
+    // One pack, so that the pack that the push keeps makes it two and maintenance with the `gc` strategy has something to do.
+    gix_testtools::git(&remote, "repack -a -d -q")?;
+    for (key, value) in [
+        ("receive.unpackLimit", "1"),
+        ("gc.autoPackLimit", "1"),
+        ("maintenance.strategy", "gc"),
+    ] {
+        gix_testtools::git(&remote, &format!("config {key} {value}"))?;
+    }
+    // The hook that maintenance runs first takes longer than the 700 milliseconds that dropping the transport waits for the server,
+    // and ends before it has waited a second time, after it interrupted the server.
+    let hook = remote.join("hooks/pre-auto-gc");
+    std::fs::create_dir_all(hook.parent().expect("a parent"))?;
+    std::fs::write(&hook, "#!/bin/sh\nsleep 1\n")?;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+
+    let new_id = gix::open_opts(&source, gix::open::Options::isolated())?
+        .find_reference("refs/heads/side")?
+        .id()
+        .detach();
+    let mut pack_objects = gix_testtools::git_command(&source)
+        .args(["pack-objects", "--stdout", "--revs", "-q"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    pack_objects
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(b"refs/heads/side\n")?;
+    let pack = pack_objects.wait_with_output()?.stdout;
+
+    let mut transport = NativeLocal::new(&remote, Protocol::V2, false).with_drop_grace(Duration::from_millis(700));
+    drop(transport.handshake(Service::ReceivePack, &[])?);
+    let null_id = gix::hash::Kind::Sha1.null();
+    let mut report = Vec::new();
+    {
+        let (mut writer, mut reader) = transport
+            .request(WriteMode::Binary, MessageKind::Flush, false)?
+            .into_parts();
+        let command = format!("{null_id} {new_id} refs/heads/side\0 report-status\n");
+        writer.write_all(format!("{:04x}{command}0000", command.len() + 4).as_bytes())?;
+        writer.write_all(&pack)?;
+        writer.flush()?;
+        // The advertisement that the handshake didn't read comes first, and then what the server says about the push, which it says
+        // before it starts maintenance.
+        reader.read_to_end(&mut Vec::new())?;
+        reader.reset(Protocol::V1);
+        reader.read_to_end(&mut report)?;
+    }
+    assert!(
+        String::from_utf8_lossy(&report).contains("ok refs/heads/side"),
+        "the push was accepted: {:?}",
+        String::from_utf8_lossy(&report)
+    );
+    let started = Instant::now();
+    drop(transport);
+    assert!(
+        !remote.join("objects/maintenance.lock").exists(),
+        "the transport ended the maintenance and waited for it to release its lock, after {:?}",
+        started.elapsed()
+    );
+    Ok(())
+}

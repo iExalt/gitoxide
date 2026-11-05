@@ -719,3 +719,19 @@ fn a_repository_with_precious_objects_is_left_alone_without_an_error() -> TestRe
     );
     Ok(())
 }
+
+#[test]
+fn maintenance_that_is_interrupted_stops_and_releases_its_locks() -> TestResult {
+    let (_dir, repo_dir) = fixture(Kind::Sha1, "files")?;
+    let interrupted = AtomicBool::new(true);
+    let outcome = open(&repo_dir)?.run_maintenance(run_options(false, &[Task::Gc]), &interrupted)?;
+    assert!(
+        matches!(outcome.tasks.as_slice(), [(Task::Gc, TaskOutcome::Failed(_))]),
+        "the task is stopped and says so: {outcome:?}"
+    );
+    assert!(
+        !repo_dir.join(".git/objects/maintenance.lock").exists() && !repo_dir.join(".git/gc.pid").exists(),
+        "what it held is released, which is what the transport that interrupts it relies on, as nobody removes a lock that stays"
+    );
+    Ok(())
+}
