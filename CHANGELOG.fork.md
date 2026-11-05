@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.3.0...gitoxide-fork-v0.4.0) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **gix:** check the objects of a fetch or clone when `fetch.fsckObjects` or `transfer.fsckObjects` asks for it
+* **gix-protocol:** tell `fetch()` what consumes the pack which commits the `shallow` file will have
+
+### Features
+
+* **gitoxide:** serve local fetches and clones in process in the `gix` binary ([9456acd](https://github.com/iExalt/gitoxide/commit/9456acde073e8d0a2dfc4fad17db150da4593f64))
+* **gix-fsck:** add Git's message ids, their severities and skip lists as `Options` ([3698d1c](https://github.com/iExalt/gitoxide/commit/3698d1cc7976cdc7d5e9d85f8c6a3aac53e6f4ca))
+* **gix-fsck:** check commits, tags and trees like `index-pack --strict` and `unpack-objects --strict` do ([4ff0e7a](https://github.com/iExalt/gitoxide/commit/4ff0e7a01f2da789e576128c99f532106199d67b))
+* **gix-fsck:** check the content of `.gitmodules` files like Git does ([0a00644](https://github.com/iExalt/gitoxide/commit/0a00644227f52c42e37f5a079f9df60b2f52c8eb))
+* **gix-fsck:** look at received objects without requiring what they link to ([bc02102](https://github.com/iExalt/gitoxide/commit/bc0210212148ba0174599df3f34a32caf4a4f4e1))
+* **gix-fsck:** say what `unpack-objects --strict` and `index-pack --strict` print about a received pack ([d3011c9](https://github.com/iExalt/gitoxide/commit/d3011c9b0df5c48fd73c273758389e9a9a280eb1))
+* **gix-odb:** let an inspector look at a received pack before it is accepted ([90d9369](https://github.com/iExalt/gitoxide/commit/90d9369d62638d4f8f65d8916b7196de1b7a3be4))
+* **gix-odb:** look at a pack that was written but isn't accepted yet with the `inspect` module ([88b3a47](https://github.com/iExalt/gitoxide/commit/88b3a47c3ec5e209217b82245c86fda4b83c014a))
+* **gix-validate:** detect the files Git treats specially in every spelling a file system gives them ([e67dbeb](https://github.com/iExalt/gitoxide/commit/e67dbeb59d5e18f0fee0a0084a7cfdc15c7821bf))
+* **gix:** check the objects of a fetch or clone when `fetch.fsckObjects` or `transfer.fsckObjects` asks for it ([ec898b2](https://github.com/iExalt/gitoxide/commit/ec898b2af20708d3ccceea76be7827cd6a009c29))
+* **gix:** check the objects of a push when `receive.fsckObjects` or `transfer.fsckObjects` asks for it ([553fbce](https://github.com/iExalt/gitoxide/commit/553fbce4734b48fbc4f96b99a6badaf02e40c5a2))
+
+
+### Bug fixes
+
+* **gix-validate:** let malformed UTF-8 after a special file name end it for HFS+ comparisons ([e4fc78f](https://github.com/iExalt/gitoxide/commit/e4fc78fcc8eb8d59390e5b68cb3355bf9b74fab8))
+
+
+### Changes
+
+* **gix-protocol:** tell `fetch()` what consumes the pack which commits the `shallow` file will have ([91d3b3e](https://github.com/iExalt/gitoxide/commit/91d3b3e7a33784658011b1fb69ddf1e0f148fb92))
+
+
+### Fork maintenance
+
+* **gix-fsck:** describe in the comments how `.gitmodules` is read ([0928ac0](https://github.com/iExalt/gitoxide/commit/0928ac0d919be2d8caddd87dea8715d57b674985))
+
 ## [0.3.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.2.0...gitoxide-fork-v0.3.0) (2026-11-05)
 
 
