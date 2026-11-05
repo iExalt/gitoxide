@@ -17,6 +17,8 @@ mod excludes;
 #[cfg(feature = "attributes")]
 mod filter;
 mod freshen;
+#[cfg(all(feature = "maintenance", unix))]
+mod gc;
 #[cfg(feature = "hook")]
 mod hook;
 mod location;
