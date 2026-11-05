@@ -36,6 +36,7 @@ default = [
     "auto-chain-error",
     "sha1",
     "reftable",
+    "zlib-sirocco",
 ]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
@@ -326,8 +327,8 @@ pack-cache-lru-dynamic = ["gix-pack/pack-cache-lru-dynamic"]
 ## Enable all features required for performance.
 max-performance = ["max-control"]
 
-## Decompress and compress objects with [`sirocco`](https://docs.rs/sirocco), which is faster than the
-## default `zlib-rs` at both.
+## Decompress and compress objects with [`sirocco`](https://docs.rs/sirocco), which is faster than `zlib-rs` when decompressing and when
+## compressing at the default level 6. It is part of the default features; without them, `zlib-rs` is used, which is also pure Rust.
 zlib-sirocco = ["gix-zlib/sirocco"]
 
 #! #### Other

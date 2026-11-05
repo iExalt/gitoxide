@@ -309,13 +309,13 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] deltified objects
     * **decode**
         * _decode a pack from `Read` input_
-            * [x] Add support for zlib-ng for 20% faster _decompression_ performance
+            * [x] `sirocco`, which is the default, decompresses 1.2 to 1.5 times as fast as `zlib-rs`, which is used when the `zlib-sirocco` feature is off
             * [x] `Read` to `Iterator` of entries
                 * _read as is, verify hash, and restore partial packs_
         * [x] create index from pack alone (_much faster than git_)
             * [x] resolve 'thin' packs
     * **encode**
-        * [x] Add support for zlib-ng for 2.5x _compression_ performance
+        * [x] `sirocco`, which is the default, compresses 1.4 to 1.6 times as fast as `zlib-rs` at level 6, which is used when the `zlib-sirocco` feature is off
         * [x] objects to entries iterator
             * [x] input objects as-is
             * [x] pack only changed objects as derived from input
