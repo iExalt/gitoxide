@@ -13,6 +13,8 @@ pub mod push;
 #[cfg(feature = "blocking-server")]
 mod receive;
 pub mod remote_progress;
+#[cfg(feature = "blocking-server")]
+mod upload;
 
 #[gix_protocol::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]

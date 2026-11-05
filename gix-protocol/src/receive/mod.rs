@@ -43,6 +43,6 @@ pub use report::Report;
 pub mod side_band;
 
 #[cfg(feature = "blocking-server")]
-mod function;
+pub(crate) mod function;
 #[cfg(feature = "blocking-server")]
 pub use function::{read_request, write_advertisement, write_report};
