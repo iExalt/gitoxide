@@ -255,9 +255,30 @@ where
             }
 
             for lodb in snapshot.loose_dbs.iter() {
-                // TODO: remove this double-lookup once the borrow checker allows it.
                 if lodb.contains(id) {
-                    return lodb.try_find(id, buffer).map(|obj| obj.map(|obj| (obj, None)));
+                    // Maintenance removes loose objects that a pack has, so one that was there a moment ago may be gone, which isn't a
+                    // miss: it's in a pack that this handle doesn't know yet, and the refresh below finds it. The buffer is moved
+                    // out and back so that the object, borrowed from it, can be returned from this branch only.
+                    let mut loose_buffer = std::mem::take(buffer);
+                    match lodb.try_find(id, &mut loose_buffer) {
+                        Ok(Some(obj)) => {
+                            let (kind, object_hash) = (obj.kind, obj.object_hash);
+                            *buffer = loose_buffer;
+                            return Ok(Some((
+                                gix_object::Data {
+                                    kind,
+                                    object_hash,
+                                    data: buffer,
+                                },
+                                None,
+                            )));
+                        }
+                        Ok(None) => *buffer = loose_buffer,
+                        Err(err) => {
+                            *buffer = loose_buffer;
+                            return Err(err);
+                        }
+                    }
                 }
             }
 
