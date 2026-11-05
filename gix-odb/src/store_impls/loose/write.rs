@@ -153,22 +153,33 @@ impl Store {
         let object_dir = object_path
             .parent()
             .expect("each object path has a 1 hex-bytes directory");
-        if let Err(err) = fs::create_dir(object_dir) {
-            match err.kind() {
-                io::ErrorKind::AlreadyExists => {}
-                _ => {
-                    return Err(
-                        err.and_raise(Message::new("Could not create object directory").with("path", object_dir))
-                    );
-                }
-            }
-        }
-        let file = file.into_inner();
+        let mut file = file.into_inner();
         // Like Git, flush the data before it can be found by its name, or never lose the object after it is.
         self.fsync
             .flush(file.as_file(), gix_fs::fsync::Components::LOOSE_OBJECT)
             .or_raise(|| Message::new("Could not flush loose object").with("path", object_path.as_path()))?;
-        let res = file.persist(&object_path);
+        // Maintenance like `git prune` removes directories that are empty, which includes the one that was just created.
+        // Like Git, create it again and retry, a few times as a prune may do it again, instead of failing the write.
+        let mut retries_left = 5;
+        let res = loop {
+            if let Err(err) = fs::create_dir(object_dir) {
+                match err.kind() {
+                    io::ErrorKind::AlreadyExists => {}
+                    _ => {
+                        return Err(
+                            err.and_raise(Message::new("Could not create object directory").with("path", object_dir))
+                        );
+                    }
+                }
+            }
+            match file.persist(&object_path) {
+                Err(err) if err.error.kind() == io::ErrorKind::NotFound && retries_left > 0 => {
+                    retries_left -= 1;
+                    file = err.file;
+                }
+                res => break res,
+            }
+        };
         // On windows, we assume that such errors are due to its special filesystem semantics,
         // on any other platform that would be a legitimate error though.
         #[cfg(windows)]
