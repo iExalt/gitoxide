@@ -31,3 +31,5 @@ pub mod submodule;
 
 ///
 pub mod path;
+
+pub mod dotfile;
