@@ -1,6 +1,7 @@
 //! A push is received by `git receive-pack` and by the native receiver, and both have to say the same and leave the same behind.
 //! The remotes are made by `make_receive_remotes.sh`, which says what they contain.
 use std::{
+    fmt::Write as _,
     io::Write,
     path::{Path, PathBuf},
     process::Stdio,
@@ -120,6 +121,7 @@ impl Hook {
   echo "== {label} $*"
   echo "cwd=$(pwd -P)"
   echo "GIT_DIR=${{GIT_DIR-unset}}"
+  echo "GIT_NAMESPACE=${{GIT_NAMESPACE-unset}}"
   echo "GIT_PUSH_OPTION_COUNT=${{GIT_PUSH_OPTION_COUNT-unset}}"
   i=0
   while [ "$i" -lt "${{GIT_PUSH_OPTION_COUNT:-0}}" ]; do eval "echo GIT_PUSH_OPTION_$i=\$GIT_PUSH_OPTION_$i"; i=$((i+1)); done
@@ -195,6 +197,9 @@ pub(super) struct Push {
     /// Don't install the recording `reference-transaction` hook, so that references are updated without an observer, as in
     /// a repository that has no such hook.
     pub(super) no_recorder: bool,
+    /// Receive into this namespace, in which a copy of all references of the remote is made first. Git is told by
+    /// `GIT_NAMESPACE`, and the receiver by setting it, so the remote remembers it in `test-namespace`.
+    pub(super) namespace: Option<&'static str>,
     pub(super) prepare: Option<fn(remote: &Path, client: &Path) -> TestResult>,
 }
 
@@ -328,6 +333,9 @@ impl World {
         for hook in &push.hooks {
             hook.install(&dest)?;
         }
+        if let Some(namespace) = push.namespace {
+            copy_into_namespace(&dest, namespace)?;
+        }
         #[cfg(unix)]
         if !push.no_recorder && !push.hooks.iter().any(|hook| hook.name == "reference-transaction") {
             Hook::recorder().install(&dest)?;
@@ -337,6 +345,86 @@ impl World {
         }
         Ok(dest)
     }
+}
+
+/// The lines of a report, which are packets.
+fn report_lines(report: &[u8]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut rest = report;
+    while rest.len() >= 4 {
+        let len = usize::from_str_radix(std::str::from_utf8(&rest[..4]).expect("hex"), 16).expect("hex");
+        lines.push(String::from_utf8_lossy(&rest[4..len.max(4)]).into_owned());
+        rest = &rest[len.max(4)..];
+    }
+    lines
+}
+
+/// Git matches what the reference store rejected to commands by the name it has in the namespace, which isn't the name the
+/// command has, so it tells the client that all went well when an update was rejected, which the receiver doesn't.
+/// Where that is the only difference, the receiver tells what Git tells, so that everything else is compared.
+fn tell_what_git_tells_in_a_namespace(git: &[String], mut fork: Vec<String>) -> Vec<String> {
+    const REJECTIONS: [&str; 7] = [
+        "refname conflict",
+        "reference already exists",
+        "reference does not exist",
+        "incorrect old value provided",
+        "invalid new value provided",
+        "expected symref but found regular ref",
+        "reference conflict due to case-insensitive filesystem",
+    ];
+    for (fork, git) in fork.iter_mut().zip(git) {
+        let Some(rejected) = fork.strip_prefix("ng ") else {
+            continue;
+        };
+        let Some((name, reason)) = rejected.trim_end().split_once(' ') else {
+            continue;
+        };
+        if REJECTIONS.contains(&reason) && git.trim_end() == format!("ok {name}") {
+            fork.clone_from(git);
+        }
+    }
+    fork
+}
+
+/// Copy all references into `namespace`, with symbolic references pointing to the copies, and remember the namespace.
+fn copy_into_namespace(remote: &Path, namespace: &str) -> TestResult {
+    let listing = gix_testtools::git(remote, "for-each-ref --format='%(refname) %(objectname) %(symref)'")?;
+    let prefix = format!("refs/namespaces/{}/", namespace.replace('/', "/refs/namespaces/"));
+    let (mut creations, mut symbolic) = (String::new(), String::new());
+    for line in listing.lines() {
+        let mut fields = line.split(' ');
+        let (name, id, symref) = (
+            fields.next().unwrap_or_default(),
+            fields.next().unwrap_or_default(),
+            fields.next(),
+        );
+        // The references of other namespaces are what the namespace has to leave alone.
+        if name.starts_with("refs/namespaces/") {
+            continue;
+        }
+        match symref.filter(|symref| !symref.is_empty()) {
+            Some(target) => writeln!(symbolic, "symref-create {prefix}{name} {prefix}{target}")?,
+            None => writeln!(creations, "create {prefix}{name} {id}")?,
+        }
+    }
+    // One process makes all of them, which is much faster than one for each.
+    let mut child = gix_testtools::git_command(remote)
+        .args(["update-ref", "--stdin"])
+        .stdin(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("piped")
+        .write_all(format!("start\n{creations}{symbolic}prepare\ncommit\n").as_bytes())?;
+    assert!(child.wait()?.success(), "the references are copied");
+    std::fs::write(remote.join("test-namespace"), namespace)?;
+    Ok(())
+}
+
+/// The namespace to receive in, which `copy_into_namespace()` remembered.
+pub(super) fn namespace_of(remote: &Path) -> Option<String> {
+    std::fs::read_to_string(remote.join("test-namespace")).ok()
 }
 
 /// What a receiver did, as far as can be compared.
@@ -450,7 +538,11 @@ fn state(repo: &Path) -> TestResult<(Vec<String>, Vec<String>, Vec<String>)> {
 
 /// Run `git receive-pack` on `remote`.
 pub(super) fn git_receive(remote: &Path, request: &[u8], side_band: bool) -> TestResult<Result_> {
-    let mut child = gix_testtools::git_command(remote)
+    let mut command = gix_testtools::git_command(remote);
+    if let Some(namespace) = namespace_of(remote) {
+        command.env("GIT_NAMESPACE", namespace);
+    }
+    let mut child = command
         // Messages are compared, so they must not be translated.
         .env("LC_ALL", "C")
         .env("LANG", "C")
@@ -492,7 +584,7 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool, died: bool) -> TestResu
     // Hooks that run at the same time have recordings of their own, which are put together in the order of their names.
     let mut recordings: Vec<_> = std::fs::read_dir(remote)?
         .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-        .filter(|name| name.starts_with("hook") && name.ends_with(".log"))
+        .filter(|name| name.starts_with("hook") && name.strip_suffix(".log").is_some())
         .collect();
     recordings.sort();
     let hooks: String = recordings.iter().map(|name| recording(name)).collect();
@@ -522,10 +614,13 @@ pub(super) fn fork_receive_as(
     side_band: bool,
     overrides: &[&str],
 ) -> TestResult<Result_> {
-    let repo = gix::open_opts(
+    let mut repo = gix::open_opts(
         remote,
         gix::open::Options::isolated().config_overrides(overrides.iter().copied()),
     )?;
+    if let Some(namespace) = namespace_of(remote) {
+        repo.set_namespace(namespace.as_str())?;
+    }
     let receiver = repo.receive()?;
     let mut input = request;
     let mut output = Vec::new();
@@ -555,6 +650,14 @@ pub(super) fn assert_same_on(world: &World, label: &str, push: &Push, formats: &
             ..push.clone()
         };
         compare_on(world, &format!("{label}-bare"), &bare, formats)?;
+        // The names of references are those of the namespace, while the references of the others are only to be left alone.
+        let namespaced = Push {
+            namespace: Some("ns1"),
+            ..push.clone()
+        };
+        // How names are prefixed doesn't depend on how references are stored, so one format is enough.
+        let formats = formats.get(..1).unwrap_or(formats);
+        compare_on(world, &format!("{label}-namespaced"), &namespaced, formats)?;
     }
     Ok(())
 }
@@ -574,11 +677,13 @@ pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&st
             &request,
             !push.no_side_band,
         )?;
-        assert_eq!(
-            String::from_utf8_lossy(&fork.report),
-            String::from_utf8_lossy(&git.report),
-            "{format}/{label}: the client is told the same"
-        );
+        let (git_report, fork_report) = (report_lines(&git.report), report_lines(&fork.report));
+        let fork_report = if push.namespace.is_some() {
+            tell_what_git_tells_in_a_namespace(&git_report, fork_report)
+        } else {
+            fork_report
+        };
+        assert_eq!(fork_report, git_report, "{format}/{label}: the client is told the same");
         assert_eq!(
             fork.messages, git.messages,
             "{format}/{label}: people are told the same"
@@ -1316,7 +1421,7 @@ fn a_reference_to_a_missing_object_fails_pushes_of_objects_but_not_deletions() -
 }
 
 /// What is told in the advertisement, without the agent that tells it and the lengths of lines that follow from it.
-fn without_agent(advertisement: &[u8]) -> Vec<String> {
+pub(super) fn without_agent(advertisement: &[u8]) -> Vec<String> {
     let mut lines = Vec::new();
     let mut rest = advertisement;
     while rest.len() >= 4 {

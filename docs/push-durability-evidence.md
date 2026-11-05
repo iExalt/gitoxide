@@ -178,6 +178,21 @@ same. These differences remain, for the network phase to decide about:
 * Hooks that are configured to run at the same time say what they say in the order in which they finish, in Git and in the
   receiver, so the tests of that case use hooks that say nothing. Everything else, including the input each hook gets and
   that one failing hook declines the push, is compared.
+* The receiver works in the namespace that the repository it was created from has, which is what `GIT_NAMESPACE` is for Git,
+  and which nothing in `gix` reads from the environment, so callers set it with `Repository::set_namespace()`. Clients, hooks
+  and reports see names without the namespace, and `GIT_NAMESPACE` is exported to hooks, which also see the names with it in
+  the `reference-transaction` hook. Everything outside the namespace is advertised as `.have`, in the order of the
+  references, with `^` patterns of `receive.hideRefs` matching names with the namespace and all other patterns those
+  without, which hides nothing outside of it. The rules of Git that look at the name without the namespace do so in the
+  receiver as well: worktrees, `denyDeletes` and the existence of a corrupt reference. The current branch is that of the
+  global `HEAD`, which is only affected by a namespace that contains it. Differences:
+  * Git crashes with a segmentation fault when it is to update a symbolic reference of the namespace that leads out of it, by
+    looking up a name that isn't there. The receiver refuses as for a broken symbolic reference.
+  * Git compares what the reference store rejected with the commands by the name with the namespace, which no command has,
+    so it reports `ok` for an update that was rejected as stale or for deleting what isn't there, in a push that isn't atomic.
+    The reference doesn't change in either, and the message for people is the same. The receiver reports `ng` with the reason.
+    Because Git thinks that these commands went well, it also runs `post-receive` and `post-update` for them, which the
+    receiver doesn't. The tests compare everything else by taking Git's `ok` for these, in rows that have no hooks.
 * The post-receive and post-update hooks are skipped for reference names that can't be represented on Windows, as in Git.
 * The `reference-transaction` hook runs in the Git directory with `GIT_DIR` set, like the other receive-side hooks, for the
   one transaction of an atomic push or the two of a push without atomicity, where deletions come first. A refusal in the
@@ -189,7 +204,7 @@ same. These differences remain, for the network phase to decide about:
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
-unsupported: hooks, `updateInstead`, signed pushes, `proc-receive`, namespaces, shallow and partial repositories,
+unsupported: a `push-to-checkout` hook, `updateInstead`, signed pushes, `proc-receive`, shallow and partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.

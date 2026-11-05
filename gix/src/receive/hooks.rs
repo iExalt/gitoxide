@@ -20,12 +20,15 @@ pub(super) struct Runner<'r, 'h> {
     /// Called every so often while a hook runs, if there is somebody who wants to know that it's still running.
     heartbeat: Option<(Duration, RefCell<Heartbeat<'h>>)>,
     push_options: &'r [BString],
+    /// The name of the namespace that hooks are told about with `GIT_NAMESPACE`, as the environment of Git passes it on.
+    namespace: Option<String>,
 }
 
 impl<'r, 'h> Runner<'r, 'h> {
     pub fn new(
         repo: &'r Repository,
         push_options: &'r [BString],
+        namespace: Option<String>,
         heartbeat: Option<(Duration, Heartbeat<'h>)>,
     ) -> Result<Self> {
         let settings = gix_hook::Settings::from_config(&repo.config.resolved, &mut repo.filter_config_section())
@@ -39,6 +42,7 @@ impl<'r, 'h> Runner<'r, 'h> {
             dir,
             heartbeat: heartbeat.map(|(interval, beat)| (interval, RefCell::new(beat))),
             push_options,
+            namespace,
         })
     }
 
@@ -156,6 +160,9 @@ impl<'r, 'h> Runner<'r, 'h> {
             .stderr(Stderr::Capture);
         for (key, value) in env {
             prepare = prepare.env(key, value);
+        }
+        if let Some(namespace) = &self.namespace {
+            prepare = prepare.env("GIT_NAMESPACE", namespace);
         }
         let outcome = std::thread::scope(|scope| {
             let (sender, receiver) = std::sync::mpsc::channel();
