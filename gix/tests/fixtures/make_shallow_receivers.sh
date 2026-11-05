@@ -10,6 +10,11 @@ set -eu -o pipefail
 # * `orphan`: a root commit, which is not related to anything else.
 # * `side`: `s1`, on top of `c2`, so that it forks from `main` below `c4`.
 # * `below-merge`: a merge of `side` into `main`, which therefore has history that is below where the receivers are shallow.
+# * `on-c3`: `t1`, on top of `c3`, so that it is built on what `c4` has as a parent.
+# * `moved`: `d1` and `d2` on top of `c4`.
+#
+# `full.git` is bare with the whole history of `main`, `empty.git` is bare and has nothing, and `moved.git` is like `full.git` but
+# has `main` at `d2` of `moved`, so that there is history on top of `c4`.
 #
 # `remote.git` and `remote-graph.git` are bare with `main` and `extra` at `c4`. The first is shallow there as made by `git clone --depth 1`, so that `c4` has the
 # `shallow` file's entry and nothing of `c1` to `c3`. The other is made differently: it was a full clone with a
@@ -36,8 +41,17 @@ for format in files reftable; do
       git checkout -q -b side main~2 && echo side >side && git add side && commit s1 1700000107
       git checkout -q -b below-merge main
       GIT_AUTHOR_DATE="1700000108 +0000" GIT_COMMITTER_DATE="1700000108 +0000" git merge -q --no-edit --no-ff side
+      git checkout -q -b on-c3 main~1 && echo t1 >t1 && git add t1 && commit t1 1700000109
+      git checkout -q -b moved main
+      for n in 1 2; do echo "d$n" >d && git add d && commit "d$n" "170000011$n"; done
       git checkout -q main
     )
+
+    git clone -q --bare --single-branch --branch main --ref-format="$format" "file://$PWD/client" full.git 2>/dev/null
+    git init -q --bare --ref-format="$format" -b main empty.git
+    git clone -q --bare --single-branch --branch main --ref-format="$format" "file://$PWD/client" moved.git 2>/dev/null
+    git -C moved.git fetch -q "file://$PWD/client" moved
+    git -C moved.git update-ref refs/heads/main FETCH_HEAD
 
     git clone -q --bare --depth 1 --single-branch --branch main --ref-format="$format" "file://$PWD/client" remote.git 2>/dev/null
     git -C remote.git branch extra main
