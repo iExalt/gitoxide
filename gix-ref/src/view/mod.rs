@@ -373,6 +373,19 @@ impl<'a> StoreRef<'a> {
         }
     }
 
+    /// Return `true` if packing references is due, so that [`pack_refs()`](Self::pack_refs()) with
+    /// [`auto`](crate::pack_refs::Options::auto) would do something: there are enough loose references, or for `reftable`, the
+    /// sizes of the tables break the geometric sequence. It is what Git asks before it runs `git pack-refs --auto`.
+    ///
+    /// `objects` is used to see which references point to objects that exist.
+    pub fn pack_refs_required(self, objects: &dyn gix_object::Find) -> Result<bool> {
+        match self.backend {
+            Backend::File(store) => store.pack_refs_required_inner(objects),
+            #[cfg(feature = "reftable")]
+            Backend::Reftable(store) => store.pack_refs_required_inner(),
+        }
+    }
+
     /// Start a transaction to edit references.
     ///
     /// The transaction inherits the namespace of the store.

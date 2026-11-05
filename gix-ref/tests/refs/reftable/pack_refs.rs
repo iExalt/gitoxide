@@ -81,6 +81,10 @@ fn compacting_the_stack_of_a_worktree_leaves_what_git_sees_unchanged() -> TestRe
         outcome.merged_tables, 0,
         "a single table has nothing to merge, even automatically"
     );
+    assert!(
+        !StoreRef::from(&store).pack_refs_required(&gix_object::find::Never)?,
+        "and it isn't due any more"
+    );
     Ok(())
 }
 
@@ -106,5 +110,38 @@ fn a_linked_worktree_compacts_only_its_own_stack() -> TestResult {
         "its own stack was merged, from {own_before} tables"
     );
     assert_eq!(what_git_sees(&repo)?, before);
+    Ok(())
+}
+
+#[test]
+fn merging_is_due_if_automatic_merging_would_merge_something() -> TestResult {
+    let dir = scripted_fixture_writable_with_args("make_reftable_repo.sh", None::<String>, Creation::Execute)?;
+    let git_dir = dir.path().join("repo/.git");
+    let store = Store::at(git_dir.clone(), fixture_hash_kind());
+    let required = StoreRef::from(&store).pack_refs_required(&gix_object::find::Never)?;
+    let mut options = Options::default();
+    options.auto = true;
+    let outcome = StoreRef::from(&store).pack_refs(&gix_object::find::Never, options, None)?;
+    assert_eq!(
+        required,
+        outcome.merged_tables > 0,
+        "it is due exactly if the automatic merge does something: {outcome:?}"
+    );
+
+    // Tables that break the sequence: the same as many small tables on top of what is there.
+    let linked = Store::for_linked_worktree(git_dir.join("worktrees/w1"), git_dir.clone(), fixture_hash_kind());
+    let before = tables(&git_dir.join("worktrees/w1"))?;
+    let required = StoreRef::from(&linked).pack_refs_required(&gix_object::find::Never)?;
+    let outcome = StoreRef::from(&linked).pack_refs(&gix_object::find::Never, options, None)?;
+    assert_eq!(
+        required,
+        outcome.merged_tables > 0,
+        "also for the stack of a worktree, which has {before} tables: {outcome:?}"
+    );
+    StoreRef::from(&linked).pack_refs(&gix_object::find::Never, Options::default(), None)?;
+    assert!(
+        !StoreRef::from(&linked).pack_refs_required(&gix_object::find::Never)?,
+        "a single table is never due"
+    );
     Ok(())
 }

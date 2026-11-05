@@ -130,6 +130,11 @@ mod auto {
             );
 
             let (native_repo, store, odb) = repo_with_loose_branches(count)?;
+            assert_eq!(
+                gix_ref::StoreRef::from(&store).pack_refs_required(&odb)?,
+                packs,
+                "{count} references: it is due exactly when Git packs them with `--auto`"
+            );
             let outcome =
                 gix_ref::StoreRef::from(&store).pack_refs(&odb, super::options(|options| options.auto = true), None)?;
             assert_eq!(
