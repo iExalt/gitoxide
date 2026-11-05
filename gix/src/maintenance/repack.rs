@@ -530,6 +530,61 @@ fn finish_interrupted_removals(pack_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How many packs have no `.keep` file, which is what `gc.autoPackLimit` counts.
+pub(super) fn count_unkept_packs(pack_dir: &Path) -> Result<usize> {
+    Ok(local_packs(pack_dir)?.iter().filter(|pack| !pack.kept).count())
+}
+
+/// How many of the packs that a geometric repack looks at would be rolled up for the given `factor`, which is what
+/// `maintenance.geometric-repack.splitFactor` decides, and how many of them there are, which are the packs without `.keep`
+/// file that aren't cruft packs.
+pub(super) fn count_packs_to_roll_up(pack_dir: &Path, hash: gix_hash::Kind, factor: u32) -> Result<(usize, usize)> {
+    let mut counts = Vec::new();
+    for pack in local_packs(pack_dir)?
+        .into_iter()
+        .filter(|pack| !pack.kept && !pack.cruft)
+    {
+        counts.push(pack.objects(hash)?.len());
+    }
+    counts.sort_unstable();
+    Ok((geometric_split(&counts, factor), counts.len()))
+}
+
+/// Remove every file of a pack name that has an index and no pack, which is what Git's `gc` calls pack garbage. Files with other
+/// names, like `*.idx.removing` and those of a multi-pack-index, and names that have a pack but no index or just a `.keep` file,
+/// stay. It must run after the removal of packs that a killed run was in the middle of has been finished.
+/// Return the number of files that were removed.
+pub(super) fn remove_pack_garbage(pack_dir: &Path) -> Result<usize> {
+    const KNOWN: [&str; 7] = ["idx", "rev", "pack", "bitmap", "keep", "promisor", "mtimes"];
+    let Ok(entries) = std::fs::read_dir(pack_dir) else {
+        return Ok(0);
+    };
+    let mut stems = std::collections::BTreeMap::<PathBuf, Vec<&'static str>>::new();
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let Some(extension) = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(|ext| KNOWN.into_iter().find(|known| *known == ext))
+        else {
+            continue;
+        };
+        stems.entry(path.with_extension("")).or_default().push(extension);
+    }
+    let mut removed = 0;
+    for (stem, extensions) in stems {
+        if extensions.contains(&"idx") && !extensions.contains(&"pack") {
+            for extension in extensions {
+                let mut file = stem.clone().into_os_string();
+                file.push(format!(".{extension}"));
+                if std::fs::remove_file(file).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Remove the multi-pack-index with its bitmap, reverse index and chain, as Git does when it removes packs. Return `true` if
 /// anything was removed.
 fn remove_multi_pack_index(pack_dir: &Path) -> Result<bool> {
@@ -665,6 +720,40 @@ struct NewPack {
 }
 
 impl Repository {
+    /// Pack up to `batch` loose objects, whether they are reachable or not, into a new pack, and leave everything else as it is,
+    /// like the `loose-objects` task of `git maintenance` does after `git prune-packed`. A `batch` of `0` has no limit. Return the
+    /// path of the new pack and the number of objects in it, or `None` if there are no loose objects.
+    ///
+    /// The loose objects stay until `prune-packed` removes them, which is its first step the next time.
+    pub(super) fn pack_loose_objects(
+        &self,
+        batch: usize,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Option<(PathBuf, usize)>> {
+        let objects_dir = self.objects.store_ref().path().to_owned();
+        let pack_dir = objects_dir.join("pack");
+        let hash = self.object_hash();
+        let mut fsync = self.config.fsync_options()?;
+        fsync.components = fsync.components
+            | gix_fs::fsync::Components::LOOSE_OBJECT
+            | gix_fs::fsync::Components::PACK
+            | gix_fs::fsync::Components::PACK_METADATA;
+        remove_stale_markers(&pack_dir)?;
+        let (loose, _temporary) = scan_loose(&objects_dir, hash)?;
+        let mut ids: Vec<ObjectId> = loose.iter().map(|object| object.id).collect();
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        ids.sort();
+        if batch > 0 {
+            ids.truncate(batch);
+        }
+        let pack = self.write_new_pack(&ids, &pack_dir, &fsync, should_interrupt, None, None)?;
+        let path = pack.stem.with_extension("pack");
+        self.finish_repack(&mut Outcome::default(), &[Some(&pack)], &pack_dir)?;
+        Ok(Some((path, ids.len())))
+    }
+
     /// Put objects into a pack and remove the packs it replaces, as the [module documentation](crate::maintenance::repack)
     /// describes. It must not run at the same time as another `repack`.
     pub fn repack(&self, options: Options, should_interrupt: &AtomicBool) -> Result<Outcome> {
