@@ -62,12 +62,13 @@ fn an_interrupted_transport_fails_from_then_on_and_still_ends_its_server() -> Te
 }
 
 #[test]
-fn serving_fetches_is_refused_before_anything_is_exchanged() -> TestResult {
-    let mut transport = NativeLocal::new(remote_git_dir()?, Protocol::V2, false);
+fn a_fetch_with_a_protocol_version_that_the_server_does_not_speak_is_refused_before_anything_is_exchanged() -> TestResult
+{
+    let mut transport = NativeLocal::new(remote_git_dir()?, Protocol::V1, false);
     let err = transport
         .handshake(Service::UploadPack, &[])
         .err()
-        .expect("fetching from within the process isn't supported yet");
+        .expect("only protocol version 2 is served");
     assert!(
         matches!(&err, gix::protocol::transport::client::Error::Io(err) if err.kind() == std::io::ErrorKind::Unsupported),
         "{err:?}"

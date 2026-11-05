@@ -236,9 +236,14 @@ pub mod progress;
 ///
 pub mod push;
 
-///
+#[cfg(any(feature = "receive", feature = "upload"))]
+pub(crate) mod served;
+
 #[cfg(feature = "receive")]
 pub mod receive;
+
+#[cfg(feature = "upload")]
+pub mod upload;
 
 ///
 pub mod diff;

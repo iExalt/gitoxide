@@ -192,9 +192,11 @@ mod subsections {
         /// instead of by starting `git-receive-pack` or `git-upload-pack`. Repositories that the native server can't serve
         /// are refused with an error that says it is unsupported, as there is no fallback to the programs.
         ///
-        /// Only pushes can be served so far, and only if `gix` is built with the `receive` feature, without which the key is
-        /// ignored and the programs are started. The path must name the repository or its work tree, as the `.git` suffix of
-        /// a bare repository's name isn't guessed.
+        /// Pushes and fetches over protocol version 2 are served, including the negotiation of which objects the client has. The
+        /// `receive` and `upload` features of `gix` serve pushes and fetches respectively, and the key is ignored for a service
+        /// whose feature is off, so that the program is started. Repositories that are shallow, partial, or not fully trusted are
+        /// refused, which Git serves in the last case, and the packs that are sent are not thin. The path must name the repository
+        /// or its work tree, as the `.git` suffix of a bare repository's name isn't guessed.
         /// It is `false` by default.
         pub const NATIVE_LOCAL_TRANSPORT: keys::Boolean =
             keys::Boolean::new_boolean("nativeLocalTransport", &Gitoxide::CORE).with_note(
