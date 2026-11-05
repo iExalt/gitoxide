@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use gix_error::{Result, ResultExt, bail, message};
 use gix_hash::ObjectId;
-use gix_hashtable::HashSet;
+use gix_hashtable::{HashMap, HashSet};
 use gix_object::{Find, bstr::BString};
 
 use crate::Repository;
@@ -60,6 +60,9 @@ impl Root {
 #[derive(Debug, Default, Clone)]
 pub struct Reachable {
     ids: HashSet<ObjectId>,
+    /// The hash of the path an object had where it was first seen in a tree, and the place in the order in which objects were first
+    /// seen, newest first, if these were asked for.
+    names: HashMap<ObjectId, (u32, u32)>,
 }
 
 impl Reachable {
@@ -76,6 +79,19 @@ impl Reachable {
     /// Return `true` if no object is reachable.
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
+    }
+
+    /// The hash of the path that `id` had where it was first seen in a tree, which is `0` for commits, tags and root trees, and if
+    /// it wasn't asked for, see [`Repository::reachable_objects_with_names()`].
+    pub fn name_hash(&self, id: &gix_hash::oid) -> u32 {
+        self.names.get(id).map_or(0, |(hash, _)| *hash)
+    }
+
+    /// The place of `id` in the order in which objects were first seen, with the newest first as Git lists them, which is
+    /// what decides which of equally large objects is tried first as a base. It is `u32::MAX` if names weren't asked for, see
+    /// [`Repository::reachable_objects_with_names()`].
+    pub fn rank(&self, id: &gix_hash::oid) -> u32 {
+        self.names.get(id).map_or(u32::MAX, |(_, rank)| *rank)
     }
 
     /// Iterate over all reachable objects, in no particular order.
@@ -240,6 +256,17 @@ impl Repository {
     /// boundary don't have their parents followed, and entries of trees that are submodules are left alone.
     /// Missing objects are an error unless they are behind an [optional root](Root::is_optional()).
     pub fn reachable_objects(&self, roots: impl IntoIterator<Item = Root>) -> Result<Reachable> {
+        self.reachable_objects_inner(roots, false)
+    }
+
+    /// Like [`reachable_objects()`](Self::reachable_objects()), but remember the path that each object has in the first tree it is
+    /// found in, as the hash that [`Reachable::name_hash()`] returns. It's what makes objects that are versions of the same file
+    /// find each other when looking for deltas. It costs memory in proportion to the number of objects.
+    pub fn reachable_objects_with_names(&self, roots: impl IntoIterator<Item = Root>) -> Result<Reachable> {
+        self.reachable_objects_inner(roots, true)
+    }
+
+    fn reachable_objects_inner(&self, roots: impl IntoIterator<Item = Root>, with_names: bool) -> Result<Reachable> {
         let mut repo = self.clone();
         repo.objects.ignore_replacements = true;
         let shallow: HashSet<ObjectId> = repo
@@ -250,6 +277,7 @@ impl Repository {
             repo: &repo,
             shallow,
             seen: HashSet::default(),
+            names: with_names.then(HashMap::default),
             buf: Vec::new(),
         };
         let (optional, required): (Vec<_>, Vec<_>) = roots.into_iter().partition(Root::is_optional);
@@ -261,7 +289,10 @@ impl Repository {
         for root in optional {
             walk.run(root.id, root.kind, true)?;
         }
-        Ok(Reachable { ids: walk.seen })
+        Ok(Reachable {
+            ids: walk.seen,
+            names: walk.names.unwrap_or_default(),
+        })
     }
 }
 
@@ -335,21 +366,38 @@ struct Walk<'a> {
     repo: &'a Repository,
     shallow: HashSet<ObjectId>,
     seen: HashSet<ObjectId>,
+    names: Option<HashMap<ObjectId, (u32, u32)>>,
     buf: Vec<u8>,
 }
 
 impl Walk<'_> {
+    fn name(names: &mut Option<HashMap<ObjectId, (u32, u32)>>, id: ObjectId, name_hash: u32) {
+        if let Some(names) = names {
+            let rank = u32::try_from(names.len()).unwrap_or(u32::MAX);
+            names.insert(id, (name_hash, rank));
+        }
+    }
+
     /// Mark `start` and everything it leads to as seen. If `tolerate_missing` is set, objects that aren't there are skipped.
+    ///
+    /// Objects are met in the order that Git lists them in when it counts them for a pack: the parents of commits are done in the
+    /// order that they are met, and everything a commit leads to is done before its parents, so that the newest come first.
     fn run(&mut self, start: ObjectId, start_kind: Option<gix_object::Kind>, tolerate_missing: bool) -> Result<()> {
         // The kind of an object is known if it comes from a tree, and it may be known for roots.
-        let mut stack: Vec<(ObjectId, Option<gix_object::Kind>)> = vec![(start, start_kind)];
-        while let Some((id, kind)) = stack.pop() {
+        // The hash of the path of the object is carried along, and whether the object is the tree of a commit, whose entries
+        // don't have a directory in front of their names.
+        type Item = (ObjectId, Option<gix_object::Kind>, u32, bool);
+        let mut stack: Vec<Item> = vec![(start, start_kind, 0, true)];
+        let mut parents: std::collections::VecDeque<Item> = Default::default();
+        while let Some((id, kind, name_hash, is_root)) = stack.pop().or_else(|| parents.pop_front()) {
             if self.seen.contains(&id) {
                 continue;
             }
             if kind == Some(gix_object::Kind::Blob) {
                 // Blobs don't lead anywhere, and Git doesn't check that they exist either.
-                self.seen.insert(id);
+                if self.seen.insert(id) {
+                    Self::name(&mut self.names, id, name_hash);
+                }
                 continue;
             }
             let data = match self.repo.objects.try_find(&id, &mut self.buf)? {
@@ -357,23 +405,34 @@ impl Walk<'_> {
                 None if tolerate_missing => continue,
                 None => bail!(message("An object that is wanted is missing").with("object_id", id.to_string())),
             };
-            self.seen.insert(id);
+            if self.seen.insert(id) {
+                Self::name(&mut self.names, id, name_hash);
+            }
             let hash_kind = id.kind();
             match data.kind {
                 gix_object::Kind::Blob => {}
                 gix_object::Kind::Tag => {
                     let target = gix_object::TagRefIter::from_bytes(data.data, hash_kind).target_id()?;
-                    stack.push((target, None));
+                    stack.push((target, None, 0, false));
                 }
                 gix_object::Kind::Commit => {
                     let mut iter = gix_object::CommitRefIter::from_bytes(data.data, hash_kind);
                     let tree = iter.tree_id()?;
-                    stack.push((tree, Some(gix_object::Kind::Tree)));
+                    stack.push((tree, Some(gix_object::Kind::Tree), 0, true));
                     if !self.shallow.contains(&id) {
-                        stack.extend(iter.parent_ids().map(|parent| (parent, Some(gix_object::Kind::Commit))));
+                        parents.extend(
+                            iter.parent_ids()
+                                .map(|parent| (parent, Some(gix_object::Kind::Commit), 0, false)),
+                        );
                     }
                 }
                 gix_object::Kind::Tree => {
+                    let prefix = if is_root {
+                        0
+                    } else {
+                        gix_pack::data::output::delta::search::name_hash_extend(name_hash, b"/")
+                    };
+                    let mut children = Vec::new();
                     for entry in gix_object::TreeRefIter::from_bytes(data.data, hash_kind) {
                         let entry = entry?;
                         let kind = match entry.mode.kind() {
@@ -382,9 +441,16 @@ impl Walk<'_> {
                             _ => gix_object::Kind::Blob,
                         };
                         if !self.seen.contains(entry.oid) {
-                            stack.push((entry.oid.to_owned(), Some(kind)));
+                            let child_hash = if self.names.is_some() {
+                                gix_pack::data::output::delta::search::name_hash_extend(prefix, entry.filename)
+                            } else {
+                                0
+                            };
+                            children.push((entry.oid.to_owned(), Some(kind), child_hash, false));
                         }
                     }
+                    // The first entry is the next one to be done.
+                    stack.extend(children.into_iter().rev());
                 }
             }
         }

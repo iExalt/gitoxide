@@ -43,6 +43,8 @@ mod reflog_expire;
 mod remote;
 #[cfg(feature = "maintenance")]
 mod repack;
+#[cfg(feature = "maintenance")]
+mod repack_deltas;
 mod shallow;
 mod state;
 #[cfg(feature = "attributes")]
