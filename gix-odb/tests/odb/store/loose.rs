@@ -235,6 +235,32 @@ mod write {
 
         Ok(())
     }
+
+    /// The directories of loose objects that are empty are removed by `git prune` and `git prune-packed`, possibly while an
+    /// object is about to be put into the one that was just created for it. A write must not fail because of that.
+    #[test]
+    fn writing_while_empty_object_directories_are_removed_does_not_fail() -> gix_testtools::TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let db = ldb_at_opts(dir.path(), gix_testtools::object_hash());
+        let done = std::sync::atomic::AtomicBool::new(false);
+
+        std::thread::scope(|scope| -> gix_testtools::TestResult {
+            scope.spawn(|| {
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    for fan_out in 0..=255u8 {
+                        // fails for all but the directories that are empty, which are the ones that matter
+                        std::fs::remove_dir(dir.path().join(format!("{fan_out:02x}"))).ok();
+                    }
+                }
+            });
+            let result = (0..3000u32).try_for_each(|idx| {
+                db.write_buf(gix_object::Kind::Blob, format!("object {idx}").as_bytes())
+                    .map(|_| ())
+            });
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(result?)
+        })
+    }
 }
 
 mod contains {
