@@ -2,7 +2,7 @@
 #![cfg(unix)]
 use std::{os::unix::fs::PermissionsExt, path::PathBuf};
 
-use gix_hook::{Hooks, Prepare, Stderr, Stdin};
+use gix_hook::{Hooks, Prepare, Settings, Stderr, Stdin};
 
 use crate::Result;
 
@@ -81,6 +81,35 @@ fn a_directory_in_place_of_a_hook_fails_to_start() -> Result {
         outcome.exit_code(),
         1,
         "like in Git, passing the access check isn't enough"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_hook_that_cannot_be_started_stops_the_ones_after_it() -> Result {
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let marker = dir.path().join("ran");
+    let hook = dir.path().join("pre-push");
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display()))?;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+    let config = gix_config::File::try_from(
+        r#"
+        [hook "broken"]
+            event = pre-push
+            command = /nonexistent/program
+        "#,
+    )?;
+    let settings = Settings::from_config(&config, &mut |_| true)?;
+    let outcome = Prepare::new(Hooks::resolve("pre-push", dir.path(), Some(&settings))).run()?;
+    assert_eq!(
+        outcome.hooks.len(),
+        1,
+        "the configured hook goes first, and its failure to start ends the run"
+    );
+    assert!(outcome.hooks[0].status.is_none() && outcome.hooks[0].error.is_some());
+    assert!(
+        !marker.exists(),
+        "the hook file after it was never started, like in Git"
     );
     Ok(())
 }

@@ -246,14 +246,22 @@ impl Prepare {
         let parallel = jobs > 1;
         let results = Mutex::new((0..commands.len()).map(|_| None).collect::<Vec<_>>());
         let next = AtomicUsize::new(0);
+        // Like Git, no hook is started after one that couldn't be, which leaves the ones before it as what ran.
+        let start_failed = std::sync::atomic::AtomicBool::new(false);
         let replay = Mutex::new(());
         let work = || {
             loop {
+                if start_failed.load(Ordering::Relaxed) {
+                    break;
+                }
                 let idx = next.fetch_add(1, Ordering::Relaxed);
                 let Some(((direct, via_shell), hook)) = commands.get(idx).zip(self.hooks.hooks.get(idx)) else {
                     break;
                 };
                 let outcome = self.run_one(hook, direct, via_shell, parallel, &replay);
+                if outcome.status.is_none() && outcome.error.is_some() {
+                    start_failed.store(true, Ordering::Relaxed);
+                }
                 results.lock().expect("a panicking hook run poisons nothing else")[idx] = Some(outcome);
             }
         };
