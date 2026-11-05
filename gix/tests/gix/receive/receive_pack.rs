@@ -597,7 +597,13 @@ fn band_data(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
 fn normalize_messages(text: &str) -> String {
     text.split(['\n', '\r'])
         .filter(|line| !line.is_empty())
-        .filter(|line| !line.starts_with("Resolving deltas") && !line.starts_with("fatal: bad object"))
+        // `rev-list` complains about what is missing in its own words, and the receiver reports it to the client only.
+        .filter(|line| {
+            !line.starts_with("Resolving deltas")
+                && !line.starts_with("fatal: bad object")
+                && !line.starts_with("error: Could not read ")
+                && !line.starts_with("fatal: revision walk setup failed")
+        })
         .map(|line| {
             if line.starts_with("error: cannot lock ref") || line.starts_with("error: Could not prepare reference edit")
             {
@@ -1590,12 +1596,36 @@ pub(super) fn without_agent(advertisement: &[u8]) -> Vec<String> {
     lines
 }
 
-fn add_alternate_of_client(remote: &Path, client: &Path) -> TestResult {
+pub(super) fn add_alternate_of_client(remote: &Path, client: &Path) -> TestResult {
     let git_dir = PathBuf::from(gix_testtools::git(remote, "rev-parse --absolute-git-dir")?.trim());
     std::fs::write(
         git_dir.join("objects/info/alternates"),
         format!("{}\n", client.join(".git/objects").display()),
     )?;
+    Ok(())
+}
+
+/// Make Git and the receiver advertise the remote that `case` describes, and assert that they offer the same.
+pub(super) fn assert_advertisement_same(world: &World, format: &str, label: &str, case: &Push) -> TestResult {
+    let git_remote = world.remote(format, &format!("adv-git-{label}"), case)?;
+    let output = gix_testtools::git_command(&git_remote)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .args(["receive-pack", "--advertise-refs"])
+        .arg(std::fs::canonicalize(&git_remote)?)
+        .output()?;
+    assert!(output.status.success(), "{format}/{label}: Git advertises");
+    let fork_remote = world.remote(format, &format!("adv-fork-{label}"), case)?;
+    let repo = gix::open_opts(&fork_remote, gix::open::Options::isolated())?;
+    let advertisement = repo
+        .receive()?
+        .advertisement()?
+        .encode(gix_protocol::transport::Protocol::V0)?;
+    assert_eq!(
+        without_agent(&advertisement),
+        without_agent(&output.stdout),
+        "{format}/{label}: the same is offered"
+    );
     Ok(())
 }
 
@@ -1641,25 +1671,7 @@ fn the_advertisement_is_that_of_git() -> TestResult {
     ];
     for (label, case) in cases {
         for format in ["files", "reftable"] {
-            let git_remote = world.remote(format, &format!("adv-git-{label}"), case)?;
-            let output = gix_testtools::git_command(&git_remote)
-                .env("LC_ALL", "C")
-                .env("LANG", "C")
-                .args(["receive-pack", "--advertise-refs"])
-                .arg(std::fs::canonicalize(&git_remote)?)
-                .output()?;
-            assert!(output.status.success(), "{format}/{label}: Git advertises");
-            let fork_remote = world.remote(format, &format!("adv-fork-{label}"), case)?;
-            let repo = gix::open_opts(&fork_remote, gix::open::Options::isolated())?;
-            let advertisement = repo
-                .receive()?
-                .advertisement()?
-                .encode(gix_protocol::transport::Protocol::V0)?;
-            assert_eq!(
-                without_agent(&advertisement),
-                without_agent(&output.stdout),
-                "{format}/{label}: the same is offered"
-            );
+            assert_advertisement_same(&world, format, label, case)?;
         }
     }
     Ok(())
