@@ -16,6 +16,12 @@
 //! about, which looks at their age. [`Unreachable::Drop`] removes them with their pack like `git repack -a` does, and a writer who
 //! makes such an object reachable after the walk found the roots loses it, so it must not be used while others write.
 //!
+//! [`Unreachable::Cruft`] puts them into a cruft pack instead, like `git repack --cruft`: a pack with a `.mtimes` file that has the
+//! time of each object, the newest one of all its copies, so that nothing about their age is lost with the packs and loose
+//! objects they were in. With an expiry, objects that aren't newer than it are left out and removed with their pack, unless an
+//! object that is newer needs them, which is then what they are kept for, and they get the time of the expiry as they are at
+//! least as old. Loose objects that expired stay for `prune`. Without an expiry nothing is removed.
+//!
 //! # Order, and what an interruption leaves
 //!
 //! 1. The packs to replace are listed, before anything is looked at, so that a pack that arrives later is never removed.
@@ -25,13 +31,17 @@
 //!    until this is done. The marker of a process that is gone, or of one that is over twelve hours old, is removed by the next run,
 //!    while a run that finds another marker stops before it changes anything.
 //! 4. Unreachable objects that are in a pack to be removed are written loose, with the time of the pack or of the
-//!    object if the pack is a cruft pack, and what was written is flushed before anything is removed.
+//!    object if the pack is a cruft pack, and what was written is flushed before anything is removed. If they go into a
+//!    cruft pack, that is written like the new pack in step 3, with its `.mtimes` file in place before its index is, and no
+//!    objects are written loose.
 //! 5. A multi-pack-index is removed with what belongs to it, as it names packs that go away. Likewise a commit-graph
 //!    that names an object that is dropped.
 //! 6. The packs are removed, each one after checking that it still is the pack that was listed: it has the same size and
 //!    time, which a writer who freshened it to keep its objects changes, and it has no `.keep` file. A pack that
 //!    changed stays, and the next run deals with it.
-//! 7. Loose objects that are in the new pack are removed, and the `.keep` of the new pack.
+//! 7. Loose objects that are in the new pack are removed, and the `.keep` of the new pack. Loose objects that are in the cruft
+//!    pack are removed if nobody modified them since their time was read, as the cruft pack would have a time that is too old.
+//!    The `.keep` of the cruft pack is removed as well.
 //!
 //! The new pack contains all that was packed before anything is removed, so an interruption at any point leaves all objects in
 //! place, possibly more than once and with a `.keep` file that the next run removes. The packs that were listed must not be changed by anyone else while this runs, which includes another
@@ -45,6 +55,9 @@
 //! * Files of packs that have no index, which a crash in the middle of removing a pack leaves, are not cleaned up.
 //! * Setting the time of loose objects needs write access on Windows, where this was not tried.
 //! * Whether the process of an interrupted run is gone is only known on Linux, so elsewhere its marker blocks the next run until it is 12 hours old.
+//! * `gc.maxCruftSize` and `--max-cruft-size` aren't supported, so there is one cruft pack, which is what Git writes without them.
+//! * With an expiry, the objects that are kept for something that is newer are found with a second walk over the repository,
+//!   which doubles the time it takes to look for them.
 //! * What `.keep` files and `gc.bigPackThreshold` do to Git's choice of packs doesn't apply: there are two scopes only.
 use std::{
     collections::BTreeSet,
@@ -136,6 +149,14 @@ pub enum Unreachable {
     /// Remove them with their pack, like `git repack -a`, and lose what a writer makes reachable after the roots were
     /// found. Don't use this while others write.
     Drop,
+    /// Put them into a cruft pack, like `git repack --cruft`, which has the time of each object in a `.mtimes` file so that
+    /// [`prune()`](Repository::prune()) and the next repack can tell how old it is. Objects that are loose or in a pack that
+    /// is removed and older than `expire` are removed, unless something that is newer needs them, and nothing is removed if
+    /// `expire` is `None`. This is what `gc.cruftPacks` and `gc.pruneExpire` ask for.
+    Cruft {
+        /// What isn't newer than this time, and isn't needed by what is, is removed.
+        expire: Option<gix_date::Time>,
+    },
 }
 
 /// Options for [`Repository::repack()`].
@@ -166,6 +187,8 @@ impl Default for Options {
 pub enum Phase<'a> {
     /// The new pack at the given path is in place, and nothing was removed.
     PackWritten(&'a Path),
+    /// The cruft pack with the unreachable objects at the given path is in place, and nothing was removed.
+    CruftPackWritten(&'a Path),
     /// Unreachable objects were written loose, and flushed. The number is how many there were.
     Loosened(usize),
     /// A multi-pack-index, or a commit-graph that names objects that are dropped, was removed.
@@ -184,6 +207,14 @@ pub struct Outcome {
     pub pack: Option<PathBuf>,
     /// The number of objects in the new pack.
     pub packed: usize,
+    /// The cruft pack, if one was written. It is the path of the `.pack` file.
+    pub cruft_pack: Option<PathBuf>,
+    /// The number of objects in the cruft pack.
+    pub cruft_packed: usize,
+    /// The number of unreachable objects that were meant to be removed with their pack because they are expired, or because of
+    /// [`Unreachable::Drop`]. They are only gone once the pack is, which doesn't happen for a pack that is in
+    /// [`changed_packs`](Self::changed_packs).
+    pub dropped: usize,
     /// The number of unreachable objects that were written loose, or whose time was raised to that of their pack.
     pub loosened: usize,
     /// The packs that were removed, as the paths of their `.pack` files.
@@ -381,6 +412,50 @@ impl Drop for Scratch {
     }
 }
 
+/// Remove the file at `path`, which is fine if it isn't there.
+fn remove_if_there(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.and_raise(message!(
+            "Could not remove {}, which the new pack must not have",
+            path.display()
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Write the `.mtimes` file for the pack with the index at `index_path` into `dir`, and return its path. It has the time of
+/// each object of the index in the order of the index, which is what makes the pack a cruft pack.
+fn write_mtimes(
+    dir: &Path,
+    index_path: &Path,
+    times: &HashMap<ObjectId, i64>,
+    hash: gix_hash::Kind,
+) -> Result<PathBuf> {
+    let index = gix_pack::index::File::at(index_path, hash)
+        .or_raise(|| message!("Could not read the pack index {}", index_path.display()))?;
+    let mut data = Vec::with_capacity(12 + index.num_objects() as usize * 4 + 2 * hash.len_in_bytes());
+    data.extend_from_slice(b"MTME");
+    data.extend_from_slice(&1u32.to_be_bytes());
+    data.extend_from_slice(&(if hash == gix_hash::Kind::Sha1 { 1u32 } else { 2u32 }).to_be_bytes());
+    for entry in index.iter() {
+        let time = times
+            .get(&entry.oid)
+            .ok_or_else(|| message!("The object {} of the cruft pack has no time", entry.oid))
+            .or_raise(|| message("Could not write the times of a cruft pack"))?;
+        data.extend_from_slice(&u32::try_from((*time).max(0)).unwrap_or(u32::MAX).to_be_bytes());
+    }
+    data.extend_from_slice(index.pack_checksum().as_slice());
+    let mut hasher = gix_hash::hasher(hash);
+    hasher.update(&data);
+    let checksum = hasher
+        .try_finalize()
+        .or_raise(|| message("Could not compute the checksum of the times of a cruft pack"))?;
+    data.extend_from_slice(checksum.as_slice());
+    let path = dir.join("pack.mtimes");
+    std::fs::write(&path, &data).or_raise(|| message!("Could not write {}", path.display()))?;
+    Ok(path)
+}
+
 /// A pack that was written.
 struct NewPack {
     stem: PathBuf,
@@ -486,50 +561,104 @@ impl Repository {
         }
 
         // 3. The new pack.
-        let new_pack = if candidates.is_empty() {
+        let main_pack = if candidates.is_empty() {
             None
         } else {
             let ids: Vec<ObjectId> = candidates.iter().copied().collect();
-            Some(self.write_new_pack(&ids, &pack_dir, &fsync, should_interrupt)?)
+            Some(self.write_new_pack(&ids, &pack_dir, &fsync, should_interrupt, None)?)
         };
-        let new_pack_name = new_pack.as_ref().map(|pack| {
-            pack.stem
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        });
-        if let Some(pack) = &new_pack {
+        if let Some(pack) = &main_pack {
             outcome.pack = Some(pack.stem.with_extension("pack"));
             outcome.packed = candidates.len();
             observer(Phase::PackWritten(&pack.stem.with_extension("pack")))?;
         }
         if !options.delete_redundant {
-            self.finish_repack(&mut outcome, new_pack.as_ref(), &pack_dir)?;
+            self.finish_repack(&mut outcome, &[main_pack.as_ref()], &pack_dir)?;
             return Ok(outcome);
         }
         interrupted()?;
 
-        // Objects of the new pack that are loose as well, which is determined from what is on disk and not from what
-        // this handle has seen, as it may have packs mapped that are removed below.
-        let in_new_pack: HashSet<ObjectId> = match &new_pack {
-            Some(pack) => {
-                let index_path = pack.stem.with_extension("idx");
-                gix_pack::index::File::at(&index_path, hash)
-                    .or_raise(|| message!("Could not read the pack index {}", index_path.display()))?
-                    .iter()
-                    .map(|entry| entry.oid)
-                    .collect()
+        // What is unreachable, with the newest time of all its copies, which is what a cruft pack takes along.
+        let mut unreachable_with_time: HashMap<ObjectId, i64> = HashMap::default();
+        let mut cruft_ids: Vec<ObjectId> = Vec::new();
+        let mut cruft_times: HashMap<ObjectId, i64> = HashMap::default();
+        // What goes with the packs that are replaced, without being written loose or into a cruft pack.
+        let mut dropped_ids: Vec<ObjectId> = Vec::new();
+        let mut to_loosen: Vec<(ObjectId, i64)> = Vec::new();
+        if options.scope == Scope::All {
+            for (id, time) in &in_replaced {
+                if !reachable.contains(id) && !in_stay.contains(id) {
+                    unreachable_with_time.insert(*id, *time);
+                }
             }
-            None => HashSet::default(),
+            match options.unreachable {
+                Unreachable::Loosen => {
+                    to_loosen = unreachable_with_time.iter().map(|(id, time)| (*id, *time)).collect();
+                }
+                Unreachable::Drop => dropped_ids = unreachable_with_time.keys().copied().collect(),
+                Unreachable::Cruft { expire } => {
+                    for object in &loose {
+                        if !reachable.contains(&object.id) && !in_stay.contains(&object.id) {
+                            let time = unreachable_with_time.entry(object.id).or_insert(object.mtime);
+                            *time = (*time).max(object.mtime);
+                        }
+                    }
+                    let kept_alive = match expire {
+                        // everything stays
+                        None => None,
+                        Some(expire) => Some(self.reachable_with_recent(&objects_dir, &loose, expire.seconds)?),
+                    };
+                    for (id, time) in &unreachable_with_time {
+                        if kept_alive.as_ref().is_none_or(|alive| alive.contains(id)) {
+                            cruft_ids.push(*id);
+                            // An object that is old and only kept by a recent one that needs it has the time of the expiry,
+                            // like in Git, so that it expires with the next run that has the same expiry, unless it's needed.
+                            cruft_times.insert(*id, expire.map_or(*time, |expire| (*time).max(expire.seconds)));
+                        } else if in_replaced.contains_key(id) {
+                            dropped_ids.push(*id);
+                        }
+                    }
+                    cruft_ids.sort();
+                }
+            }
+        }
+        let cruft_pack = if cruft_ids.is_empty() {
+            None
+        } else {
+            let pack = self.write_new_pack(&cruft_ids, &pack_dir, &fsync, should_interrupt, Some(&cruft_times))?;
+            outcome.cruft_pack = Some(pack.stem.with_extension("pack"));
+            outcome.cruft_packed = cruft_ids.len();
+            observer(Phase::CruftPackWritten(&pack.stem.with_extension("pack")))?;
+            Some(pack)
         };
+        outcome.dropped = dropped_ids.len();
+        interrupted()?;
+
+        // Objects of the new packs that are loose as well, which is determined from what is on disk and not from what
+        // this handle has seen, as it may have packs mapped that are removed below.
+        let objects_of = |pack: &Option<NewPack>| -> Result<HashSet<ObjectId>> {
+            Ok(match pack {
+                Some(pack) => {
+                    let index_path = pack.stem.with_extension("idx");
+                    gix_pack::index::File::at(&index_path, hash)
+                        .or_raise(|| message!("Could not read the pack index {}", index_path.display()))?
+                        .iter()
+                        .map(|entry| entry.oid)
+                        .collect()
+                }
+                None => HashSet::default(),
+            })
+        };
+        let in_new_pack = objects_of(&main_pack)?;
+        let in_cruft_pack = objects_of(&cruft_pack)?;
 
         // 4. What isn't reachable, and wouldn't survive the removal of its pack.
-        let to_loosen: Vec<(ObjectId, i64)> = in_replaced
-            .iter()
-            .filter(|(id, _)| !in_new_pack.contains(*id) && !in_stay.contains(*id))
-            .map(|(id, time)| (*id, *time))
-            .collect();
         if options.unreachable == Unreachable::Loosen && !replaceable.is_empty() {
+            let to_loosen: Vec<_> = to_loosen
+                .iter()
+                .filter(|(id, _)| !in_new_pack.contains(id))
+                .copied()
+                .collect();
             let count = self.loosen(&objects_dir, &to_loosen, &fsync, should_interrupt)?;
             outcome.loosened = count;
             observer(Phase::Loosened(count))?;
@@ -537,14 +666,19 @@ impl Repository {
         interrupted()?;
 
         // 5. What names objects or packs that are to go.
+        let new_names: Vec<String> = [&main_pack, &cruft_pack]
+            .into_iter()
+            .flatten()
+            .filter_map(|pack| pack.stem.file_name().map(|name| name.to_string_lossy().into_owned()))
+            .collect();
         let removable: Vec<&ListedPack> = replaceable
             .iter()
-            .filter(|pack| Some(&pack.name) != new_pack_name.as_ref())
+            .filter(|pack| !new_names.contains(&pack.name))
             .collect();
         if !removable.is_empty() {
             let mut removed = remove_multi_pack_index(&pack_dir)?;
-            if options.unreachable == Unreachable::Drop {
-                removed |= self.remove_commit_graph_naming(to_loosen.iter().map(|(id, _)| *id))?;
+            if !dropped_ids.is_empty() {
+                removed |= self.remove_commit_graph_naming(dropped_ids.iter().copied())?;
             }
             if removed {
                 observer(Phase::DerivedFilesRemoved)?;
@@ -582,23 +716,31 @@ impl Repository {
         }
         flush_directory(&pack_dir);
 
-        // 7. The loose objects that the new pack has.
+        // 7. The loose objects that a new pack has. One that is in a cruft pack stays if it was modified since its time was
+        // taken, as the cruft pack would then have an older time than the object has.
         let mut removed_loose = 0;
         for object in &loose {
-            if in_new_pack.contains(&object.id) && std::fs::remove_file(&object.path).is_ok() {
+            let removable = in_new_pack.contains(&object.id)
+                || (in_cruft_pack.contains(&object.id)
+                    && std::fs::symlink_metadata(&object.path).is_ok_and(|metadata| {
+                        cruft_times
+                            .get(&object.id)
+                            .is_some_and(|time| mtime_of(&metadata) <= *time)
+                    }));
+            if removable && std::fs::remove_file(&object.path).is_ok() {
                 removed_loose += 1;
             }
         }
         remove_empty_fan_out_dirs(&objects_dir);
         outcome.removed_loose = removed_loose;
         observer(Phase::LooseRemoved(removed_loose))?;
-        self.finish_repack(&mut outcome, new_pack.as_ref(), &pack_dir)?;
+        self.finish_repack(&mut outcome, &[main_pack.as_ref(), cruft_pack.as_ref()], &pack_dir)?;
         Ok(outcome)
     }
 
-    /// Remove the `.keep` file of the new pack, as the work is done.
-    fn finish_repack(&self, outcome: &mut Outcome, new_pack: Option<&NewPack>, pack_dir: &Path) -> Result<()> {
-        if let Some(pack) = new_pack.filter(|pack| pack.marked) {
+    /// Remove the `.keep` files of the new packs, as the work is done.
+    fn finish_repack(&self, outcome: &mut Outcome, new_packs: &[Option<&NewPack>], pack_dir: &Path) -> Result<()> {
+        for pack in new_packs.iter().flatten().filter(|pack| pack.marked) {
             let keep = pack.stem.with_extension("keep");
             if let Err(err) = std::fs::remove_file(&keep)
                 && err.kind() != std::io::ErrorKind::NotFound
@@ -608,18 +750,20 @@ impl Repository {
                     err.and_raise(message("Could not remove the marker of the new pack")),
                 ));
             }
-            flush_directory(pack_dir);
         }
+        flush_directory(pack_dir);
         Ok(())
     }
 
-    /// Write a pack with `ids` into `pack_dir`, with a `.keep` file that the caller removes.
+    /// Write a pack with `ids` into `pack_dir`, with a `.keep` file that the caller removes. If there are `mtimes` for all `ids`,
+    /// it's a cruft pack with a `.mtimes` file.
     fn write_new_pack(
         &self,
         ids: &[ObjectId],
         pack_dir: &Path,
         fsync: &gix_fs::fsync::Options,
         should_interrupt: &AtomicBool,
+        mtimes: Option<&HashMap<ObjectId, i64>>,
     ) -> Result<NewPack> {
         let hash = self.object_hash();
         let scratch = Scratch::new(pack_dir)?;
@@ -688,22 +832,23 @@ impl Repository {
         };
         let file_name = data_path.file_name().expect("a pack has a file name").to_owned();
         let stem = pack_dir.join(&file_name).with_extension("");
+        let mtimes_path = match mtimes {
+            Some(times) => Some(write_mtimes(&scratch.0, &index_path, times, hash)?),
+            None => None,
+        };
         if stem.with_extension("idx").is_file() {
-            // The same objects in the same order have the same name, which is that of a pack that is there.
+            // The same objects in the same order have the same name, which is that of a pack that is there. Its times are
+            // those that are known now, or none at all if it isn't a cruft pack any more.
+            match &mtimes_path {
+                Some(path) => std::fs::rename(path, stem.with_extension("mtimes"))
+                    .or_raise(|| message("Could not replace the times of the cruft pack that is there already"))?,
+                None => remove_if_there(&stem.with_extension("mtimes"))?,
+            }
             return Ok(NewPack { stem, marked: false });
         }
         // What a pack of the same name had that this one doesn't is wrong for it: a `.mtimes` file, for one, makes it a cruft pack.
         for extension in ["rev", "bitmap", "mtimes", "promisor"] {
-            let path = stem.with_extension(extension);
-            match std::fs::remove_file(&path) {
-                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(err.and_raise(message!(
-                        "Could not remove {}, which the new pack must not have",
-                        path.display()
-                    )));
-                }
-                _ => {}
-            }
+            remove_if_there(&stem.with_extension(extension))?;
         }
         // It's marked before it can be found, so that a repack by somebody else leaves it alone while this runs, and so that this
         // knows it if it's left behind. A `.keep` file that is there already protects the pack for somebody else, say a receiver
@@ -723,6 +868,11 @@ impl Repository {
         };
         std::fs::rename(&data_path, stem.with_extension("pack"))
             .or_raise(|| message("Could not move the new pack into place"))?;
+        // The times are in place before the pack can be found, as the index makes it known.
+        if let Some(path) = &mtimes_path {
+            std::fs::rename(path, stem.with_extension("mtimes"))
+                .or_raise(|| message("Could not move the times of the new cruft pack into place"))?;
+        }
         std::fs::rename(&index_path, stem.with_extension("idx"))
             .or_raise(|| message("Could not move the index of the new pack into place"))?;
         flush_directory(pack_dir);

@@ -11,6 +11,10 @@ set -eu -o pipefail
 #   reachable. One blob, `delta.txt` with 510 lines, is the base of the delta of the blob of `delta.txt` of `main`, which has
 #   500 lines, so that a copy of that entry can't keep the delta as the base isn't wanted.
 # * `dangling` is a loose blob that nothing refers to, old, and stays as it is.
+# * `recent-tip` is a loose commit that nothing refers to, which is from the year 2020, with the commit of `scratch` as its parent. A repack that
+#   has objects expire keeps what a recent object needs, so with an expiry in the year 2010 `scratch` and all it has stay, and
+#   with one in the year 2100 nothing does.
+# * A commit-graph that has the commit of `scratch`, which a repack that drops that commit must not leave behind.
 # * A `multi-pack-index` names `old` and `kept`.
 format=${1:?the object format to use}
 
@@ -48,6 +52,8 @@ if ! grep -q "^$main_blob .* $scratch_blob\$" <<<"$pack_listing"; then
   exit 1
 fi
 
+scratch_commit=$(git rev-parse scratch)
+git commit-graph write --reachable
 git branch -q -D scratch
 git reflog expire --expire=now --all
 
@@ -65,7 +71,9 @@ echo "loose 3" >>big.txt
 commit "loose 3"
 
 dangling=$(echo dangling | git hash-object -w --stdin)
+recent_tip=$(git commit-tree "$(git rev-parse 'HEAD^{tree}')" -p "$scratch_commit" -m "recent-tip")
 
 touch -t 200101010000 .git/objects/pack/pack-*
 touch -t 200001010000 "$(loose_path "$dangling")"
+touch -t 202001010000 "$(loose_path "$recent_tip")"
 git multi-pack-index write

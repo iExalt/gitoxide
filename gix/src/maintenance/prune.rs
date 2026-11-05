@@ -29,7 +29,7 @@ use gix_odb::Header as _;
 
 use crate::{
     Repository,
-    maintenance::reachable::{Origin, Root},
+    maintenance::reachable::{Origin, Reachable, Root},
 };
 
 /// Options for [`Repository::prune()`].
@@ -235,6 +235,21 @@ pub(super) fn remove_empty_fan_out_dirs(objects_dir: &Path) {
 }
 
 impl Repository {
+    /// Return all objects that are reachable, or that are recent, which includes what they lead to, where recent means newer than
+    /// `expire` in seconds, or named by `gc.recentObjectsHook`.
+    pub(super) fn reachable_with_recent(&self, objects_dir: &Path, loose: &[Loose], expire: i64) -> Result<Reachable> {
+        let mut roots = self.reachability_roots(Default::default())?;
+        let mut recent: Vec<ObjectId> = loose.iter().filter(|l| l.mtime > expire).map(|l| l.id).collect();
+        recent.extend(recent_in_packs(objects_dir, self.object_hash(), expire)?);
+        recent.extend(recent_objects_from_hooks(self)?);
+        roots.extend(recent.into_iter().map(|id| Root {
+            id,
+            origin: Origin::Recent,
+            kind: None,
+        }));
+        self.reachable_objects(roots)
+    }
+
     pub(super) fn refuse_to_delete_objects(&self) -> Result<()> {
         if self
             .config_snapshot()
@@ -268,16 +283,7 @@ impl Repository {
         let mut outcome = Outcome::default();
 
         let (loose, leftovers) = scan_loose(&objects_dir, hash)?;
-        let mut roots = self.reachability_roots(Default::default())?;
-        let mut recent: Vec<ObjectId> = loose.iter().filter(|l| l.mtime > expire).map(|l| l.id).collect();
-        recent.extend(recent_in_packs(&objects_dir, hash, expire)?);
-        recent.extend(recent_objects_from_hooks(self)?);
-        roots.extend(recent.into_iter().map(|id| Root {
-            id,
-            origin: Origin::Recent,
-            kind: None,
-        }));
-        let reachable = self.reachable_objects(roots)?;
+        let reachable = self.reachable_with_recent(&objects_dir, &loose, expire)?;
 
         let unreachable: Vec<&Loose> = loose
             .iter()
