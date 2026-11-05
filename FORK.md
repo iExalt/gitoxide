@@ -363,6 +363,29 @@ Use one revision consistently, update and commit the consumer lockfile, and run
 its tests. A patch cannot satisfy an incompatible version requirement; adapt that
 dependency deliberately. No acyclic dependency changes are part of fork setup.
 
+### Compression backend
+
+`gix` compresses and decompresses objects with [`sirocco`](https://docs.rs/sirocco), through its `zlib-sirocco` feature, which is
+one of the default features. A consumer that sets `default-features = false` gets `zlib-rs` unless it adds `zlib-sirocco` to the
+features it lists. Both are pure Rust, and `gix-zlib` builds for `wasm32-unknown-unknown` with either.
+
+Measured with `gix-zlib-bench` (one thread, level 6, best of three, SHA-1 fixtures) and `repack_deltas` on the synthetic delta fixtures
+of `gix/tests/fixtures/make_delta_repo.sh`, on the shared build host at a load of about 3, one run each:
+
+| | `zlib-rs` | `sirocco` |
+| --- | --- | --- |
+| compressing the 240 objects of `heavy` (28.5 MB of large text files) | 0.161 s, 9.23% of the input | 0.103 s, 8.91% |
+| compressing the 816 objects of `ordinary` (3.3 MB, mostly small) | 25.4 ms, 14.33% | 17.7 ms, 14.44% |
+| decompressing `heavy` | 10.9 ms | 8.8 ms |
+| decompressing `ordinary` | 2.72 ms | 1.87 ms |
+| pack of `heavy` (SHA-1) repacked with `Repository::repack()`, against Git 2.56 `repack -a -d -f --window=10 --depth=50` | +2.9% | −0.2% |
+| pack of `ordinary` (SHA-1) the same way | +0.9% | +0.3% |
+
+The size depends on the data and the level, not simply on the size of the objects: at level 6 `sirocco` compresses `heavy` to 3.4% less
+and `ordinary` to 0.8% more. At level 1, which is not the default, it compresses both to less (9.40% against 13.46% of the input for `heavy`,
+15.00% against 18.92% for `ordinary`), but `heavy` took 0.035 s against 0.032 s, so it was 10% slower there, and `ordinary` 6% faster.
+Decompression was 1.2 to 1.5 times as fast across both levels and fixtures.
+
 ## Setup checklist and evidence
 
 - [x] Inspect reference forks and preserve the separate push spike.
