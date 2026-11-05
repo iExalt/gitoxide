@@ -7,7 +7,7 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project to locate and run Git hooks"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 include = ["/src/*.rs", "/LICENSE-*"]
 publish.workspace = true
 

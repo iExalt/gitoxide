@@ -197,7 +197,7 @@ Run `mise trust` and `mise install` after reviewing `mise.toml`.
 | `mise run test` | Developer loop: nextest for crates changed since `origin/dev` and their dependents, plus affected isolated packages |
 | `mise run check` | Affected-package QA, including workflow lint; global inputs select the workspace |
 | `mise run check:thorough` | Exhaustive host checks, feature tests, docs, API tests and CLI journeys |
-| `mise run check:msrv` | Install Rust 1.88.0 through mise and build both declared gix MSRV configurations |
+| `mise run check:msrv` | Install Rust 1.99.0 through mise and build both declared gix MSRV configurations |
 | `mise run build` | Default CLI build, without publishing |
 | `mise run lint:workflows` | Actionlint, embedded-shell ShellCheck and workflow script tests |
 | `mise run release:preview` | Read-only release-please PR preview with `GH_TOKEN` |
@@ -212,8 +212,7 @@ it builds separate artifacts, so stick to the mise tasks to reuse their builds.
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
 comes from Cargo QA metadata: small, lean, lean-async, max, max-pure and declared
 crate-specific variants are distinct checks; `--all-features` is not a substitute.
-Rust 1.99.0 is the development and API-check toolchain. The gix MSRV remains 1.88,
-and the root CLI's declared MSRV remains 1.91. Explicit task toolchains override
+Rust 1.99.0 is the development and API-check toolchain. Every crate declares MSRV 1.99, the root CLI included. Explicit task toolchains override
 the inherited mise toolchain. Do not update the machine-wide `stable` alias to run QA.
 
 Fork CI runs on Ubuntu 24.04 for every PR and push to `dev`, in one of two modes chosen

@@ -194,6 +194,7 @@ Where practical, deprecate APIs in compatible releases before removing or changi
 
 Each crate declares its MSRV through `package.rust-version` in its Cargo manifest. The `gix` crate and its
 dependency graph are tested at its MSRV by the [`ci.yml` workflow](.github/workflows/ci.yml).
+This fork declares one MSRV for every crate, currently Rust 1.99, and tests it with `mise run check:msrv`.
 
 MSRV increases are assessed per crate and are made only when adopting a newer Rust version improves the
 quality of that specific crate's code. Such increases are **not** considered _breaking changes_ under this

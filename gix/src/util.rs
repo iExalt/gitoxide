@@ -55,7 +55,6 @@ impl From<Arc<AtomicBool>> for OwnedOrStaticAtomicBool {
 }
 #[cfg(feature = "parallel")]
 #[expect(clippy::type_complexity)]
-#[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
 pub fn parallel_iter_drop<T, U, V>(
     mut rx_and_join: Option<(
         std::sync::mpsc::Receiver<T>,
@@ -81,7 +80,7 @@ pub fn parallel_iter_drop<T, U, V>(
     // take very long even with huge trees.
     // If this every becomes a problem, just make `index::from-tree` interruptible, and keep waiting for handles here.
     drop((maybe_handle, handle));
-    undo.fetch_update(
+    undo.try_update(
         std::sync::atomic::Ordering::SeqCst,
         std::sync::atomic::Ordering::SeqCst,
         |current| current.then_some(prev),

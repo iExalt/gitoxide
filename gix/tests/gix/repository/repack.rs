@@ -869,7 +869,7 @@ fn what_a_killed_removal_of_a_pack_left_is_finished_and_a_pack_that_only_has_no_
         std::fs::File::options()
             .write(true)
             .open(index_removed_by_somebody.with_extension("pack"))?
-            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60))?;
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_hours(30 * 24))?;
 
         gix::open_opts(&repo_dir, crate::restricted())?.repack(Options::default(), &never())?;
         for extension in ["pack", "mtimes", "idx.removing"] {

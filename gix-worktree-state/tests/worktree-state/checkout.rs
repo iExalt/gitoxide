@@ -926,7 +926,6 @@ fn allow_or_disallow_symlinks() -> TestResult {
 }
 
 #[test]
-#[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
 fn keep_going_collects_results() {
     let mut opts = opts_from_probe();
     opts.keep_going = true;
@@ -937,7 +936,7 @@ fn keep_going_collects_results() {
         None,
         |_id| {
             count
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                     (current < 2).then_some(current + 1)
                 })
                 .is_err()
