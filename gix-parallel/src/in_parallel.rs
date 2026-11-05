@@ -198,7 +198,6 @@ where
 /// `threads_left` tracks capacity for nested work. A consumer may reserve capacity with `fetch_sub` before
 /// spawning work and must release it with `fetch_add` afterward. Do this only after consuming an item, as the
 /// slice workers may still be starting and can temporarily make the counter negative.
-#[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
 pub fn in_parallel_with_slice<I, S, R, E>(
     input: &mut [I],
     thread_limit: Option<usize>,
@@ -289,7 +288,7 @@ where
                                 let mut state = new_thread_state(thread_id);
                                 let res = (|| {
                                     while let Ok(input_index) =
-                                        index.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                                        index.try_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                                             (x < input_len).then_some(x + 1)
                                         })
                                     {

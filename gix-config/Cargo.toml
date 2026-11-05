@@ -11,7 +11,7 @@ edition = "2024"
 keywords = ["git-config", "git", "config", "gitoxide"]
 categories = ["config", "parser-implementations"]
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.88"
+rust-version = "1.99"
 publish.workspace = true
 
 [features]

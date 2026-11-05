@@ -13,6 +13,7 @@ fn large_offsets() {
 }
 
 #[test]
+#[allow(clippy::duration_suboptimal_units)] // A Unix timestamp reads best in seconds.
 fn large_offsets_do_not_panic() {
     insta::assert_debug_snapshot!(gix_date::parse("9999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH)))
             .expect_err("large offsets do not panic"), "large offsets do not panic", @"

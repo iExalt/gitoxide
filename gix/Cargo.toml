@@ -9,7 +9,7 @@ version.workspace = true
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.99"
 publish.workspace = true
 
 [lib]
@@ -326,7 +326,6 @@ max-performance = ["max-control"]
 
 ## Decompress and compress objects with [`sirocco`](https://docs.rs/sirocco), which is faster than the
 ## default `zlib-rs` at both.
-## This requires Rust 1.89 or newer.
 zlib-sirocco = ["gix-zlib/sirocco"]
 
 #! #### Other
