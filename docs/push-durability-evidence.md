@@ -204,7 +204,7 @@ same. These differences remain, for the network phase to decide about:
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
-unsupported: a `push-to-checkout` hook, `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, shallow and partial repositories,
+unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, shallow and partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.
@@ -224,6 +224,7 @@ updated although a later command of an atomic push fails. What differs:
 | --- | --- | --- |
 | An index entry marked skip-worktree or assume-unchanged, `core.sparseCheckout`, `core.ignoreCase`, `core.precomposeUnicode`, `submodule.recurse`, a file system monitor, or a smudge or process filter | Takes them into account | Declines the push, or refuses to receive if the setting is known up front |
 | A tree with one path twice, as a file and as a directory, or out of order | Goes ahead | Declines, as an index can't represent it. Paths that `verify_path()` refuses, like `.git` in any case or `..`, are declined by both |
+| A `push-to-checkout` hook | Takes the place of the four commands, and is called with the new commit in `GIT_DIR` and `GIT_WORK_TREE` of the work tree, from the Git directory of the receiving repository, without input | The same, down to the `/.` at the end of `GIT_DIR` of the main work tree. A hook that can't be started, or isn't executable, is no hook, and the checks run, as in Git, and one that can't be started ends the run so that the hooks after it aren't started, and declines if a hook ran before it. A configured hook and a hook file both run, and either one declines. What it prints is a diagnostic, like the output of the four commands |
 | A namespace | Looks the work tree up by the name without the namespace | Refuses to receive |
 | A push to a symbolic reference that leads to the checked out branch | Looks for the work tree by the pushed name, finds none, and leaves the index and files behind the moved branch | Follows the reference, as its deny rules do, and updates the work tree |
 | A checked out branch while a rebase or bisect is in progress | Checks the new commit out into the work tree in the middle of it | Refuses with `Could not update working tree to new HEAD`, as `HEAD` isn't at the branch. No test covers this |

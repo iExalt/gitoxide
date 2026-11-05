@@ -451,10 +451,14 @@ impl<'repo> Receiver<'repo> {
     ) -> Result<Option<String>> {
         let repo = &self.global;
         let update_hook = |command: &Command, messages: &mut Messages| runner.update(command, messages);
+        let push_to_checkout = |worktree: &Repository, new_id: &gix_hash::oid, messages: &mut Messages| {
+            runner.push_to_checkout(worktree, new_id, messages)
+        };
         let world = RepoWorld {
             repo,
             prefix: &self.prefix,
             update_hook: Some(&update_hook),
+            push_to_checkout: Some(&push_to_checkout),
         };
         policy::check_aliased_updates(
             commands,
@@ -560,12 +564,16 @@ impl Repository {
 /// Asks whether the `update` hook declines a command.
 type UpdateHook<'a> = dyn Fn(&Command, &mut Messages) -> bool + 'a;
 
+/// Runs the `push-to-checkout` hook for a work tree and a new commit, if there is one that runs. `None` if there is none.
+type PushToCheckoutHook<'a> = dyn Fn(&Repository, &gix_hash::oid, &mut Messages) -> Option<bool> + 'a;
+
 /// What decisions about commands need to know about the repository.
 struct RepoWorld<'a> {
     /// The repository without namespace, which is why names are put in front of what its prefix says.
     repo: &'a Repository,
     prefix: &'a BString,
     update_hook: Option<&'a UpdateHook<'a>>,
+    push_to_checkout: Option<&'a PushToCheckoutHook<'a>>,
 }
 
 fn read_trimmed(path: &Path) -> Option<BString> {
@@ -675,7 +683,14 @@ impl World for RepoWorld<'_> {
     fn update_worktree(&self, name: &BStr, command: &Command, messages: &mut Messages) -> Option<&'static str> {
         let mut notes = Vec::new();
         let result = match self.checked_out_repository(name) {
-            Some(worktree) => worktree::update_instead(&worktree, &command.new_id, &mut notes),
+            Some(worktree) => match self
+                .push_to_checkout
+                .and_then(|hook| hook(&worktree, &command.new_id, messages))
+            {
+                // A hook that ran does the update, and its verdict is the one that counts.
+                Some(declined) => declined.then_some(Refusal::Hook).map_or(Ok(()), Err),
+                None => worktree::update_instead(&worktree, &command.new_id, &mut notes),
+            },
             None => {
                 notes.push(format!("no work tree has HEAD at '{name}', which is what is supported"));
                 Err(Refusal::Update)

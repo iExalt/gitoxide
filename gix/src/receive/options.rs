@@ -75,7 +75,7 @@ impl Options {
     /// Read the settings from the configuration of `repo`.
     ///
     /// Fail if a setting has an invalid value or can't be honored, which is to refuse to receive instead of receiving in a
-    /// way that differs from what the configuration says. That's the case if there is a `push-to-checkout` hook, push certificates,
+    /// way that differs from what the configuration says. That's the case if there are push certificates,
     /// `proc-receive`, `updateInstead` for a work tree that the receiver can't update faithfully, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
     /// can't handle, and if the repository is shallow.
     pub fn from_repository(repo: &Repository) -> Result<Self> {
@@ -118,7 +118,6 @@ impl Options {
             }
         }
         refuse_unsupported_repository(repo, Role::Receive)?;
-        reject_hooks(repo)?;
 
         let quarantine = gix_odb::quarantine::Options::from_config(
             repo.object_hash(),
@@ -188,22 +187,6 @@ fn reject_unsupported_update_instead(repo: &Repository, config: &crate::config::
         {
             return refuse("filter drivers, which are programs");
         }
-    }
-    Ok(())
-}
-
-/// Hooks that a receiver would run, which can't be run yet. Refuse instead of ignoring them, as skipping a hook that guards
-/// a repository is not what whoever installed it wants.
-fn reject_hooks(repo: &Repository) -> Result<()> {
-    let settings = gix_hook::Settings::from_config(&repo.config.resolved, &mut repo.filter_config_section())
-        .or_raise(|| message("Failed to read hook configuration"))?;
-    let dir = repo
-        .hooks_dir(gix_hook::Side::Receive)
-        .or_raise(|| message("Could not find out where hooks are"))?;
-    if !gix_hook::Hooks::resolve("push-to-checkout", &dir, Some(&settings)).is_empty() {
-        bail!(unsupported(
-            "a 'push-to-checkout' hook is defined, and hooks aren't supported yet"
-        ));
     }
     Ok(())
 }
