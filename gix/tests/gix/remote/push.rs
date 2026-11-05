@@ -77,8 +77,17 @@ impl World {
     /// Run `git push` in `from` towards `remote` with `args`, which are flags if they start with a dash and refspecs otherwise,
     /// and return whether it succeeded.
     fn git_push(&self, from: &str, remote: &str, args: &[&str]) -> TestResult<bool> {
+        self.git_push_with(from, remote, &[], args)
+    }
+
+    /// Like [`git_push()`](Self::git_push()), with `-c` options, which the receiving `git` sees as well.
+    fn git_push_with(&self, from: &str, remote: &str, config: &[&str], args: &[&str]) -> TestResult<bool> {
         let (flags, refspecs): (Vec<&str>, Vec<&str>) = args.iter().copied().partition(|arg| arg.starts_with('-'));
-        let output = gix_testtools::git_command(self.path(from))
+        let mut command = gix_testtools::git_command(self.path(from));
+        for setting in config {
+            command.arg("-c").arg(setting);
+        }
+        let output = command
             .arg("push")
             .args(flags)
             .arg(self.path(remote))
@@ -840,6 +849,78 @@ fn pushing_to_a_remote_without_references_or_objects_creates_them(native: bool) 
     Ok(())
 }
 
+/// What `git receive-pack` does after a push: it runs `maintenance run --auto` unless `receive.autogc` or `maintenance.auto` say no,
+/// and with `maintenance.strategy=gc` that is `gc --auto`, which packs everything if there are more packs than `gc.autoPackLimit`.
+fn a_push_that_leaves_too_many_packs_starts_automatic_maintenance_like_git(native: bool) -> TestResult {
+    if isolated()? {
+        return Ok(());
+    }
+    let cases: [(&[&str], usize); 3] = [
+        (&["maintenance.strategy=gc"], 1),
+        (&["maintenance.strategy=gc", "receive.autogc=false"], 2),
+        (&["maintenance.strategy=gc", "maintenance.auto=false"], 2),
+    ];
+    for kind in kinds() {
+        for (settings, packs_after) in cases {
+            let (git, fork) = World::twins(kind, native)?;
+            for world in [&git, &fork] {
+                let remote = world.path("remote.git");
+                // one pack with what is there, and a pack for each push as `receive.unpackLimit` keeps what is received
+                gix_testtools::git(&remote, "repack -a -d -q")?;
+                for setting in [
+                    "receive.unpackLimit=1",
+                    "gc.autoPackLimit=1",
+                    "maintenance.autoDetach=false",
+                ]
+                .iter()
+                .chain(settings)
+                {
+                    let (key, value) = setting.split_once('=').expect("a key and a value");
+                    gix_testtools::git(&remote, &format!("config {key} {value}"))?;
+                }
+            }
+            // the tools of the test turn automatic maintenance off for Git, which the receiving `git` inherits
+            assert!(git.git_push_with(
+                "source",
+                "remote.git",
+                &["gc.auto=6700", "maintenance.auto=true"],
+                &["side:refs/heads/side"]
+            )?);
+            // "side" has objects that the remote doesn't, which it keeps in a pack
+            let side = fork.id("source", "side")?;
+            let outcome = fork
+                .push(
+                    "source",
+                    "remote.git",
+                    vec![Update::create(name("refs/heads/side"), side)],
+                    push::Options::default(),
+                )?
+                .expect("the request was sent");
+            assert!(outcome.is_success(), "{kind} {settings:?}: {outcome:?}");
+
+            let pack_count = |world: &World| -> TestResult<usize> {
+                Ok(std::fs::read_dir(world.path("remote.git/objects/pack"))?
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"))
+                    .count())
+            };
+            assert_eq!(
+                pack_count(&git)?,
+                packs_after,
+                "{kind} {settings:?}: Git's receive-pack maintains as expected"
+            );
+            assert_eq!(
+                pack_count(&fork)?,
+                packs_after,
+                "{kind} {settings:?}: the receiver of the fork maintains like Git"
+            );
+            assert_eq!(fork.refs("remote.git")?, git.refs("remote.git")?, "{kind} {settings:?}");
+            fork.fsck("remote.git")?;
+        }
+    }
+    Ok(())
+}
+
 /// Run the scenarios once with the `git receive-pack` Git spawns and once with the receiver of this process, which
 /// must leave behind what Git does. Scenarios that kill the server process can only use the first.
 macro_rules! over_transports {
@@ -871,6 +952,7 @@ over_transports!(
     updates_that_are_up_to_date_or_refused_do_not_prevent_the_others_in_a_non_atomic_push,
     a_rejected_update_reconciles_to_the_other_writers_value_and_a_retry_cannot_overwrite_it,
     pushing_to_a_remote_without_references_or_objects_creates_them,
+    a_push_that_leaves_too_many_packs_starts_automatic_maintenance_like_git,
 );
 
 #[cfg(unix)]

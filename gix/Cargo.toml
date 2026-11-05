@@ -246,8 +246,8 @@ blocking-network-client = [
 ]
 ## Serve fetches from repositories on the local machine like `git upload-pack` does with protocol version 2, without running Git and without network.
 upload = ["gix-protocol/blocking-server", "gix-pack/generate"]
-## Receive pushes into repositories on the local machine like `git receive-pack` does, without running Git and without network.
-receive = ["gix-protocol/blocking-server", "gix-odb/quarantine", "gix-pack/streaming-input", "hook", "command", "revision"]
+## Receive pushes into repositories on the local machine like `git receive-pack` does, without running Git and without network, and run automatic maintenance after them like it does.
+receive = ["gix-protocol/blocking-server", "gix-odb/quarantine", "gix-pack/streaming-input", "hook", "command", "revision", "maintenance"]
 ## Stacks with `blocking-network-client` to provide support for HTTP/S using **curl**, and implies blocking networking as a whole, making the `https://` transport available.
 blocking-http-transport-curl = [
     "blocking-network-client",
