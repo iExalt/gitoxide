@@ -18,6 +18,8 @@ use gix_testtools::{Creation, TestResult};
 struct World {
     kind: Kind,
     dir: gix_testtools::tempfile::TempDir,
+    /// Push without spawning `git receive-pack`, with the receiver of this process.
+    native: bool,
 }
 
 impl World {
@@ -27,12 +29,19 @@ impl World {
             [kind.to_string()],
             Creation::CopyFromReadOnly,
         )?;
-        Ok(World { kind, dir })
+        Ok(World {
+            kind,
+            dir,
+            native: false,
+        })
     }
 
-    /// Two copies of the same fixture, one for Git and one for the fork, in that order.
-    fn twins(kind: Kind) -> TestResult<(Self, Self)> {
-        Ok((World::new(kind)?, World::new(kind)?))
+    /// Two copies of the same fixture, one for Git and one for the fork, in that order. The fork pushes to
+    /// the receiver of this process if `native` is set, and to a spawned `git receive-pack` otherwise.
+    fn twins(kind: Kind, native: bool) -> TestResult<(Self, Self)> {
+        let mut fork = World::new(kind)?;
+        fork.native = native;
+        Ok((World::new(kind)?, fork))
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -40,7 +49,13 @@ impl World {
     }
 
     fn repo(&self, name: &str) -> TestResult<gix::Repository> {
-        Ok(gix::open_opts(self.path(name), gix::open::Options::isolated())?)
+        let options = gix::open::Options::isolated();
+        let options = if self.native {
+            options.config_overrides(["gitoxide.core.nativeLocalTransport=true"])
+        } else {
+            options
+        };
+        Ok(gix::open_opts(self.path(name), options)?)
     }
 
     fn id(&self, repo: &str, rev: &str) -> TestResult<ObjectId> {
@@ -152,8 +167,8 @@ fn isolated() -> TestResult<bool> {
     Ok(gix_testtools::run_in_isolated_process()?)
 }
 
-fn sha1_only() -> TestResult<(World, World)> {
-    World::twins(Kind::Sha1)
+fn sha1_only(native: bool) -> TestResult<(World, World)> {
+    World::twins(Kind::Sha1, native)
 }
 
 fn kinds() -> impl Iterator<Item = Kind> {
@@ -167,13 +182,12 @@ fn is_rejected(status: &Status) -> bool {
     matches!(status, Status::Rejected { .. })
 }
 
-#[test]
-fn creating_updating_and_deleting_in_one_atomic_push_matches_git() -> TestResult {
+fn creating_updating_and_deleting_in_one_atomic_push_matches_git(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
     for kind in kinds() {
-        let (git, fork) = World::twins(kind)?;
+        let (git, fork) = World::twins(kind, native)?;
         assert!(git.git_push(
             "source",
             "remote.git",
@@ -221,12 +235,11 @@ fn creating_updating_and_deleting_in_one_atomic_push_matches_git() -> TestResult
     Ok(())
 }
 
-#[test]
-fn a_lease_that_disagrees_with_the_remote_is_refused_before_anything_is_sent() -> TestResult {
+fn a_lease_that_disagrees_with_the_remote_is_refused_before_anything_is_sent(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = sha1_only()?;
+    let (_, fork) = sha1_only(native)?;
     let (one, two, three) = (
         fork.id("source", "light")?,
         fork.id("source", "main~1")?,
@@ -276,12 +289,13 @@ fn a_lease_that_disagrees_with_the_remote_is_refused_before_anything_is_sent() -
     Ok(())
 }
 
-#[test]
-fn references_that_change_after_the_advertisement_are_rejected_by_the_server_and_keep_their_value() -> TestResult {
+fn references_that_change_after_the_advertisement_are_rejected_by_the_server_and_keep_their_value(
+    native: bool,
+) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = sha1_only()?;
+    let (git, fork) = sha1_only(native)?;
     let (one, two, three) = (
         fork.id("source", "light")?,
         fork.id("source", "main~1")?,
@@ -336,12 +350,11 @@ fn references_that_change_after_the_advertisement_are_rejected_by_the_server_and
     Ok(())
 }
 
-#[test]
-fn history_policy_decides_between_fast_forward_and_rewrite() -> TestResult {
+fn history_policy_decides_between_fast_forward_and_rewrite(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = sha1_only()?;
+    let (git, fork) = sha1_only(native)?;
     let (one, two, three, side) = (
         fork.id("source", "light")?,
         fork.id("source", "main~1")?,
@@ -408,12 +421,11 @@ fn history_policy_decides_between_fast_forward_and_rewrite() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn a_lease_object_that_is_not_available_locally_cannot_be_shown_to_be_a_fast_forward() -> TestResult {
+fn a_lease_object_that_is_not_available_locally_cannot_be_shown_to_be_a_fast_forward(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = sha1_only()?;
+    let (_, fork) = sha1_only(native)?;
     let (two, side) = (fork.id("source", "main~1")?, fork.id("source", "side")?);
     // The shallow repository has "side" but not "two", which the remote has and the lease names.
     let plan = fork.plan(
@@ -429,12 +441,11 @@ fn a_lease_object_that_is_not_available_locally_cannot_be_shown_to_be_a_fast_for
     Ok(())
 }
 
-#[test]
-fn updates_the_server_refuses_are_reported_as_rejected_without_changing_anything() -> TestResult {
+fn updates_the_server_refuses_are_reported_as_rejected_without_changing_anything(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = sha1_only()?;
+    let (git, fork) = sha1_only(native)?;
     for world in [&git, &fork] {
         gix_testtools::git(world.path("remote.git"), "config receive.denyNonFastForwards true")?;
         gix_testtools::git(world.path("remote.git"), "config receive.denyDeletes true")?;
@@ -478,12 +489,13 @@ fn updates_the_server_refuses_are_reported_as_rejected_without_changing_anything
     Ok(())
 }
 
-#[test]
-fn a_shallow_source_is_refused_when_the_history_crosses_its_boundary_and_not_when_the_remote_has_it() -> TestResult {
+fn a_shallow_source_is_refused_when_the_history_crosses_its_boundary_and_not_when_the_remote_has_it(
+    native: bool,
+) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = sha1_only()?;
+    let (git, fork) = sha1_only(native)?;
     // On top of the boundary the remote has as `ahead`: nothing behind the boundary is needed.
     for world in [&git, &fork] {
         gix_testtools::git(world.path("shallow-three"), "commit --allow-empty -qm four")?;
@@ -530,12 +542,11 @@ fn a_shallow_source_is_refused_when_the_history_crosses_its_boundary_and_not_whe
     Ok(())
 }
 
-#[test]
-fn the_check_before_sending_sees_what_git_gives_its_pre_push_hook_and_can_veto() -> TestResult {
+fn the_check_before_sending_sees_what_git_gives_its_pre_push_hook_and_can_veto(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = sha1_only()?;
+    let (git, fork) = sha1_only(native)?;
     let log = git.path("pre-push.log");
     git.write_hook(
         "source/.git",
@@ -583,7 +594,7 @@ fn the_check_before_sending_sees_what_git_gives_its_pre_push_hook_and_can_veto()
     );
 
     // A veto sends nothing.
-    let (_, fork) = sha1_only()?;
+    let (_, fork) = sha1_only(native)?;
     let before = fork.refs("remote.git")?;
     let repo = fork.repo("source")?;
     let remote = repo.remote_at(fork.path("remote.git").to_string_lossy().into_owned())?;
@@ -602,12 +613,11 @@ fn the_check_before_sending_sees_what_git_gives_its_pre_push_hook_and_can_veto()
     Ok(())
 }
 
-#[test]
-fn updates_that_are_up_to_date_or_refused_do_not_prevent_the_others_in_a_non_atomic_push() -> TestResult {
+fn updates_that_are_up_to_date_or_refused_do_not_prevent_the_others_in_a_non_atomic_push(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = sha1_only()?;
+    let (_, fork) = sha1_only(native)?;
     let (one, two, three) = (
         fork.id("source", "light")?,
         fork.id("source", "main~1")?,
@@ -653,7 +663,8 @@ fn a_server_that_dies_after_committing_gives_an_uncertain_outcome_that_reconcile
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = sha1_only()?;
+    // The hook kills its parent, which would be this process if the receiver ran in it.
+    let (_, fork) = sha1_only(false)?;
     let (two, three) = (fork.id("source", "main~1")?, fork.id("source", "main")?);
     // Kill `receive-pack` once the reference is committed, which is before it can report anything.
     fork.write_hook(
@@ -689,12 +700,11 @@ fn a_server_that_dies_after_committing_gives_an_uncertain_outcome_that_reconcile
     Ok(())
 }
 
-#[test]
-fn a_rejected_update_reconciles_to_the_other_writers_value_and_a_retry_cannot_overwrite_it() -> TestResult {
+fn a_rejected_update_reconciles_to_the_other_writers_value_and_a_retry_cannot_overwrite_it(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = sha1_only()?;
+    let (_, fork) = sha1_only(native)?;
     let (one, two, three) = (
         fork.id("source", "light")?,
         fork.id("source", "main~1")?,
@@ -731,13 +741,12 @@ fn a_rejected_update_reconciles_to_the_other_writers_value_and_a_retry_cannot_ov
 }
 
 #[cfg(unix)]
-#[test]
-fn a_generic_failure_of_a_batch_is_uncertain_and_reconciles_per_update() -> TestResult {
+fn a_generic_failure_of_a_batch_is_uncertain_and_reconciles_per_update(native: bool) -> TestResult {
     use std::os::unix::fs::PermissionsExt;
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = sha1_only()?;
+    let (_, fork) = sha1_only(native)?;
     let (one, two, three) = (
         fork.id("source", "light")?,
         fork.id("source", "main~1")?,
@@ -801,13 +810,12 @@ fn scopeguard(dir: PathBuf) -> impl Drop {
     MakeWritable(dir)
 }
 
-#[test]
-fn pushing_to_a_remote_without_references_or_objects_creates_them() -> TestResult {
+fn pushing_to_a_remote_without_references_or_objects_creates_them(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
     for kind in kinds() {
-        let (git, fork) = World::twins(kind)?;
+        let (git, fork) = World::twins(kind, native)?;
         assert!(git.git_push(
             "source",
             "empty.git",
@@ -831,3 +839,39 @@ fn pushing_to_a_remote_without_references_or_objects_creates_them() -> TestResul
     }
     Ok(())
 }
+
+/// Run the scenarios once with the `git receive-pack` Git spawns and once with the receiver of this process, which
+/// must leave behind what Git does. Scenarios that kill the server process can only use the first.
+macro_rules! over_transports {
+    ($($name:ident),+ $(,)?) => {$(
+        mod $name {
+            #[test]
+            fn spawned_git() -> gix_testtools::TestResult {
+                super::$name(false)
+            }
+
+            #[cfg(feature = "receive")]
+            #[test]
+            fn in_process() -> gix_testtools::TestResult {
+                super::$name(true)
+            }
+        }
+    )+};
+}
+
+over_transports!(
+    creating_updating_and_deleting_in_one_atomic_push_matches_git,
+    a_lease_that_disagrees_with_the_remote_is_refused_before_anything_is_sent,
+    references_that_change_after_the_advertisement_are_rejected_by_the_server_and_keep_their_value,
+    history_policy_decides_between_fast_forward_and_rewrite,
+    a_lease_object_that_is_not_available_locally_cannot_be_shown_to_be_a_fast_forward,
+    updates_the_server_refuses_are_reported_as_rejected_without_changing_anything,
+    a_shallow_source_is_refused_when_the_history_crosses_its_boundary_and_not_when_the_remote_has_it,
+    the_check_before_sending_sees_what_git_gives_its_pre_push_hook_and_can_veto,
+    updates_that_are_up_to_date_or_refused_do_not_prevent_the_others_in_a_non_atomic_push,
+    a_rejected_update_reconciles_to_the_other_writers_value_and_a_retry_cannot_overwrite_it,
+    pushing_to_a_remote_without_references_or_objects_creates_them,
+);
+
+#[cfg(unix)]
+over_transports!(a_generic_failure_of_a_batch_is_uncertain_and_reconciles_per_update);

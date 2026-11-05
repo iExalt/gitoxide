@@ -122,6 +122,7 @@ impl Hook {
   echo "cwd=$(pwd -P)"
   echo "GIT_DIR=${{GIT_DIR-unset}}"
   echo "GIT_NAMESPACE=${{GIT_NAMESPACE-unset}}"
+  echo "GIT_REPLACE_REF_BASE=${{GIT_REPLACE_REF_BASE-unset}}"
   echo "GIT_PUSH_OPTION_COUNT=${{GIT_PUSH_OPTION_COUNT-unset}}"
   i=0
   while [ "$i" -lt "${{GIT_PUSH_OPTION_COUNT:-0}}" ]; do eval "echo GIT_PUSH_OPTION_$i=\$GIT_PUSH_OPTION_$i"; i=$((i+1)); done
@@ -536,11 +537,19 @@ fn state(repo: &Path) -> TestResult<(Vec<String>, Vec<String>, Vec<String>)> {
     Ok((refs, objects, leftovers))
 }
 
+/// The variable of the environment of a server that hooks can be shown to inherit, see `git_receive()`.
+pub(super) const SERVER_ENVIRONMENT: &str = "GIT_REPLACE_REF_BASE";
+
 /// Run `git receive-pack` on `remote`.
 pub(super) fn git_receive(remote: &Path, request: &[u8], side_band: bool) -> TestResult<Result_> {
     let mut command = gix_testtools::git_command(remote);
     if let Some(namespace) = namespace_of(remote) {
         command.env("GIT_NAMESPACE", namespace);
+    }
+    // The test tools remove all `GIT_*` variables from commands. A test that sets one in its process, to see if a server passes
+    // it on to hooks, wants Git to have it as well.
+    if let Some(value) = std::env::var_os(SERVER_ENVIRONMENT) {
+        command.env(SERVER_ENVIRONMENT, value);
     }
     let mut child = command
         // Messages are compared, so they must not be translated.

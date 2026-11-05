@@ -39,6 +39,9 @@ pub struct Receiver<'repo> {
     options: Options,
     fault: Option<Fault>,
     auto_maintenance: Option<AutoMaintenance<'repo>>,
+    /// Set if the receiver serves a client of the same process, whose environment hooks must not see, as it is removed by a client
+    /// that starts a program. A receiver that is a server of its own passes its environment on, like `git receive-pack` does.
+    hooks_without_local_repo_env: bool,
 }
 
 /// What runs maintenance after a push, if it's due, as Git does with `maintenance run --auto` after the hooks.
@@ -92,6 +95,7 @@ impl Repository {
             options: Options::from_repository(self)?,
             fault: None,
             auto_maintenance: None,
+            hooks_without_local_repo_env: false,
         })
     }
 }
@@ -106,6 +110,14 @@ impl<'repo> Receiver<'repo> {
     /// [`Options::auto_gc`] says so, like `git receive-pack` runs `maintenance run --auto` then. Its failure is ignored.
     pub fn with_auto_maintenance(mut self, maintenance: impl Fn(&Repository) -> Result<()> + 'repo) -> Self {
         self.auto_maintenance = Some(Box::new(maintenance));
+        self
+    }
+
+    /// Keep what describes the repository, configuration and working tree of this process from hooks, which a client that starts
+    /// `git-receive-pack` does by removing it from the environment of the program.
+    #[cfg(all(feature = "blocking-network-client", feature = "receive"))]
+    pub(crate) fn with_hooks_without_local_repo_env(mut self) -> Self {
+        self.hooks_without_local_repo_env = true;
         self
     }
 
@@ -253,8 +265,14 @@ impl<'repo> Receiver<'repo> {
         let heartbeat = heartbeat
             .zip(self.options.keep_alive)
             .map(|(beat, interval)| (interval, beat));
-        Runner::new(self.repo, &outcome.push_options, self.namespace_name(), heartbeat)?
-            .post(&outcome.commands, &mut messages);
+        Runner::new(
+            self.repo,
+            &outcome.push_options,
+            self.namespace_name(),
+            self.hooks_without_local_repo_env,
+            heartbeat,
+        )?
+        .post(&outcome.commands, &mut messages);
         if outcome.maintenance_due
             && let Some(maintenance) = &self.auto_maintenance
         {
@@ -285,7 +303,13 @@ impl<'repo> Receiver<'repo> {
         let heartbeat = heartbeat
             .zip(self.options.keep_alive)
             .map(|(beat, interval)| (interval, beat));
-        let runner = Runner::new(repo, &request.push_options, self.namespace_name(), heartbeat)?;
+        let runner = Runner::new(
+            repo,
+            &request.push_options,
+            self.namespace_name(),
+            self.hooks_without_local_repo_env,
+            heartbeat,
+        )?;
         let mut unpack_failure = None;
         let mut quarantine = None;
         let mut objects_migrated = false;

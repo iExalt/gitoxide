@@ -185,6 +185,23 @@ mod subsections {
                 .with_environment_override("GIT_NAMESPACE");
     }
 
+    impl Core {
+        /// The `gitoxide.core.nativeLocalTransport` key.
+        ///
+        /// If `true`, repositories that are reached through a path or a `file://` URL are served from within the process
+        /// instead of by starting `git-receive-pack` or `git-upload-pack`. Repositories that the native server can't serve
+        /// are refused with an error that says it is unsupported, as there is no fallback to the programs.
+        ///
+        /// Only pushes can be served so far, and only if `gix` is built with the `receive` feature, without which the key is
+        /// ignored and the programs are started. The path must name the repository or its work tree, as the `.git` suffix of
+        /// a bare repository's name isn't guessed.
+        /// It is `false` by default.
+        pub const NATIVE_LOCAL_TRANSPORT: keys::Boolean =
+            keys::Boolean::new_boolean("nativeLocalTransport", &Gitoxide::CORE).with_note(
+                "Serve local repositories in process instead of by spawning `git-receive-pack` and `git-upload-pack`.",
+            );
+    }
+
     impl Section for Core {
         fn name(&self) -> &str {
             "core"
@@ -201,6 +218,7 @@ mod subsections {
                 &Self::FILTER_PROCESS_DELAY,
                 &Self::EXTERNAL_COMMAND_STDERR,
                 &Self::REFS_NAMESPACE,
+                &Self::NATIVE_LOCAL_TRANSPORT,
             ]
         }
 
