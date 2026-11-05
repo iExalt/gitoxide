@@ -475,6 +475,61 @@ fn a_loose_object_that_was_modified_while_the_cruft_pack_was_written_stays_as_th
     Ok(())
 }
 
+/// The number of objects of each pack without a `.keep` file, smallest first, which is what a geometric progression is about.
+fn pack_sizes(repo_dir: &Path, kind: Kind) -> TestResult<Vec<u32>> {
+    let mut sizes = Vec::new();
+    for entry in std::fs::read_dir(repo_dir.join(".git/objects/pack"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "idx") && !path.with_extension("keep").exists() {
+            sizes.push(gix::odb::pack::index::File::at(&path, kind)?.num_objects());
+        }
+    }
+    sizes.sort_unstable();
+    Ok(sizes)
+}
+
+#[test]
+fn rolling_up_packs_geometrically_has_what_git_has() -> TestResult {
+    for kind in kinds() {
+        for factor in [2, 10] {
+            let (git, native) = (fixture(kind)?, fixture(kind)?);
+            let (git_dir, native_dir) = (git.path().join("repo"), native.path().join("repo"));
+            let mut options = Options::default();
+            options.scope = Scope::Geometric { factor };
+            let repo = gix::open_opts(&native_dir, crate::restricted())?;
+            // The first run has only the loose objects, whatever they are, to roll up, and the second one finds two small
+            // packs that are no progression.
+            for run in 1..=3 {
+                let before = state(&native_dir)?;
+                gix_testtools::git(&git_dir, &format!("repack -d --geometric={factor}"))?;
+                let outcome = repo.repack(options, &never())?;
+                assert!(
+                    outcome.failed.is_empty(),
+                    "{kind} {factor} run {run}: {:?}",
+                    outcome.failed
+                );
+
+                let what = format!("{kind} factor {factor} run {run}: as `git repack -d --geometric={factor}`");
+                let (expected, actual) = (state(&git_dir)?, state(&native_dir)?);
+                if run == 1 {
+                    assert_ne!(
+                        before, actual,
+                        "{kind} {factor}: something changed, or the fixture is wrong"
+                    );
+                }
+                assert_same_state(&actual, &expected, &what);
+                assert_eq!(
+                    pack_sizes(&native_dir, kind)?,
+                    pack_sizes(&git_dir, kind)?,
+                    "{what}: the same packs are rolled up"
+                );
+                assert_healthy(&native_dir, &what)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn blob_id(kind: Kind, content: &str) -> gix_hash::ObjectId {
     gix_object::compute_hash(kind, gix_object::Kind::Blob, content.as_bytes()).expect("valid object hash")
 }
