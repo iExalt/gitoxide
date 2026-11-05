@@ -26,17 +26,26 @@
 //!
 //! Configuration that this module doesn't support is refused by [`Options::from_config()`], so nothing is silently
 //! ignored.
+//!
+//! ## Checking what was received
+//!
+//! Git can check the objects of a pack as `unpack-objects` or `index-pack` receive them, which is `receive.fsckObjects`.
+//! This module doesn't know how to check objects, but it can have an [`Inspector`] look at the pack once it's complete
+//! and before any of its objects can be found in the object database: before loose objects are written, packs are kept or
+//! the quarantine is migrated. If the inspector refuses the pack, [`Quarantine::receive_pack()`] fails as `receive-pack`
+//! does, with what the inspector said in [`Rejected::report`].
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
     io::{self, Read},
+    ops::ControlFlow,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
 use gix_error::{ErrorExt, Result, ResultExt, bail, message, unsupported, validation};
 use gix_hash::{ObjectId, oid};
-use gix_object::Find;
+use gix_object::{Find, FindHeader};
 use gix_parallel::OwnShared;
 
 use crate::{Store, loose};
@@ -66,6 +75,198 @@ pub struct Options {
     pub alloc_limit_bytes: Option<usize>,
     /// The compression of loose objects, which is `core.looseCompression` and then `core.compression`.
     pub loose_compression: gix_zlib::Compression,
+    /// Have this look at each pack that was received before it is accepted, which is what checking objects needs.
+    pub inspector: Option<Inspector>,
+}
+
+/// What an [`Inspector`] says about a pack.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inspected {
+    /// `false` to refuse the pack.
+    pub accepted: bool,
+    /// What to tell the sender, and what to log, like warnings about an accepted pack, or the reason for refusing it.
+    /// It is lines of text as the programs of Git print them.
+    pub report: Vec<u8>,
+}
+
+/// A function that looks at a pack that was received into a [`Quarantine`], and decides if it is acceptable.
+///
+/// It is called once per pack, before any of its objects can be seen by others, and fails with an error if it can't make
+/// up its mind. That's reported as `receive-pack` does for a failure to run the program that checks objects.
+#[derive(Clone)]
+pub struct Inspector(Arc<InspectFn>);
+
+type InspectFn = dyn Fn(&Inspection<'_>) -> Result<Inspected> + Send + Sync;
+
+impl Inspector {
+    /// Create an inspector from `inspect`.
+    pub fn new(inspect: impl Fn(&Inspection<'_>) -> Result<Inspected> + Send + Sync + 'static) -> Self {
+        Inspector(Arc::new(inspect))
+    }
+}
+
+impl std::fmt::Debug for Inspector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Inspector(..)")
+    }
+}
+
+/// The pack that was received, as seen by an [`Inspector`].
+pub struct Inspection<'a> {
+    bundle: &'a gix_pack::Bundle,
+    thin_bases: &'a HashSet<ObjectId>,
+    odb: crate::store::Handle<OwnShared<Store>>,
+    kept: bool,
+}
+
+impl Inspection<'_> {
+    /// `true` if the pack is kept as pack, and `false` if it will be exploded into loose objects.
+    /// This is the difference between `index-pack` and `unpack-objects`.
+    pub fn kept(&self) -> bool {
+        self.kept
+    }
+
+    /// Call `each` with every object that was received, in the order of the pack, until it breaks.
+    /// The kind and size of the object are known without more ado, while its data is only decoded if [`Object::data()`] is called,
+    /// which saves much of the work if what is looked at are only some of the objects.
+    ///
+    /// The objects that were added to complete a thin pack aren't received, and are left out.
+    pub fn objects(&self, each: &mut dyn FnMut(&mut Object<'_>) -> Result<ControlFlow<()>>) -> Result {
+        let mut by_offset: Vec<_> = (0..self.bundle.index.num_objects())
+            .map(|index| (self.bundle.index.pack_offset_at_index(index), index))
+            .collect();
+        by_offset.sort_unstable();
+        let mut inflate = gix_zlib::Inflate::default();
+        let mut buf = Vec::new();
+        // Objects are decoded in the order of the pack, in which what a delta is based on is usually close by.
+        let mut cache = gix_pack::cache::lru::StaticLinkedList::<64>::new(64 * 1024 * 1024);
+        for (offset, index) in by_offset {
+            let id = self.bundle.index.oid_at_index(index);
+            if self.thin_bases.contains(id) {
+                continue;
+            }
+            let header = pack_header(self.bundle, offset, &mut inflate)?;
+            let mut object = Object {
+                id,
+                kind: header.kind,
+                size: header.object_size,
+                index,
+                bundle: self.bundle,
+                buf: &mut buf,
+                inflate: &mut inflate,
+                cache: &mut cache,
+            };
+            if each(&mut object)?.is_break() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Find objects in what was received and in the repository with the quarantine that has no more than that.
+    pub fn find(&self) -> impl Find + FindHeader + '_ {
+        PackAndRepository {
+            bundle: self.bundle,
+            odb: &self.odb,
+            inflate: Default::default(),
+        }
+    }
+}
+
+/// An object of a received pack, which is only decoded if its [data](Object::data()) is asked for.
+pub struct Object<'a> {
+    id: &'a oid,
+    kind: gix_object::Kind,
+    size: u64,
+    index: u32,
+    bundle: &'a gix_pack::Bundle,
+    buf: &'a mut Vec<u8>,
+    inflate: &'a mut gix_zlib::Inflate,
+    cache: &'a mut dyn gix_pack::cache::DecodeEntry,
+}
+
+impl Object<'_> {
+    /// The id of the object.
+    pub fn id(&self) -> &oid {
+        self.id
+    }
+
+    /// The kind of the object.
+    pub fn kind(&self) -> gix_object::Kind {
+        self.kind
+    }
+
+    /// The size of the object in bytes, which is that of its [data](Self::data()).
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Decode the object, which can be expensive if it's a delta, and return its data.
+    pub fn data(&mut self) -> Result<&[u8]> {
+        let (object, _) = self
+            .bundle
+            .get_object_by_index(self.index, self.buf, self.inflate, self.cache)?;
+        Ok(object.data)
+    }
+}
+
+/// Decode the header of the object whose entry is at `offset` in the pack of `bundle`, which is cheap as only as much of a delta
+/// is read as it takes to learn the size of the result, and the kind that its base has.
+fn pack_header(
+    bundle: &gix_pack::Bundle,
+    offset: gix_pack::data::Offset,
+    inflate: &mut gix_zlib::Inflate,
+) -> Result<gix_pack::data::decode::header::Outcome> {
+    let resolve = |base: &oid| -> Result<Option<gix_pack::data::decode::header::ResolvedBase>> {
+        bundle
+            .index
+            .lookup(base)
+            .map(|index| {
+                bundle
+                    .pack
+                    .entry(bundle.index.pack_offset_at_index(index))
+                    .map(gix_pack::data::decode::header::ResolvedBase::InPack)
+            })
+            .transpose()
+    };
+    bundle.pack.decode_header(bundle.pack.entry(offset)?, inflate, &resolve)
+}
+
+struct PackAndRepository<'a> {
+    bundle: &'a gix_pack::Bundle,
+    odb: &'a crate::store::Handle<OwnShared<Store>>,
+    /// Reused by all lookups of headers.
+    inflate: std::cell::RefCell<gix_zlib::Inflate>,
+}
+
+impl Find for PackAndRepository<'_> {
+    fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
+        let mut inflate = gix_zlib::Inflate::default();
+        // The borrow checker can't see that `buffer` isn't used if nothing is found in the pack.
+        if self.bundle.index.lookup(id).is_some() {
+            return Ok(self
+                .bundle
+                .find(id, buffer, &mut inflate, &mut gix_pack::cache::Never)?
+                .map(|(data, _)| data));
+        }
+        self.odb.try_find(id, buffer)
+    }
+}
+
+impl FindHeader for PackAndRepository<'_> {
+    /// Only the header is read, so that looking at the objects that something links to, which is most of the objects
+    /// that aren't new, doesn't mean to decode them.
+    fn try_header(&self, id: &oid) -> Result<Option<gix_object::Header>> {
+        if let Some(index) = self.bundle.index.lookup(id) {
+            let offset = self.bundle.index.pack_offset_at_index(index);
+            let header = pack_header(self.bundle, offset, &mut self.inflate.borrow_mut())?;
+            return Ok(Some(gix_object::Header {
+                kind: header.kind,
+                size: header.object_size,
+            }));
+        }
+        self.odb.try_header(id)
+    }
 }
 
 impl Options {
@@ -81,6 +282,7 @@ impl Options {
             thread_limit: None,
             alloc_limit_bytes: None,
             loose_compression: gix_zlib::Compression::BEST_SPEED,
+            inspector: None,
         }
     }
 
@@ -156,7 +358,6 @@ fn parse_bool(key: &str, value: &str) -> Result<bool> {
     })
 }
 
-/// Parse a number like Git does, which accepts hexadecimal and octal numbers as well as the suffixes `k`, `m` and `g`.
 fn parse_unsigned(key: &str, value: &str) -> Result<u64> {
     let bad = || validation(format!("bad numeric config value '{value}' for '{key}'")).raise();
     let lower = value.trim().to_ascii_lowercase();
@@ -184,6 +385,8 @@ pub struct Rejected {
     pub reason: String,
     /// What actually went wrong, if there is something to add to the reason.
     pub cause: Option<gix_error::Error>,
+    /// What an [`Inspector`] said, if it refused the pack. `receive-pack` shows that before it reports the reason.
+    pub report: Vec<u8>,
 }
 
 impl std::fmt::Display for Rejected {
@@ -199,12 +402,14 @@ impl std::fmt::Display for Rejected {
 impl std::error::Error for Rejected {}
 
 /// What [`Quarantine::receive_pack()`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Received {
     /// The amount of entries the header of the pack announced.
     pub entries: u32,
     /// `true` if the pack was kept as pack, and `false` if it was exploded into loose objects.
     pub kept: bool,
+    /// What an [`Inspector`] said about the pack, like warnings, which `receive-pack` shows to the sender.
+    pub report: Vec<u8>,
 }
 
 /// What [`Quarantine::migrate()`] did.
@@ -338,21 +543,31 @@ impl Quarantine {
     ) -> std::result::Result<Received, Rejected> {
         let header = read_pack_header(pack)?;
         let kept = header.entries >= self.options.unpack_limit;
-        let abnormal = |cause: gix_error::Error| Rejected {
-            reason: if kept {
+        let abnormal = |cause: gix_error::Error| {
+            let reason = if kept {
                 "index-pack abnormal exit"
             } else {
                 "unpack-objects abnormal exit"
+            };
+            match cause.downcast_any_ref::<Refused>() {
+                Some(Refused(report)) => Rejected {
+                    reason: reason.into(),
+                    cause: None,
+                    report: report.clone(),
+                },
+                None => Rejected {
+                    reason: reason.into(),
+                    cause: Some(cause),
+                    report: Vec::new(),
+                },
             }
-            .into(),
-            cause: Some(cause),
         };
         let mut stream = io::BufReader::new(Limited {
             inner: io::Cursor::new(header.raw).chain(pack),
             consumed: 0,
             max: self.options.max_input_size,
         });
-        if kept {
+        let report = if kept {
             self.keep(&mut stream, interrupt)
         } else {
             self.unpack(&mut stream, interrupt)
@@ -361,6 +576,7 @@ impl Quarantine {
         Ok(Received {
             entries: header.entries,
             kept,
+            report,
         })
     }
 
@@ -385,17 +601,48 @@ impl Quarantine {
         })
     }
 
-    fn keep(&mut self, stream: &mut dyn io::BufRead, interrupt: &AtomicBool) -> Result {
+    /// Let the inspector, if there is one, decide about the pack `bundle` whose objects that complete it are `thin_bases`,
+    /// and return what it says, or fail with it if the pack is refused.
+    fn inspect(&self, bundle: &gix_pack::Bundle, thin_bases: &HashSet<ObjectId>, kept: bool) -> Result<Vec<u8>> {
+        let Some(inspector) = &self.options.inspector else {
+            return Ok(Vec::new());
+        };
+        let inspected = (inspector.0)(&Inspection {
+            bundle,
+            thin_bases,
+            odb: self.store.to_handle(),
+            kept,
+        })?;
+        if inspected.accepted {
+            Ok(inspected.report)
+        } else {
+            bail!(Refused(inspected.report))
+        }
+    }
+
+    fn keep(&mut self, stream: &mut dyn io::BufRead, interrupt: &AtomicBool) -> Result<Vec<u8>> {
         let directory = self.dir.path().join("pack");
+        let thin_lookup = self.thin_lookup(true);
+        let requested = thin_lookup.as_ref().map(|lookup| lookup.requested.clone());
         let outcome = gix_pack::Bundle::write_to_directory(
             stream,
             Some(&directory),
             &mut gix_utils::progress::Discard,
             interrupt,
-            self.thin_lookup(true),
+            thin_lookup,
             self.options.object_hash,
             self.pack_options(self.options.fsync),
         )?;
+        let mut report = Vec::new();
+        if self.options.inspector.is_some()
+            && let Some(index_path) = &outcome.index_path
+        {
+            let thin_bases = requested.map_or_else(HashSet::new, |bases| {
+                std::mem::take(&mut *bases.lock().expect("no panic while held"))
+            });
+            let bundle = gix_pack::Bundle::at(index_path, self.options.object_hash)?;
+            report = self.inspect(&bundle, &thin_bases, true)?;
+        }
         if let Some(keep_path) = outcome.keep_path {
             std::fs::write(
                 &keep_path,
@@ -403,10 +650,10 @@ impl Quarantine {
             )
             .or_raise(|| message!("Could not write the keep file at \"{}\"", keep_path.display()))?;
         }
-        Ok(())
+        Ok(report)
     }
 
-    fn unpack(&mut self, stream: &mut dyn io::BufRead, interrupt: &AtomicBool) -> Result {
+    fn unpack(&mut self, stream: &mut dyn io::BufRead, interrupt: &AtomicBool) -> Result<Vec<u8>> {
         let scratch = tempfile::Builder::new()
             .prefix("scratch-")
             .tempdir_in(self.dir.path())
@@ -428,11 +675,12 @@ impl Quarantine {
             self.pack_options(no_fsync),
         )?;
         let Some(index_path) = outcome.index_path else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         // Objects that were added to complete the pack aren't part of it and are only read, never written or freshened.
         let thin_bases = requested.map(|bases| std::mem::take(&mut *bases.lock().expect("no panic while held")));
         let bundle = gix_pack::Bundle::at(&index_path, self.options.object_hash)?;
+        let report = self.inspect(&bundle, thin_bases.as_ref().unwrap_or(&HashSet::new()), false)?;
         let mut by_offset: Vec<_> = (0..bundle.index.num_objects())
             .map(|index| (bundle.index.pack_offset_at_index(index), index))
             .collect();
@@ -475,7 +723,7 @@ impl Quarantine {
                 .barrier(self.dir.path())
                 .or_raise(|| message("Could not flush the loose objects of the quarantine"))?;
         }
-        Ok(())
+        Ok(report)
     }
 
     /// The object directories to find objects in, which is the quarantine first.
@@ -567,6 +815,7 @@ fn read_pack_header(pack: &mut dyn Read) -> std::result::Result<PackHeader, Reje
     let reject = |reason: &str| Rejected {
         reason: reason.into(),
         cause: None,
+        report: Vec::new(),
     };
     let mut raw = [0u8; 12];
     let mut filled = 0;
@@ -579,6 +828,7 @@ fn read_pack_header(pack: &mut dyn Read) -> std::result::Result<PackHeader, Reje
                 return Err(Rejected {
                     reason: "eof before pack header was fully read".into(),
                     cause: Some(err.and_raise(message("Could not read the pack header"))),
+                    report: Vec::new(),
                 });
             }
         }
@@ -612,6 +862,18 @@ impl<R: Read> Read for Limited<R> {
         Ok(read)
     }
 }
+
+/// The error that makes `receive_pack()` return what the inspector refused with.
+#[derive(Debug)]
+struct Refused(Vec<u8>);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the received objects were refused")
+    }
+}
+
+impl std::error::Error for Refused {}
 
 /// Look up the bases to complete a thin pack and remember which ones were asked for.
 struct RecordingFind {
