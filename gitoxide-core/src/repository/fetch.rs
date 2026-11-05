@@ -37,7 +37,7 @@ pub(crate) mod function {
         repo: gix::Repository,
         mut progress: P,
         mut out: impl std::io::Write,
-        err: impl std::io::Write,
+        mut err: impl std::io::Write,
         Options {
             format,
             dry_run,
@@ -74,6 +74,9 @@ pub(crate) mod function {
             writeln!(out, "\t{:?}", res.handshake).or_error()?;
         }
 
+        if !res.object_warnings.is_empty() {
+            err.write_all(&res.object_warnings).ok();
+        }
         let ref_specs = remote.refspecs(gix::remote::Direction::Fetch);
         match res.status {
             Status::NoPackReceived {

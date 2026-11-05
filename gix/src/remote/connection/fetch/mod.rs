@@ -79,6 +79,9 @@ pub struct Outcome {
     pub handshake: gix_protocol::Handshake,
     /// The status of the operation to indicate what happened.
     pub status: Status,
+    /// What Git warns about the objects that were received, if they were checked as `fetch.fsckObjects` or `transfer.fsckObjects`
+    /// says and passed. One line per problem, with the prefix `warning: ` and a newline at the end of each.
+    pub object_warnings: gix_object::bstr::BString,
 }
 
 /// Additional types related to the outcome of a fetch operation.
@@ -175,7 +178,9 @@ where
 }
 
 mod config;
+mod object_check;
 mod receive_pack;
+pub use object_check::ObjectsRefused;
 ///
 #[path = "update_refs/mod.rs"]
 pub mod refs;

@@ -225,6 +225,12 @@ pub mod object;
 pub mod pathspec;
 pub mod reference;
 pub mod repository;
+#[cfg(any(
+    feature = "maintenance",
+    feature = "blocking-network-client",
+    feature = "async-network-client"
+))]
+pub(crate) mod scratch;
 #[cfg(feature = "attributes")]
 pub mod submodule;
 pub mod tag;
@@ -239,7 +245,11 @@ pub mod push;
 #[cfg(any(feature = "receive", feature = "upload"))]
 pub(crate) mod served;
 
-#[cfg(feature = "receive")]
+#[cfg(any(
+    feature = "receive",
+    feature = "blocking-network-client",
+    feature = "async-network-client"
+))]
 pub(crate) mod fsck;
 
 #[cfg(feature = "receive")]

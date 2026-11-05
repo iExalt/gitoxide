@@ -636,6 +636,8 @@ impl Cache {
     /// if it actually wants to use the home directory - we don't want to fail prematurely.
     #[cfg(any(
         feature = "receive",
+        feature = "blocking-network-client",
+        feature = "async-network-client",
         feature = "blocking-http-transport-reqwest",
         feature = "blocking-http-transport-curl"
     ))]

@@ -5,7 +5,9 @@ pub mod negotiate {
 }
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-pub use super::connection::fetch::{Outcome, Prepare, ProgressId, RefLogMessage, Status, outcome, refs};
+pub use super::connection::fetch::{
+    ObjectsRefused, Outcome, Prepare, ProgressId, RefLogMessage, Status, outcome, refs,
+};
 
 /// If `Yes`, don't really make changes but do as much as possible to get an idea of what would be done.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

@@ -214,3 +214,27 @@ fn a_pack_of_unreachable_objects_survives_gc_and_what_a_kill_leaves_is_pruned() 
     gix_testtools::git(dir.path(), &format!("cat-file -e {}", ids[0]))?;
     Ok(())
 }
+
+#[test]
+fn what_is_written_right_now_survives_pruning_with_an_expiry() -> TestResult {
+    // Fetches check their pack in a directory named like this before it is moved into place, and `write_objects_as_pack()` makes its pack
+    // in one. Maintenance that runs meanwhile prunes with `gc.pruneExpire`, which doesn't take what is being written.
+    let dir = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(dir.path(), "init -q --bare .")?;
+    let repo = gix::open_opts(dir.path(), crate::restricted())?;
+    let busy = repo.objects.store_ref().path().join("pack/tmp_pack_dir_1_2_3");
+    std::fs::create_dir(&busy)?;
+    std::fs::write(busy.join(".tmpAbCdEf"), b"half a pack")?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as i64;
+    let mut options = gix::maintenance::prune::Options::default();
+    options.expire = Some(gix_date::Time::new(now - 14 * 24 * 3600, 0));
+    repo.prune(options)?;
+    assert!(
+        busy.is_dir(),
+        "a directory that was just made isn't older than two weeks"
+    );
+    assert!(busy.join(".tmpAbCdEf").is_file());
+    Ok(())
+}

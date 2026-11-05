@@ -353,3 +353,42 @@ Differences from Git:
   both, also if objects aren't checked; a skip list that can't be read and a severity for a message that can't be lowered only matter
   when objects are checked, in both.
 * `.gitmodules` is parsed the way the checked-out file is read.
+
+## Object checking on fetch and clone
+
+`fetch.fsckObjects` or else `transfer.fsckObjects` makes a fetch or clone check every object of the pack it receives, as `git fetch`
+does by running `index-pack --strict`, whatever the number of objects, and refuse it if one fails. `fetch.fsck.<msg-id>` and
+`fetch.fsck.skipList` configure severities and objects to skip. The plain `fsck.<msg-id>`, `receive.fsck.<msg-id>` and the others don't
+apply. The pack is written to `objects/pack/tmp_pack_dir_*`, which is named like what `Repository::prune()` removes once it is older than
+the expiry (`gc.pruneExpire`, two weeks by default), checked there and moved into `objects/pack` as `.keep` file, pack and index only if it
+is accepted. The links are checked with the commits that the `shallow` file will have as the boundary, which the protocol computes once
+and the check and the file both use. Refusing a fetch fails it before the references and the `shallow` file are touched, with an error that
+carries what Git prints (`gix::remote::fetch::ObjectsRefused`). Warnings of an accepted pack are in `Outcome::object_warnings` and printed by the
+`gix` command.
+
+Ran, with Git 2.56 `git fetch` and `git clone` as the oracle (`gix/tests/gix/remote/fetch_fsck.rs`, SHA-1 and SHA-256): verdict, references,
+`shallow` file, objects, and the lines about objects are the same for flaws in commits, trees, tags and `.gitmodules` (checked and not);
+the settings and their order, overrides, warnings; a thin pack on a base with an old flaw (accepted); the same flawed tree sent again
+(refused); shallow fetches at depths 1 and 2; partial clones; and clones, which leave no directory if refused. The native fetch
+leaves no temporary file where Git leaves `tmp_pack_*`.
+
+Measured (one 8-core host, load about 2, release build, `transfer.fsckObjects` toggled): a bare clone of this repository over `file://`
+(222,226 objects, 369 MB):
+
+| | Git 2.56 `clone` | the native clone |
+| --- | --- | --- |
+| without checking | 10.3 s | 5.5 s |
+| with checking | 10.4 s (+1%) | 6.1 s (+10%) |
+
+The ratio is worse than Git's for the reason it is for receiving: the objects are decoded a second time to check them, where Git checks
+them as `index-pack` resolves them.
+
+Differences from Git:
+
+* A skip list that can't be read, and a severity that can't be applied, fail the fetch before the server is contacted, also when nothing
+  would be received. Git reads the skip list when it starts to check.
+* A clone of a local path is checked, where Git's local copy shortcut isn't. `file://` and `--no-local` are checked in both.
+* In a repository that is a partial clone (`remote.<name>.promisor` or `extensions.partialClone`) the objects are checked one by one,
+  with the same severities, and the objects they link to aren't required to be there, whichever remote is fetched from. Git does that
+  only for a fetch that sends a filter, which `gix` doesn't, and requires them for a `git fetch <url>` without one.
+* Where Git leaves the unchecked pack in `objects/pack/tmp_pack_*` when it refuses, nothing is left.
