@@ -80,6 +80,7 @@ max-control = [
     "prodash-render-line",
     "prodash/render-line-autoconfigure",
     "gix/revparse-regex",
+    "gix/upload",
 ]
 
 ## All the good stuff, with less fanciness for smaller binaries.
