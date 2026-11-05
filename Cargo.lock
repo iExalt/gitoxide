@@ -2044,6 +2044,7 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-testtools",
+ "gix-validate",
 ]
 
 [[package]]
