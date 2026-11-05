@@ -571,3 +571,32 @@ fn gitmodules_that_are_too_large_are_never_parsed_regardless_of_the_order() -> T
     assert_eq!(ids(&out), large);
     Ok(())
 }
+
+#[test]
+fn what_is_linked_to_can_be_left_out_if_asked_not_to_look_for_it() -> TestResult {
+    // A commit whose tree wasn't received, as it is when a remote leaves out objects on purpose.
+    let tree_id = id_of(Kind::Tree, &tree(&[]));
+    let commit = format!("tree {tree_id}\nauthor {IDENT}\ncommitter {IDENT}\n\nm\n").into_bytes();
+    let commit_id = id_of(Kind::Commit, &commit);
+    for (checker, expect_found_missing) in [
+        (Checker::new(Options::strict(), hash()), true),
+        (Checker::new(Options::strict(), hash()).without_links(), false),
+    ] {
+        let mut checker = checker;
+        let failed = checker.check(
+            &commit_id,
+            Kind::Commit,
+            commit.len() as u64,
+            Some(&commit),
+            &mut Vec::new(),
+        )?;
+        assert!(!failed, "the commit itself is fine");
+        let result = checker.finish(&Db::default(), &mut Vec::new());
+        assert_eq!(
+            result.is_err(),
+            expect_found_missing,
+            "a missing tree is only noticed if links are looked at: {result:?}"
+        );
+    }
+    Ok(())
+}
