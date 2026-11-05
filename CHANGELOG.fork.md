@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.2.0...gitoxide-fork-v0.3.0) (2026-11-05)
+
+
+### Features
+
+* **gix:** write a set of objects as one pack with `Repository::write_objects_as_pack()` ([acd27bf](https://github.com/iExalt/gitoxide/commit/acd27bf75541aa2062c102b730af7cd78eb8fb4b))
+
+
+### Bug fixes
+
+* **gix:** change references inside a quarantine environment when the repository ignores the environment ([2e7c3c0](https://github.com/iExalt/gitoxide/commit/2e7c3c05e5978ad80a3bd9b76540ba178e083e96))
+
 ## [0.2.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.1.0...gitoxide-fork-v0.2.0) (2026-11-05)
 
 
