@@ -196,6 +196,7 @@ pub fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
 ///
 /// This does *not* take `GIX_TEST_FIXTURE_HASH` into account, so it does not map SHA-1 hashes to
 /// SHA-256 hashes. Use this for tests that don't need a mapping.
+#[cfg(feature = "revision")]
 pub fn hex_to_id_sha1_only(hex: &str) -> gix_hash::ObjectId {
     gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
 }

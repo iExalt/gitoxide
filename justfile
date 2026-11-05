@@ -42,6 +42,8 @@ clippy *clippy-args:
     cargo clippy --workspace --no-default-features --features small -- {{ clippy-args }}
     cargo clippy --workspace --no-default-features --features max-pure -- {{ clippy-args }}
     cargo clippy --workspace --no-default-features --features lean-async --tests -- {{ clippy-args }}
+    cargo clippy -p gix --no-default-features --features sha1,sha256,receive,upload,blocking-network-client,parallel --lib --tests -- {{ clippy-args }}
+    cargo clippy -p gix --no-default-features --features sha1,upload --lib --tests -- {{ clippy-args }}
 
 # Apply Clippy fixes to all crates, then format
 [group('Development')]
@@ -50,6 +52,8 @@ clippy-fix:
     cargo clippy --fix --allow-dirty --workspace --no-default-features --features small
     cargo clippy --fix --allow-dirty --workspace --no-default-features --features max-pure
     cargo clippy --fix --allow-dirty --workspace --no-default-features --features lean-async --tests
+    cargo clippy --fix --allow-dirty -p gix --no-default-features --features sha1,sha256,receive,upload,blocking-network-client,parallel --lib --tests
+    cargo clippy --fix --allow-dirty -p gix --no-default-features --features sha1,upload --lib --tests
     cargo fmt --all
 
 # Build all code in suitable configurations
