@@ -38,6 +38,9 @@ pub struct Entry {
 pub mod entry;
 
 ///
+pub mod delta;
+
+///
 pub mod bytes;
 
 pub mod missing;

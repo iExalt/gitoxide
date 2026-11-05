@@ -160,6 +160,32 @@ impl output::Entry {
         })
     }
 
+    /// Create a new instance for the object `id` that is stored as `delta`, with the instructions as created by
+    /// [`delta::create::create()`](crate::data::output::delta::create::create()), which are deflated with `compression`.
+    ///
+    /// The delta is against the entry with the index `base_index` into the entries that are written, which has to be written
+    /// before this one.
+    pub fn from_delta(
+        id: ObjectId,
+        base_index: usize,
+        delta: &[u8],
+        compression: gix_zlib::Compression,
+    ) -> Result<Self> {
+        let mut out = gix_zlib::stream::deflate::Write::new(Vec::new(), compression);
+        out.write_all(delta)
+            .or_raise(|| message("Failed to compress pack entry"))?;
+        out.flush()
+            .or_raise(|| message("Failed to finish compressing pack entry"))?;
+        Ok(output::Entry {
+            id,
+            kind: Kind::DeltaRef {
+                object_index: base_index,
+            },
+            decompressed_size: delta.len(),
+            compressed_data: out.into_inner(),
+        })
+    }
+
     /// Transform ourselves into a pack entry header which can be written into a pack of `version`.
     ///
     /// `index_to_pack(object_index) -> pack_offset` is a function to convert the base object's index into
