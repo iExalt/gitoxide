@@ -164,7 +164,12 @@ impl Repository {
                 }
             }
             // `HEAD`, resolved if it is symbolic, as a branch that doesn't exist yet leaves nothing to keep.
-            if let Some(head) = store.try_find_resolved("HEAD")?
+            let head = match store.try_find_resolved("HEAD") {
+                Ok(head) => head,
+                Err(err) if err.is_not_found() => None,
+                Err(err) => return Err(err),
+            };
+            if let Some(head) = head
                 && let Some(object_id) = head.target.try_id()
             {
                 roots.push(Root {
