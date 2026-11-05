@@ -3,6 +3,7 @@
 use std::fmt::Write;
 
 use gix::maintenance::reflog::Options;
+use gix_hash::Kind;
 use gix_testtools::{Creation, TestResult};
 
 fn formats() -> Vec<&'static str> {
@@ -13,12 +14,23 @@ fn formats() -> Vec<&'static str> {
     formats
 }
 
-fn fixture(format: &'static str) -> TestResult<gix_testtools::tempfile::TempDir> {
+fn kinds() -> impl Iterator<Item = Kind> {
+    [Kind::Sha1, Kind::Sha256]
+        .into_iter()
+        .filter(|kind| *kind == Kind::Sha1 || cfg!(feature = "sha256"))
+}
+
+fn fixture_of(format: &'static str, kind: Kind) -> TestResult<gix_testtools::tempfile::TempDir> {
     Ok(gix_testtools::scripted_fixture_writable_with_args(
         "make_reflog_expire_repo.sh",
-        [format],
+        [format.to_owned(), kind.to_string()],
         Creation::Execute,
     )?)
+}
+
+/// The fixture with the hash that is all that the tests that don't compare entries with Git's need.
+fn fixture(format: &'static str) -> TestResult<gix_testtools::tempfile::TempDir> {
+    fixture_of(format, Kind::Sha1)
 }
 
 /// Every reflog of the repository and its linked worktree with the subject of each entry, as Git shows it. The fixture is created
@@ -45,9 +57,9 @@ fn reflogs(dir: &std::path::Path) -> TestResult<String> {
 
 #[test]
 fn with_the_ages_set_what_remains_is_what_git_keeps() -> TestResult {
-    for format in formats() {
-        let git = fixture(format)?;
-        let native = fixture(format)?;
+    for (kind, format) in kinds().flat_map(|kind| formats().into_iter().map(move |format| (kind, format))) {
+        let git = fixture_of(format, kind)?;
+        let native = fixture_of(format, kind)?;
         gix_testtools::git(git.path().join("repo"), "reflog expire --all")?;
         let before = reflogs(native.path())?;
         let repo = gix::open_opts(native.path().join("repo"), crate::restricted())?;
@@ -56,14 +68,14 @@ fn with_the_ages_set_what_remains_is_what_git_keeps() -> TestResult {
         let (expected, actual) = (reflogs(git.path())?, reflogs(native.path())?);
         assert_ne!(
             before, actual,
-            "{format}: entries were removed, or the fixture is wrong"
+            "{kind} {format}: entries were removed, or the fixture is wrong"
         );
         assert_eq!(
             actual, expected,
-            "{format}: the same entries remain, with the ages configured so that Git's defaults don't matter: {outcome:?}"
+            "{kind} {format}: the same entries remain, with the ages configured so that Git's defaults don't matter: {outcome:?}"
         );
-        assert!(outcome.removed > 0 && outcome.kept > 0, "{format}: {outcome:?}");
-        assert!(outcome.failed.is_empty(), "{format}: {outcome:?}");
+        assert!(outcome.removed > 0 && outcome.kept > 0, "{kind} {format}: {outcome:?}");
+        assert!(outcome.failed.is_empty(), "{kind} {format}: {outcome:?}");
     }
     Ok(())
 }
