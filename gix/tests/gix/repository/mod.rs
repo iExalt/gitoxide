@@ -36,6 +36,8 @@ mod ref_storage;
 mod reference;
 #[cfg(feature = "hook")]
 mod reference_hook;
+#[cfg(feature = "maintenance")]
+mod reflog_expire;
 mod remote;
 mod shallow;
 mod state;
