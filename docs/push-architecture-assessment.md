@@ -265,7 +265,7 @@ and every hook inherits `GIT_DIR` (`setup.c:1102`).
   the real object directory appended to `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
   `GIT_QUARANTINE_PATH`) reaches the connectivity check, `pre-receive` and the pack
   processors (`tmp-objdir.c:176-180`; `builtin/receive-pack.c:945`, `:2050`).
-- Migration order: an unconditional flush of a scratch file as a durability barrier (not
+- Migration order: an unconditional flush of a scratch file in the quarantine directory as a durability barrier (not
   gated by `core.fsync` components; `object-file.c:1259-1294`, `write-or-die.c:58-76`),
   then per-file rename or link: loose objects, then packs in the order `.keep`, `.pack`,
   `.rev`, `.idx` (`tmp-objdir.c:192-205`, `:256-312`). Migration is not atomic; a crash
@@ -497,7 +497,7 @@ backends: unset means off in bare and on in non-bare repositories
 | Ref publication | Rename of lock file; no directory flush | Rename of `tables.list.lock`; no directory flush | No |
 | Reflog | Append, never flushed | Part of the table; flushed only as above | No |
 | `packed-refs` / list file | Tempfile flushed if `reference` enabled, then renamed | `tables.list.lock` flushed if `reference` enabled, then renamed | No |
-| Objects from a push | Barrier flush of a scratch file before migration, unconditional (`object-file.c:1259-1294`); packs and derived metadata flushed by default; the default component set excludes loose objects, but pushes under the unpack limit run `unpack-objects`, which starts its own object transaction inside the quarantine (`builtin/unpack-objects.c:605`); with the defaults, no per-object flush happens, only the barrier (ran: [measured behaviour](push-durability-evidence.md)) | Same | Barrier yes; loose objects: no, except with the `loose-object` component or `core.fsyncObjectFiles`; batching needs `loose-object` as well |
+| Objects from a push | Barrier flush of a scratch file in the quarantine before migration, unconditional (`object-file.c:1259-1294`); packs and derived metadata flushed by default; the default component set excludes loose objects, but pushes under the unpack limit run `unpack-objects`, which starts its own object transaction inside the quarantine (`builtin/unpack-objects.c:605`); with the defaults, no per-object flush happens, only the barrier (ran: [measured behaviour](push-durability-evidence.md)) | Same | Barrier yes; loose objects: no, except with the `loose-object` component or `core.fsyncObjectFiles`; batching needs `loose-object` as well |
 
 The plan's statement that objects are flushed "no earlier or later" than `core.fsync`
 requires does not hold for receive-pack: the migration barrier ignores the selected components (it still follows `core.fsyncMethod`), and a
