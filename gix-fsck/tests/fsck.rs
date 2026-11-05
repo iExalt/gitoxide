@@ -52,3 +52,5 @@ pub fn hex_to_id(hex: &str) -> ObjectId {
 }
 
 mod connectivity;
+mod message;
+mod options;
