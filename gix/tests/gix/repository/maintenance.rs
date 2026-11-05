@@ -119,3 +119,14 @@ fn objects_behind_references_must_exist_but_those_behind_reflogs_may_be_missing(
     }
     Ok(())
 }
+
+#[test]
+fn a_branch_that_isnt_born_yet_leaves_nothing_to_keep() -> TestResult {
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let repo = gix::init(dir.path())?;
+    assert!(
+        repo.reachability_roots(Options::default())?.is_empty(),
+        "`HEAD` points to a branch that doesn't exist yet, which is no reason to fail and keeps nothing"
+    );
+    Ok(())
+}
