@@ -123,6 +123,8 @@ pub struct Checker {
     /// Objects that are linked to by what was seen, along with the kind they must have, but weren't seen yet.
     pending: HashMap<ObjectId, Kind>,
     blobs: blob::Found,
+    /// Look at blobs only when the check is [finished](Checker::finish()).
+    defer_blobs: bool,
 }
 
 impl Checker {
@@ -135,7 +137,15 @@ impl Checker {
             seen: HashMap::default(),
             pending: HashMap::default(),
             blobs: Default::default(),
+            defer_blobs: false,
         }
+    }
+
+    /// Check the blobs that need a look at their contents only in [`finish()`](Checker::finish()), by reading them from there,
+    /// even if they are passed to [`check()`](Checker::check()), which is what `git unpack-objects` does.
+    pub fn with_deferred_blob_checks(mut self) -> Self {
+        self.defer_blobs = true;
+        self
     }
 
     /// The options the checker was created with.
@@ -156,7 +166,7 @@ impl Checker {
     ///
     /// If a tree that mentions the blob comes after it, it will be [checked in `finish()`](Checker::finish()).
     pub fn needs_blob_content(&self, id: &oid, size: u64) -> bool {
-        self.blobs.needs_content(&self.options, id, size)
+        !self.defer_blobs && self.blobs.needs_content(&self.options, id, size)
     }
 
     /// Check the object `id` of `kind` with `size` bytes whose content is `data`, and append everything noteworthy to `out`
@@ -183,6 +193,7 @@ impl Checker {
         let strict = self.options.is_strict();
         let mut targets: Vec<(ObjectId, Kind)> = Vec::new();
         let failed = match kind {
+            Kind::Blob if self.defer_blobs => false,
             Kind::Blob => self.blobs.check(&self.options, &id, size, data, out),
             Kind::Commit => {
                 let data = data.unwrap_or_default();
