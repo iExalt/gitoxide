@@ -204,10 +204,38 @@ same. These differences remain, for the network phase to decide about:
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
-unsupported: a `push-to-checkout` hook, `updateInstead`, signed pushes, `proc-receive`, shallow and partial repositories,
+unsupported: a `push-to-checkout` hook, `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, shallow and partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.
+
+### `updateInstead`
+
+`gix/tests/gix/receive/update_instead.rs` pushes to a branch that a work tree has checked out, with `receive.denyCurrentBranch=updateInstead`,
+and compares the report, the references, the index and every file of the work tree with what Git 2.56 does, in both hash kinds
+and both reference formats. Each row says what Git tells the client, so that none passes by failing for another reason. Git runs
+`update-index --refresh`, `diff-files`, `diff-index --cached` and `read-tree -u -m` for it, after the `update` hook and before the
+reference is queued. The receiver does what they do without running them, and has the same outcome for what is tested: changed,
+staged, intent-to-add, deleted and unmerged paths, untracked files in the way, a branch that doesn't exist yet, linked work
+trees, a locked index, submodules, `core.filemode`, `core.symlinks`, line endings, a version 4 index, and a work tree that is
+updated although a later command of an atomic push fails. What differs:
+
+| Case | Git | The receiver |
+| --- | --- | --- |
+| An index entry marked skip-worktree or assume-unchanged, `core.sparseCheckout`, `core.ignoreCase`, `core.precomposeUnicode`, `submodule.recurse`, a file system monitor, or a smudge or process filter | Takes them into account | Declines the push, or refuses to receive if the setting is known up front |
+| A tree with one path twice, as a file and as a directory, or out of order | Goes ahead | Declines, as an index can't represent it. Paths that `verify_path()` refuses, like `.git` in any case or `..`, are declined by both |
+| A namespace | Looks the work tree up by the name without the namespace | Refuses to receive |
+| A push to a symbolic reference that leads to the checked out branch | Looks for the work tree by the pushed name, finds none, and leaves the index and files behind the moved branch | Follows the reference, as its deny rules do, and updates the work tree |
+| A checked out branch while a rebase or bisect is in progress | Checks the new commit out into the work tree in the middle of it | Refuses with `Could not update working tree to new HEAD`, as `HEAD` isn't at the branch. No test covers this |
+| What Git prints on the standard error of the receiver, like the file that is in the way | Reaches the pushing user's terminal over `file://` and `ssh` | Is a diagnostic, which `NativeLocal` doesn't forward to anything |
+| What the four commands print | Standard error of the receiver | Diagnostics of the receiver only, the client sees the reason of `ng` as with Git |
+| An index that was refreshed before the work tree was found to differ | Writes the refreshed index | Leaves the index alone |
+| The cache tree of the index | Primed by `read-tree` | Not written, as no extensions are |
+| Version 4 index | Keeps the version | Writes version 2 or 3 |
+| A filter that expands `$Id$` | `$Id: <hex> $` | `$Id: <hex>$`, as `gix-filter` does everywhere |
+
+The work tree is not rolled back if a later command of the push fails, which is what Git does, as it updates the work tree when
+its command is processed. Untracked files that are ignored don't stop the update and are replaced, like in Git.
 
 ## Maintenance
 

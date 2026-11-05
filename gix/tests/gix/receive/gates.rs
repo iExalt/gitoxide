@@ -26,10 +26,50 @@ fn an_unconfigured_repository_can_receive() -> TestResult {
 }
 
 #[test]
+fn update_instead_is_accepted_and_refused_where_the_work_tree_would_need_more_than_is_supported() -> TestResult {
+    let (dir, _repo) = bare()?;
+    open(dir.path(), &["receive.denyCurrentBranch=updateInstead"])?
+        .receive()
+        .expect("updateInstead is supported, as is a repository that has no work tree to update");
+    for (setting, needle) in [
+        ("core.sparseCheckout=true", "sparse checkouts"),
+        ("core.ignoreCase=true", "case-insensitive"),
+        ("core.precomposeUnicode=true", "precomposed unicode"),
+        ("submodule.recurse=true", "submodules"),
+        ("core.fsmonitor=somehook", "file system monitor"),
+        ("filter.lfs.smudge=lfs smudge", "filter drivers"),
+        ("filter.other.process=run", "filter drivers"),
+    ] {
+        let err = open(dir.path(), &["receive.denyCurrentBranch=updateInstead", setting])?
+            .receive()
+            .err()
+            .unwrap_or_else(|| panic!("{setting} has to be refused with updateInstead"));
+        assert!(
+            err.is_unsupported(),
+            "{setting}: callers can tell that they have to do this differently: {err}"
+        );
+        assert!(
+            err.to_string().contains(needle),
+            "{setting}: the refusal names what is refused: {err}"
+        );
+        open(dir.path(), &[setting])?
+            .receive()
+            .unwrap_or_else(|err| panic!("{setting} alone is fine as nothing updates the work tree: {err}"));
+    }
+    let mut namespaced = open(dir.path(), &["receive.denyCurrentBranch=updateInstead"])?;
+    namespaced.set_namespace("ns")?;
+    let err = namespaced
+        .receive()
+        .err()
+        .expect("a namespace is refused with updateInstead");
+    assert!(err.is_unsupported() && err.to_string().contains("namespace"), "{err}");
+    Ok(())
+}
+
+#[test]
 fn settings_that_change_what_a_push_does_are_refused() -> TestResult {
     let (dir, _repo) = bare()?;
     for (setting, needle) in [
-        ("receive.denyCurrentBranch=updateInstead", "updateInstead"),
         ("receive.certNonceSeed=seed", "receive.certNonceSeed"),
         ("receive.procReceiveRefs=refs/for", "receive.procReceiveRefs"),
         ("transfer.advertiseSID=true", "transfer.advertiseSID"),

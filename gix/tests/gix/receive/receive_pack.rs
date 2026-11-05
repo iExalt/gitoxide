@@ -202,6 +202,8 @@ pub(super) struct Push {
     /// `GIT_NAMESPACE`, and the receiver by setting it, so the remote remembers it in `test-namespace`.
     pub(super) namespace: Option<&'static str>,
     pub(super) prepare: Option<fn(remote: &Path, client: &Path) -> TestResult>,
+    /// Compare the index and the files of the work tree of a remote that has one, which is for what changes them.
+    pub(super) compare_work_tree: bool,
 }
 
 fn copy_dir(from: &Path, to: &Path) -> TestResult {
@@ -209,6 +211,12 @@ fn copy_dir(from: &Path, to: &Path) -> TestResult {
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
+        #[cfg(unix)]
+        if entry.file_type()?.is_symlink() {
+            // Links are part of what is compared, so they are copied as links and not as what they point to.
+            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, target)?;
+            continue;
+        }
         if entry.file_type()?.is_dir() {
             copy_dir(&entry.path(), &target)?;
         } else {
@@ -232,8 +240,18 @@ pub(super) struct World {
 
 impl World {
     pub(super) fn new() -> TestResult<Self> {
+        Self::from_fixture("make_receive_remotes.sh")
+    }
+
+    /// Remotes and a client that the fixture script `script` made, in a directory for each reference format.
+    pub(super) fn from_fixture(script: &str) -> TestResult<Self> {
+        // The writable fixtures of the test tools copy what links point to instead of the links, which are part of what is
+        // compared here, so the read-only fixture is copied by hand.
+        let fixture = gix_testtools::scripted_fixture_read_only(script)?;
+        let dir = gix_testtools::tempfile::tempdir()?;
+        copy_dir(&fixture, dir.path())?;
         Ok(World {
-            dir: gix_testtools::scripted_fixture_writable("make_receive_remotes.sh")?,
+            dir,
             kind: gix_testtools::object_hash_from_env().unwrap_or(gix_hash::Kind::Sha1),
         })
     }
@@ -447,6 +465,74 @@ pub(super) struct Result_ {
     pub(super) reftx: String,
     /// `true` if the receiver didn't get to report, which is what a refusal by the `reference-transaction` hook causes.
     pub(super) died: bool,
+    /// The index and the files of the work tree, if the remote has one, which is what `updateInstead` changes.
+    pub(super) work: Vec<String>,
+}
+
+/// The index and the files of the work tree of `remote`, if it has one, as far as `git status` agrees about them.
+pub(super) fn work_tree_state(remote: &Path) -> TestResult<Vec<String>> {
+    if !remote.join(".git").exists() {
+        return Ok(Vec::new());
+    }
+    let mut state = Vec::new();
+    for line in gix_testtools::git(remote, "ls-files --stage")?.lines() {
+        state.push(format!("index {line}"));
+    }
+    for line in gix_testtools::git(remote, "status --porcelain=v1 --ignored")?.lines() {
+        state.push(format!("status {line}"));
+    }
+    fn walk(root: &Path, dir: &Path, state: &mut Vec<String>) -> TestResult {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<Result<_, _>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            // What hooks record about how they ran is compared on its own, as it names the paths the receiver used.
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path == root.join(".git")
+                || (path.parent() == Some(root)
+                    && Path::new(&name)
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+                    && (name.starts_with("hook") || name == "reftx.log"))
+            {
+                continue;
+            }
+            let relative = path.strip_prefix(root)?.display().to_string();
+            let kind = entry.metadata()?;
+            if kind.is_symlink() {
+                state.push(format!("link {relative} -> {}", std::fs::read_link(&path)?.display()));
+            } else if kind.is_dir() {
+                state.push(format!("dir {relative}/"));
+                walk(root, &path, state)?;
+            } else {
+                #[cfg(unix)]
+                let executable = std::os::unix::fs::PermissionsExt::mode(&kind.permissions()) & 0o111 != 0;
+                #[cfg(not(unix))]
+                let executable = false;
+                state.push(format!(
+                    "file {relative} executable={executable} {:?}",
+                    String::from_utf8_lossy(&std::fs::read(&path)?)
+                ));
+            }
+        }
+        Ok(())
+    }
+    walk(remote, remote, &mut state)?;
+    // A linked work tree that a test made next to the remote is part of what a push may change.
+    let linked = remote.with_file_name(format!(
+        "{}-linked",
+        remote.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    if linked.join(".git").exists() {
+        for line in gix_testtools::git(&linked, "ls-files --stage")?.lines() {
+            state.push(format!("linked index {line}"));
+        }
+        for line in gix_testtools::git(&linked, "status --porcelain=v1 --ignored")?.lines() {
+            state.push(format!("linked status {line}"));
+        }
+        walk(&linked, &linked, &mut state)?;
+    }
+    Ok(state)
 }
 
 /// The number of packets on the side band that are empty, which is how a client is told to keep waiting.
@@ -521,6 +607,14 @@ fn state(repo: &Path) -> TestResult<(Vec<String>, Vec<String>, Vec<String>)> {
     refs.extend(lines(
         gix_testtools::git(repo, "log --walk-reflogs --all --format='reflog %gD %H %gs'").unwrap_or_default(),
     ));
+    // A linked work tree is named after its directory, which is named after what the test does.
+    for line in &mut refs {
+        if let Some(rest) = line.strip_prefix("reflog worktrees/")
+            && let Some((_, after)) = rest.split_once('/')
+        {
+            *line = format!("reflog worktrees/<linked>/{after}");
+        }
+    }
     refs.sort();
     let objects = lines(gix_testtools::git(
         repo,
@@ -589,6 +683,8 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool, died: bool) -> TestResu
             .replace(&remote_path, "<REMOTE>")
             // Git passes `.` where the fork passes the absolute path, and the quarantine's name is random.
             .replace("GIT_DIR=.\n", "GIT_DIR=<REMOTE>\n")
+            // A work tree has the Git directory below it, where Git calls hooks with `.` and the receiver with the whole path.
+            .replace("GIT_DIR=<REMOTE>/.git\n", "GIT_DIR=<REMOTE>\n")
     };
     // Hooks that run at the same time have recordings of their own, which are put together in the order of their names.
     let mut recordings: Vec<_> = std::fs::read_dir(remote)?
@@ -602,6 +698,7 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool, died: bool) -> TestResu
         died,
         reftx,
         keepalives: if side_band { count_keepalives(rest) } else { 0 },
+        work: work_tree_state(remote)?,
         hooks,
         report,
         messages: normalize_messages(&String::from_utf8_lossy(&messages)),
@@ -743,6 +840,21 @@ pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&st
             fork.objects, git.objects,
             "{format}/{label}: the same objects are there"
         );
+        if push.compare_work_tree {
+            let only_in = |these: &[String], others: &[String]| {
+                these
+                    .iter()
+                    .filter(|line| !others.contains(line))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            assert!(
+                fork.work == git.work,
+                "{format}/{label}: the index and the work tree are the same\nonly in the fork: {:#?}\nonly in Git: {:#?}",
+                only_in(&fork.work, &git.work),
+                only_in(&git.work, &fork.work)
+            );
+        }
         assert_eq!(
             fork.leftovers, git.leftovers,
             "{format}/{label}: nothing is left behind"
