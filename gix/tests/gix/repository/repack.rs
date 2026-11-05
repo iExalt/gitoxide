@@ -1076,11 +1076,10 @@ fn readers_and_writers_never_fail_while_packs_are_replaced_over_and_over() -> Te
                 }
             });
             let repo = shared.to_thread_local();
-            for _ in 0..15 {
-                repo.repack(Options::default(), &never())?;
-            }
+            // the others have to be told to stop whatever happens here, or this never ends
+            let result = (0..15).try_for_each(|_| repo.repack(Options::default(), &never()).map(drop));
             done.store(true, std::sync::atomic::Ordering::Relaxed);
-            Ok(())
+            Ok(result?)
         })?;
         let failures = failures.into_inner()?;
         assert!(
