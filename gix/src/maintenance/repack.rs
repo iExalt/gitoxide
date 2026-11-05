@@ -56,8 +56,8 @@
 //! * Objects in packs are never deltified, see above.
 //! * There are no bitmaps, multi-pack-indices or reverse indices written.
 //! * Loose copies of objects that a kept pack has stay, while Git's `prune-packed` removes them.
-//! * Files of a pack that has no index and no marker, which a crash in the middle of removing a pack leaves, are not cleaned up,
-//!   while those that a killed repack left are removed by the next run once its marker is found to be stale.
+//! * The index of a pack that is removed is renamed to end in `.idx.removing` first, which Git ignores, and the next run finishes
+//!   what a killed one left. A pack that has no index otherwise is left alone, like Git does, as somebody may be about to make one.
 //! * Setting the time of loose objects needs write access on Windows, where this was not tried.
 //! * Whether the process of an interrupted run is gone is only known on Linux, so elsewhere its marker blocks the next run until it is 12 hours old.
 //! * `gc.maxCruftSize` and `--max-cruft-size` aren't supported, so there is one cruft pack, which is what Git writes without them.
@@ -383,6 +383,37 @@ fn remove_stale_markers(pack_dir: &Path) -> Result<()> {
             )),
             None => {}
         }
+    }
+    finish_interrupted_removals(pack_dir)
+}
+
+/// The extension that the index of a pack has while the pack is removed, which is how a run that was killed in the middle of it is
+/// told from somebody who took the index of a pack away to make another, which Git leaves alone.
+const REMOVING_EXTENSION: &str = "idx.removing";
+
+/// Remove what is left of the packs that a killed run was removing, which are those that have an index under the name that says
+/// so. A pack of the same name that was put into place again since stays, as does one that has a `.keep` file, and only the name goes.
+fn finish_interrupted_removals(pack_dir: &Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(pack_dir) else {
+        return Ok(());
+    };
+    for removing in entries.flatten().map(|entry| entry.path()) {
+        let is_removing = removing
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".idx.removing"));
+        if !is_removing {
+            continue;
+        }
+        let stem = removing.with_extension("").with_extension("");
+        // A pack with an index is back, or somebody has the pack for something else: removing a pack that has a `.keep` file is
+        // never what this does.
+        if !stem.with_extension("idx").exists() && !stem.with_extension("keep").exists() {
+            for extension in ["pack", "mtimes", "rev", "bitmap", "promisor"] {
+                remove_if_there(&stem.with_extension(extension))?;
+            }
+        }
+        remove_if_there(&removing)?;
     }
     Ok(())
 }
@@ -785,11 +816,25 @@ impl Repository {
                 outcome.changed_packs.push(pack.with_extension("pack"));
                 continue;
             }
+            // The index goes first, under a name that says why it is gone, so that nobody finds a pack that is on its way out and
+            // the next run knows to finish if this is killed. That name is the last to go, once nothing of the pack is left.
             let mut failed = false;
-            // The index first, so that nobody finds a pack that is on its way out.
-            for extension in ["idx", "pack", "rev", "bitmap", "mtimes"] {
+            let removing = pack.with_extension(REMOVING_EXTENSION);
+            let steps = [
+                ("idx", Some(&removing)),
+                ("pack", None),
+                ("rev", None),
+                ("bitmap", None),
+                ("mtimes", None),
+                ("promisor", None),
+            ];
+            for (extension, rename_to) in steps {
                 let path = pack.with_extension(extension);
-                match std::fs::remove_file(&path) {
+                let result = match rename_to {
+                    Some(to) => std::fs::rename(&path, to),
+                    None => std::fs::remove_file(&path),
+                };
+                match result {
                     Ok(()) => {}
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                     Err(err) => {
@@ -801,6 +846,9 @@ impl Repository {
                         break;
                     }
                 }
+            }
+            if !failed {
+                std::fs::remove_file(&removing).ok();
             }
             if !failed {
                 let path = pack.with_extension("pack");
