@@ -152,7 +152,7 @@ mod checker;
 fn gitmodules_checks_match_unpack_objects() -> TestResult {
     let base = Base::new()?;
     let cases = gitmodules::cases(&base);
-    let problems = differences(&base, &cases, Driver::UnpackObjects, &|_| Compare::WithoutFatal)?;
+    let problems = differences(&base, &cases, Driver::UnpackObjects, &|_| Compare::Full)?;
     assert_no_differences(problems, cases.len());
     Ok(())
 }

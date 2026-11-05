@@ -11,7 +11,7 @@ use std::{
 };
 
 use gix_error::TestResult;
-use gix_fsck::{Checker, Diagnostic, Options, Refusal, Severity};
+use gix_fsck::{Options, Program, Transfer};
 use gix_hash::ObjectId;
 use gix_object::{Data, Find, FindHeader, Header, Kind};
 
@@ -258,32 +258,6 @@ pub fn git_observed(base: &Base, worker: &Path, scratch: &Path, case: &Case, dri
 }
 
 /// Git replaces control characters other than tabs and newlines by question marks when it prints.
-fn printable(line: String) -> String {
-    line.chars()
-        .map(|c| {
-            if c.is_control() && c != '\t' && c != '\n' {
-                '?'
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-fn render(diagnostic: &Diagnostic) -> String {
-    match diagnostic {
-        Diagnostic::Note(text) => format!("error: {text}"),
-        Diagnostic::Report(report) => format!(
-            "{}: {report}",
-            if report.severity == Severity::Error {
-                "error"
-            } else {
-                "warning"
-            }
-        ),
-    }
-}
-
 /// The objects of the pack, and what the repository has.
 struct Overlay<'a> {
     pack: HashMap<ObjectId, (Kind, Vec<u8>)>,
@@ -321,66 +295,38 @@ impl FindHeader for Overlay<'_> {
 
 /// What the checker has to say about `case`, phrased as `unpack-objects` does.
 pub fn checker_observed(odb: &gix_odb::Handle, options: Options, case: &Case, driver: Driver) -> Observed {
-    let mut checker = Checker::new(options, gix_testtools::object_hash());
     let objects = case.objects();
     let pack = objects
         .iter()
         .map(|(kind, data)| (id_of(*kind, data), (*kind, data.to_vec())))
         .collect();
     let overlay = Overlay { pack, odb };
-    let mut lines = Vec::new();
-    let (link_error, check_failed) = match driver {
-        Driver::UnpackObjects => ("fatal: object of unexpected type", "fatal: fsck error in packed object"),
-        Driver::IndexPack => (
-            "fatal: did not receive expected object",
-            "fatal: fsck error in packed object",
-        ),
-    };
-    let mut accepted = false;
-    'objects: {
-        for (kind, data) in &objects {
-            let id = id_of(*kind, data);
-            let content = (*kind != Kind::Blob || checker.needs_blob_content(&id, data.len() as u64)).then_some(*data);
-            let mut out = Vec::new();
-            let result = checker.check(&id, *kind, data.len() as u64, content, &mut out);
-            lines.extend(out.iter().map(render));
-            match result {
-                Err(Refusal::Unparsable { kind, detail, .. }) => {
-                    lines.extend(detail.map(|detail| format!("error: {detail}")));
-                    lines.push(format!("fatal: invalid {kind}"));
-                    break 'objects;
-                }
-                Err(refusal) => {
-                    lines.push(format!("fatal: {refusal}"));
-                    break 'objects;
-                }
-                Ok(true) => {
-                    lines.push(check_failed.into());
-                    break 'objects;
-                }
-                Ok(false) => {}
-            }
-        }
-        let mut deferred = Vec::new();
-        match checker.finish(&overlay, &mut deferred) {
-            Err(_) => lines.push(link_error.into()),
-            Ok(failed) => {
-                lines.extend(deferred.iter().map(render));
-                if failed {
-                    lines.push("fatal: fsck error in pack objects".into());
-                }
-                accepted = !failed;
-            }
+    let mut transfer = Transfer::new(
+        options,
+        gix_testtools::object_hash(),
+        match driver {
+            Driver::UnpackObjects => Program::UnpackObjects,
+            Driver::IndexPack => Program::IndexPack,
+        },
+    );
+    for (kind, data) in &objects {
+        let id = id_of(*kind, data);
+        let content = transfer.needs_content(&id, *kind, data.len() as u64).then_some(*data);
+        if transfer.object(&id, *kind, data.len() as u64, content).is_break() {
+            break;
         }
     }
+    let outcome = transfer.finish(&overlay);
     // Git's output is read by line, and what follows a newline in a message isn't one of the lines that are looked at.
-    let lines = lines
-        .into_iter()
-        .flat_map(|line| line.split('\n').map(ToOwned::to_owned).collect::<Vec<_>>())
+    let lines = String::from_utf8_lossy(&outcome.report)
+        .split('\n')
         .filter(|line| is_diagnostic_line(line))
-        .map(printable)
+        .map(ToOwned::to_owned)
         .collect();
-    Observed { accepted, lines }
+    Observed {
+        accepted: outcome.accepted,
+        lines,
+    }
 }
 
 fn is_diagnostic_line(line: &str) -> bool {
