@@ -211,6 +211,7 @@ impl crate::Repository {
                 repo: self,
                 side: gix_hook::Side::of_event("reference-transaction"),
                 namespace: None,
+                shallow_file: None,
             });
         }
         Ok(transaction
@@ -430,6 +431,8 @@ pub(crate) struct ReferenceTransactionHook<'repo> {
     pub(crate) side: gix_hook::Side,
     /// The namespace to tell the hook about with `GIT_NAMESPACE`, if it's to be told.
     pub(crate) namespace: Option<String>,
+    /// The file to tell the hook about with `GIT_SHALLOW_FILE`, if it's to be told.
+    pub(crate) shallow_file: Option<std::path::PathBuf>,
 }
 
 #[cfg(feature = "hook")]
@@ -466,6 +469,9 @@ impl gix_ref::transaction::observe::Observer for ReferenceTransactionHook<'_> {
             .and_then(|mut hook| {
                 if let Some(namespace) = &self.namespace {
                     hook = hook.env("GIT_NAMESPACE", namespace);
+                }
+                if let Some(file) = &self.shallow_file {
+                    hook = hook.env("GIT_SHALLOW_FILE", file);
                 }
                 hook.arg(event.state.as_str())
                     .stdin(gix_hook::Stdin::Bytes(input.into()))

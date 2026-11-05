@@ -41,6 +41,9 @@ pub struct Options {
     pub advertise_push_options: bool,
     /// `repack.useDeltaBaseOffset`.
     pub prefer_ofs_delta: bool,
+    /// `receive.shallowUpdate`: take the shallow boundary of a client that is shallow into the `shallow` file, instead of rejecting
+    /// what needs it.
+    pub shallow_update: bool,
     /// `receive.keepAlive`: how long a client is left waiting while hooks run, before it is told that all is well, if at all.
     pub keep_alive: Option<std::time::Duration>,
     /// `receive.autogc`: whether maintenance is due after objects were received, as Git runs `gc --auto` then.
@@ -117,11 +120,6 @@ impl Options {
                 bail!(unsupported(format!("{key} isn't supported, as {what} aren't")));
             }
         }
-        if boolean("receive.shallowUpdate", false)? {
-            bail!(unsupported(
-                "receive.shallowUpdate isn't supported, as writing the shallow file of the repository isn't"
-            ));
-        }
         refuse_unsupported_repository(repo, Role::Receive)?;
 
         let quarantine = gix_odb::quarantine::Options::from_config(
@@ -148,6 +146,7 @@ impl Options {
                     .map(std::time::Duration::from_secs)
             },
             auto_gc: boolean("receive.autogc", true)?,
+            shallow_update: boolean("receive.shallowUpdate", false)?,
             quarantine,
         })
     }
