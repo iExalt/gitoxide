@@ -76,7 +76,7 @@ impl Options {
     ///
     /// Fail if a setting has an invalid value or can't be honored, which is to refuse to receive instead of receiving in a
     /// way that differs from what the configuration says. That's the case if there is a `push-to-checkout` hook, push certificates,
-    /// `proc-receive`, `updateInstead`, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
+    /// `proc-receive`, `updateInstead` for a work tree that the receiver can't update faithfully, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
     /// can't handle, and if the repository is shallow.
     pub fn from_repository(repo: &Repository) -> Result<Self> {
         let config = repo.config_snapshot();
@@ -90,9 +90,7 @@ impl Options {
 
         let deny_current_branch = deny_action("receive.denyCurrentBranch")?;
         if deny_current_branch == DenyAction::UpdateInstead {
-            bail!(unsupported(
-                "receive.denyCurrentBranch=updateInstead isn't supported yet"
-            ));
+            reject_unsupported_update_instead(repo, &config)?;
         }
         for (key, what) in [
             ("receive.certNonceSeed", "signed pushes"),
@@ -149,6 +147,49 @@ impl Options {
             quarantine,
         })
     }
+}
+
+/// Refuse `receive.denyCurrentBranch=updateInstead` if the work tree would have to be updated in a way that isn't supported, as it
+/// would otherwise differ from what Git does silently: all of these are things that `read-tree` handles, or runs programs for.
+fn reject_unsupported_update_instead(repo: &Repository, config: &crate::config::Snapshot<'_>) -> Result<()> {
+    let refuse = |what: &str| -> Result<()> {
+        bail!(unsupported(format!(
+            "receive.denyCurrentBranch=updateInstead isn't supported with {what}"
+        )))
+    };
+    if cfg!(not(feature = "parallel")) {
+        return refuse(
+            "a build of gix without the `parallel` feature, as the object database has to be shared with the threads that check files out",
+        );
+    }
+    if repo.namespace().is_some() {
+        // Git looks for the work tree by the name without the namespace, and updates the one of a branch outside of it.
+        return refuse("a namespace");
+    }
+    for (key, what) in [
+        ("core.sparseCheckout", "sparse checkouts"),
+        ("core.ignoreCase", "a case-insensitive file system"),
+        ("core.precomposeUnicode", "precomposed unicode file names"),
+        ("submodule.recurse", "recursing into submodules"),
+    ] {
+        if config.boolean(key).unwrap_or(false) {
+            return refuse(what);
+        }
+    }
+    if config
+        .string("core.fsmonitor")
+        .is_some_and(|value| !value.is_empty() && !value.eq_ignore_ascii_case(b"false"))
+    {
+        return refuse("a file system monitor");
+    }
+    for section in config.plumbing().sections_by_name("filter").into_iter().flatten() {
+        if section.header().subsection_name().is_some()
+            && (section.body().value("smudge").is_some() || section.body().value("process").is_some())
+        {
+            return refuse("filter drivers, which are programs");
+        }
+    }
+    Ok(())
 }
 
 /// Hooks that a receiver would run, which can't be run yet. Refuse instead of ignoring them, as skipping a hook that guards

@@ -14,6 +14,7 @@ mod policy;
 pub use policy::{Level, Message};
 
 mod receiver;
+mod worktree;
 #[doc(hidden)]
 pub use receiver::Fault;
 pub use receiver::{Outcome, Receiver};

@@ -153,6 +153,9 @@ pub(super) trait World {
     fn head_name(&self) -> Option<BString>;
     /// Run the `update` hook for `command` and return `true` if it declines it. What it says is added to `messages`.
     fn update_hook(&self, command: &Command, messages: &mut Messages) -> bool;
+    /// Bring the work tree that has the branch `name` checked out up to the new value of `command`, which is what
+    /// `receive.denyCurrentBranch=updateInstead` is for, and return the reason to refuse the update with if that isn't possible.
+    fn update_worktree(&self, name: &BStr, command: &Command, messages: &mut Messages) -> Option<&'static str>;
     /// The name of the reference that `name` leads to if it is a symbolic reference, following all of them.
     fn alias_target(&self, name: &BStr) -> Option<BString>;
     /// Whether the object exists.
@@ -302,11 +305,14 @@ pub(super) fn check_update(
     let target = world.alias_target(name);
     let protected = target.as_ref().map_or(name, |target| target.as_bstr());
     let worktree = world.checked_out(name).or_else(|| world.checked_out(protected));
+    let mut update_worktree = false;
     if worktree.is_some_and(|worktree| !worktree.bare) {
         match policy.deny_current_branch {
             DenyAction::Ignore => {}
             DenyAction::Warn => messages.warning("updating the current branch"),
-            DenyAction::Refuse | DenyAction::Unconfigured | DenyAction::UpdateInstead => {
+            // Other checks come first, and the work tree changes after the hook agreed, and before the reference does.
+            DenyAction::UpdateInstead => update_worktree = true,
+            DenyAction::Refuse | DenyAction::Unconfigured => {
                 messages.error(format!("refusing to update checked out branch: {protected}"));
                 if policy.deny_current_branch == DenyAction::Unconfigured {
                     messages.error(UNCONFIGURED_DENY);
@@ -364,6 +370,10 @@ pub(super) fn check_update(
     if world.update_hook(command, messages) {
         messages.error(format!("hook declined to update {name}"));
         return Err("hook declined");
+    }
+
+    if update_worktree && let Some(reason) = world.update_worktree(protected, command, messages) {
+        return Err(reason);
     }
 
     if !deleting {
@@ -558,6 +568,10 @@ mod tests {
         declined_by_hook: Vec<&'static str>,
         /// The references that the update hook was asked about, in order.
         hook_asked: RefCell<Vec<String>>,
+        /// Why updating the work tree refuses, if it does.
+        worktree_refusal: Option<&'static str>,
+        /// The references for which the work tree was updated, in order, with what they are updated to.
+        worktree_updated: RefCell<Vec<(String, ObjectId)>>,
     }
 
     impl World for Fake {
@@ -577,6 +591,12 @@ mod tests {
                 messages.hook_output(b"said by the hook\n".to_vec());
             }
             declined
+        }
+        fn update_worktree(&self, name: &BStr, command: &Command, _: &mut Messages) -> Option<&'static str> {
+            self.worktree_updated
+                .borrow_mut()
+                .push((name.to_string(), command.new_id));
+            self.worktree_refusal
         }
         fn alias_target(&self, name: &BStr) -> Option<BString> {
             self.aliases
@@ -814,6 +834,88 @@ mod tests {
             check(&mut update("refs/heads/main"), &policy(), &bare),
             Ok(Plan::Update),
             "the branch of a bare repository can be updated"
+        );
+    }
+
+    #[test]
+    fn the_work_tree_follows_the_update_hook_and_precedes_the_new_value_with_update_instead() {
+        let update_instead = Policy {
+            deny_current_branch: DenyAction::UpdateInstead,
+            ..policy()
+        };
+        let mut world = Fake::default();
+        world.checked_out.push(("refs/heads/main", false));
+        assert_eq!(
+            check(&mut update("refs/heads/main"), &update_instead, &world),
+            Ok(Plan::Update)
+        );
+        assert_eq!(
+            *world.worktree_updated.borrow(),
+            [("refs/heads/main".to_owned(), id(2))],
+            "the work tree is brought up to the new value of the branch that is checked out"
+        );
+        assert_eq!(
+            *world.hook_asked.borrow(),
+            ["refs/heads/main"],
+            "after the update hook was asked"
+        );
+
+        world.declined_by_hook.push("refs/heads/main");
+        world.worktree_updated.borrow_mut().clear();
+        assert_eq!(
+            check(&mut update("refs/heads/main"), &update_instead, &world),
+            Err("hook declined")
+        );
+        assert!(
+            world.worktree_updated.borrow().is_empty(),
+            "a hook that declines keeps the work tree as it is"
+        );
+
+        let mut refusing = Fake::default();
+        refusing.checked_out.push(("refs/heads/main", false));
+        refusing.worktree_refusal = Some("Working directory has unstaged changes");
+        assert_eq!(
+            check(&mut update("refs/heads/main"), &update_instead, &refusing),
+            Err("Working directory has unstaged changes"),
+            "what the work tree says is the reason of the rejection"
+        );
+
+        let mut elsewhere = Fake::default();
+        elsewhere.checked_out.push(("refs/heads/other", false));
+        assert_eq!(
+            check(&mut update("refs/heads/main"), &update_instead, &elsewhere),
+            Ok(Plan::Update)
+        );
+        assert!(
+            elsewhere.worktree_updated.borrow().is_empty(),
+            "a branch that isn't checked out leaves the work tree alone"
+        );
+
+        let mut bare = Fake::default();
+        bare.checked_out.push(("refs/heads/main", true));
+        assert_eq!(
+            check(&mut update("refs/heads/main"), &update_instead, &bare),
+            Ok(Plan::Update)
+        );
+        assert!(
+            bare.worktree_updated.borrow().is_empty(),
+            "a bare repository has no work tree to update"
+        );
+
+        let mut ignoring = Fake::default();
+        ignoring.checked_out.push(("refs/heads/main", false));
+        let ignoring_delete = Policy {
+            deny_delete_current: DenyAction::Ignore,
+            ..update_instead
+        };
+        assert_eq!(
+            check(&mut delete("refs/heads/main"), &ignoring_delete, &ignoring),
+            Ok(Plan::Delete { lease: Some(id(1)) })
+        );
+        assert_eq!(
+            *ignoring.worktree_updated.borrow(),
+            [("refs/heads/main".to_owned(), null())],
+            "deleting the checked out branch asks for the work tree to become nothing, which Git then can't do"
         );
     }
 
