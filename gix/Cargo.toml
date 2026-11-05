@@ -148,7 +148,7 @@ interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
 index = ["dep:gix-index"]
 
 ## Find what is still wanted in a repository, as a first step of removing what isn't, with a top-level `maintenance` module.
-maintenance = ["index", "command", "gix-pack/generate", "gix-pack/streaming-input"]
+maintenance = ["index", "command", "hook", "gix-pack/generate", "gix-pack/streaming-input"]
 
 ## Support directory walks with Git-style annoations.
 dirwalk = ["dep:gix-dir", "attributes", "excludes"]

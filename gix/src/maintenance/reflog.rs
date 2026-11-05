@@ -331,6 +331,24 @@ impl Repository {
     /// Expire the entries of all reflogs, of all worktrees, like `git reflog expire --all` does, with the ages from the
     /// `gc.*` configuration. See the [module documentation](crate::maintenance::reflog) for what is different.
     pub fn expire_reflogs(&self, options: Options) -> Result<Outcome> {
+        self.expire_matching_reflogs(options, |_| true)
+    }
+
+    /// Return `true` if at least `limit` entries of the reflog of `HEAD` would expire, which is what
+    /// `maintenance.reflog-expire.auto` asks of the `reflog-expire` task. `0` is never and a negative `limit` always.
+    pub(super) fn reflog_expiry_is_due(&self, limit: i64) -> Result<bool> {
+        if limit <= 0 {
+            return Ok(limit < 0);
+        }
+        let options = Options {
+            dry_run: true,
+            ..Default::default()
+        };
+        let outcome = self.expire_matching_reflogs(options, |name| name == "HEAD")?;
+        Ok(i64::try_from(outcome.removed).unwrap_or(i64::MAX) >= limit)
+    }
+
+    fn expire_matching_reflogs(&self, options: Options, wanted: impl Fn(&BStr) -> bool) -> Result<Outcome> {
         let now_time = options.now.unwrap_or_else(gix_date::Time::now_local_or_utc);
         let now = now_time
             .to_zoned()
@@ -365,6 +383,9 @@ impl Repository {
         let mut cached_tips: Option<Vec<ObjectId>> = None;
         for name in store.reflog_names()? {
             let ref_name: &BStr = name.as_bstr();
+            if !wanted(ref_name) {
+                continue;
+            }
             let is_head = ref_name == "HEAD" || ref_name.ends_with(b"/HEAD") && ref_name.starts_with(b"worktrees/");
             let name_policies = policies.map(|defaults| configuration.policy(ref_name, defaults));
             let mut objects = Objects {
