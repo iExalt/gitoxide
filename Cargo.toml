@@ -294,6 +294,7 @@ gix-zlib = { opt-level = 3 }
 sha1dc = { opt-level = 3 }
 zlib-rs = { opt-level = 3 }
 sirocco = { opt-level = 3 }
+sha2 = { opt-level = 3 }
 adler32furious = { opt-level = 3 }
 crc32fast = { opt-level = 3 }
 
