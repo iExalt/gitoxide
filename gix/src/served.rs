@@ -127,7 +127,7 @@ pub(crate) enum Role {
 }
 
 /// Refuse what makes a repository unsafe or impossible to serve for `role` in the same way for both, which is to be partial,
-/// to be owned by somebody else, to declare extensions that aren't known to matter, and to be shallow.
+/// to be owned by somebody else, and to declare extensions that aren't known to matter. A shallow repository is refused for `Role::Upload` only.
 pub(crate) fn refuse_unsupported_repository(repo: &Repository, role: Role) -> Result<()> {
     let config = repo.config_snapshot();
     if config
@@ -181,14 +181,13 @@ pub(crate) fn refuse_unsupported_repository(repo: &Repository, role: Role) -> Re
             }
         }
     }
-    if repo
-        .is_shallow()
-        .or_raise(|| message("Could not read the shallow file"))?
+    // A receiver follows the shallow boundary of its repository, which a server of objects doesn't yet.
+    if role == Role::Upload
+        && repo
+            .is_shallow()
+            .or_raise(|| message("Could not read the shallow file"))?
     {
-        bail!(unsupported(match role {
-            Role::Receive => "receiving into a shallow repository isn't supported",
-            Role::Upload => "serving a shallow repository isn't supported yet",
-        }));
+        bail!(unsupported("serving a shallow repository isn't supported yet"));
     }
     Ok(())
 }

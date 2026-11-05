@@ -154,18 +154,24 @@ fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResu
 }
 
 #[test]
-fn shallow_repositories_are_refused_and_namespaces_are_not() -> TestResult {
+fn namespaces_are_accepted_and_shallow_repositories_are_received_into_but_not_served() -> TestResult {
     let (dir, _repo) = bare()?;
     let mut repo = open(dir.path(), &[])?;
     repo.set_namespace("ns")?;
     repo.receive().expect("namespaces are supported");
 
     std::fs::write(dir.path().join("shallow"), "1111111111111111111111111111111111111111\n")?;
-    let err = open(dir.path(), &[])?
-        .receive()
-        .err()
-        .expect("a shallow repository has a different notion of connected");
-    assert!(err.is_unsupported(), "shallow: {err}");
+    let repo = open(dir.path(), &[])?;
+    repo.receive()
+        .expect("what a shallow repository has is known from its shallow file, which receiving follows");
+    #[cfg(feature = "upload")]
+    {
+        let err = repo
+            .upload()
+            .err()
+            .expect("serving a shallow repository needs to tell the client about the boundary");
+        assert!(err.is_unsupported(), "shallow: {err}");
+    }
     Ok(())
 }
 

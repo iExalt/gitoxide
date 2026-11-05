@@ -193,6 +193,11 @@ same. These differences remain, for the network phase to decide about:
     The reference doesn't change in either, and the message for people is the same. The receiver reports `ng` with the reason.
     Because Git thinks that these commands went well, it also runs `post-receive` and `post-update` for them, which the
     receiver doesn't. The tests compare everything else by taking Git's `ok` for these, in rows that have no hooks.
+* A shallow repository is received into by advertising every entry of its `shallow` file, once and in order, whether it has the
+  commit or not, as Git does. Only those commits count as having no parents: a client that leaves out history because the
+  receiver advertised a reference that reaches it is told `missing necessary objects` when the receiver doesn't have what is
+  below its shallow commits, which is what Git does as well, and the commit-graph file isn't believed, which tells of parents
+  that a shallow repository doesn't have. A client that is shallow itself is refused for now.
 * The post-receive and post-update hooks are skipped for reference names that can't be represented on Windows, as in Git.
 * The `reference-transaction` hook runs in the Git directory with `GIT_DIR` set, like the other receive-side hooks, for the
   one transaction of an atomic push or the two of a push without atomicity, where deletions come first. A refusal in the
@@ -204,7 +209,7 @@ same. These differences remain, for the network phase to decide about:
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
-unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, shallow and partial repositories,
+unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, a client that is shallow, partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.
