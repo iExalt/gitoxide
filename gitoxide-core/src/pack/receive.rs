@@ -146,7 +146,7 @@ where
     let mut negotiate = Negotiate { refmap: &refmap };
     gix::protocol::fetch(
         &mut negotiate,
-        |read_pack, progress, should_interrupt| {
+        |read_pack, progress, should_interrupt, _shallow_boundary| {
             receive_pack_blocking(
                 directory,
                 refs_directory,
