@@ -7,6 +7,9 @@ pub use message::{MessageId, Severity};
 mod options;
 pub use options::{ConfigEntry, Options};
 
+mod check;
+pub use check::{Checker, Diagnostic, LinkError, Refusal, Report};
+
 use gix_error::Result;
 use std::collections::VecDeque;
 
