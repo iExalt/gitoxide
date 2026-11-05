@@ -83,7 +83,6 @@ impl super::Store {
     /// load a new index (if not yet loaded), and return true if one was indeed loaded (leading to a `state_id()` change) of the current index.
     /// Note that interacting with the slot-map is inherently racy and we have to deal with it, being conservative in what we even try to load
     /// as our index might already be out-of-date as we try to use it to learn what's next.
-    #[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
     fn load_next_index(&self, mut index: arc_swap::Guard<Arc<SlotMapIndex>>) -> bool {
         'retry_with_changed_index: loop {
             let previous_state_id = index.state_id();
@@ -93,7 +92,7 @@ impl super::Store {
                 let ongoing_operation = IncOnNewAndDecOnDrop::new(&index.num_indices_currently_being_loaded);
                 match index
                     .next_index_to_load
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                         (current != index.slot_indices.len()).then_some(current + 1)
                     }) {
                     Ok(slot_map_index) => {

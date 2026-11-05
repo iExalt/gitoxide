@@ -8,8 +8,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 version.workspace = true
-# Rust 1.91 is required by the interactive commit graph (`gix-tix`).
-rust-version = "1.91"
+rust-version = "1.99"
 default-run = "gix"
 include = ["/src/**/*", "/build.rs", "/LICENSE-*", "/README.md"]
 resolver = "2"
@@ -152,12 +151,12 @@ sha256 = ["gix/sha256", "gix-tix?/sha256"]
 ## The `small` preset leaves it out to stay small, and so can any other build.
 reftable = ["gix/reftable"]
 
-## Enable the interactive commit graph. This requires Rust 1.91 or newer.
+## Enable the interactive commit graph.
 tix = ["dep:gix-tix"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.
-## Objects are decompressed and compressed with `sirocco`, which requires Rust 1.89 or newer.
+## Objects are decompressed and compressed with `sirocco`.
 fast = ["gix/max-performance", "gix/comfort", "gix/zlib-sirocco"]
 
 ## Deprecated: identical to `fast`, as all zlib backends are now pure Rust.

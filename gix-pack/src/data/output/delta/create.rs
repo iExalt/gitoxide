@@ -48,7 +48,7 @@ impl Index {
         } else {
             0
         };
-        let bits = (usize::BITS - blocks.max(1).leading_zeros()).clamp(4, 28);
+        let bits = blocks.max(1).bit_width().clamp(4, 28);
         let shift = 32 - bits;
         let buckets = 1usize << bits;
         let mut counts = vec![0u32; buckets + 1];
