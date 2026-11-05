@@ -267,6 +267,7 @@ existing subscriptions is approved.
 | 11. Full native local receiver | The assessment's section 9.4 rows: the server-side protocol (advertisement, commands, certificates, options, report v1 and v2, sideband, keepalive); object ingestion (quarantine, unpack or keep, thin-pack fixing, migration with thread 5's barrier flush compared against its `receive-pack` flush golden, strict fsck with Git's message ids and skip list, size limits); policy and ref planning (deny rules, hidden refs, namespaces, aliased updates, atomic and batched execution with Git's rejection semantics, shallow updates, certificates through an external signer, reflogs); hooks (`pre-receive`, `update`, `post-receive`, `post-update`, `proc-receive`, `reference-transaction`); `updateInstead` and `push-to-checkout` without Git subprocesses; the native local transport for listing, fetch and receive in process, replacing the file transport's `git-*` spawning; and a receiver differential matrix against Git 2.56, both hashes and both ref formats. Runs in several phases | Threads 2, 3, 5, 7 and 9; the `reference-transaction` hook comes from thread 8 | None known | done: see the revision log |
 | 12. Native maintenance | Git-free maintenance for the consumer's "Maintenance" inventory row: honour disabled upkeep (`maintenance.auto`, `gc.auto` and their detach keys); bound pack, loose-object and reftable growth; reclaim eligible storage without losing reachable or in-flight data. Covers repacking and pack retirement, loose-object pruning with grace periods, `.keep` and cruft packs, reflog expiry and reflog roots, reftable stack compaction through `gix-reftable`, `packed-refs` packing, concurrent readers and writers, interrupted reclamation, and the `receive.autogc` seam thread 11 leaves. Quarantine and in-flight roots are closed with thread 11. Differential tests against Git 2.56's `gc`, `repack`, `prune` and `maintenance run`, both hashes and both ref formats. Starts with an audit that replaces the placeholder estimate | Threads 5, 6, 7 and 8; the combined closure with thread 11 | None known | done: see the revision log |
 | 13. Pack-size follow-ups | Close the pack-size gap that thread 12 measured against `git repack -a -d -f --window=10 --depth=50`: make the delta encoder of `gix-pack` make the choices of Git's `diff-delta.c` (same-base uncompressed deltas within 0.5% of Git's, both hashes, encoder runtime within 10%), and document and measure `zlib-sirocco` for the consumer (pack size, compression and decompression time, build time, tests on both hashes, the default-feature `check:msrv` gate), with an assessment of making it the default once the workspace MSRV allows. Tells thread 12 what changes in `gix-pack`'s delta code | Thread 12 (its `gix-pack` delta encoder and repack integration) | None known; the owner decides whether `zlib-sirocco` becomes a default | done |
+| 14. Cutover and release consumption | The last row of the work sequence: no-Git CLI and server journeys, with the programs of Git replaced on `PATH` by ones that record their use and fail; measured cost of the selected features in the consumer (build time, release size, dependency count, latency of the CLI) against a baseline taken before the migration; the platform, MSRV and QA checks; and consumption of one approved fork tag throughout. The consumer's changes live in its own repository and its own pull requests, so this repository records the fork's side and the evidence. A gap that needs a fork change goes to the overseer first, as it needs a release and the owner's approval of it | Threads 1–13 and an approved fork release | The owner approves the release tag the consumer pins, and the consumer's pull requests ask first | The work and its evidence are done, see the revision log; the final re-pin waits for the release with native object checking |
 
 Later threads (reftable ref backend, local consumer backend, repository push and fetch,
 network, receiver, maintenance, cutover) follow the assessment's section 9 rows and
@@ -278,7 +279,7 @@ sequencing; the overseer proposes each as its dependencies finish.
   and granted the overseer high autonomy for this run ("Grant for this session").
   Releases and tags still need the owner's approval naming them.
 - 2026-11-04: thread 1 delivered the [architecture assessment](push-architecture-assessment.md)
-  and stopped for the owner's decisions listed in its section 10. It ran in about 17 minutes
+  and stopped for the owner's decisions listed in its section 10. It ran in about 30 minutes
   of wall-clock by the sandbox clock against a 5–8 hour allowance, and found one defect
   independent of this plan (the fork opens reftable repositories with the files store).
 - 2026-11-04: thread 3 (hook runner) is done as `gix-hook` plus `gix::Repository::hook()`. The overseer added Git 2.56
@@ -318,7 +319,7 @@ sequencing; the overseer proposes each as its dependencies finish.
     dominates, while the main nextest run took 81 s. `mise run test` took 2 min 36 s and 2 min 59 s on the last two revisions at load 6, and 4 min 15 s
     at load 7 on an earlier one, against the 120 s budget; each includes compiling after an edit. Neither is comparable to the warm low-load baselines.
   - Edits were made in the anchor worktree on the laptop and copied to the station. Every build and test ran on the station.
-- 2026-11-05: thread 2 (client protocol and bounded packs) is done as `gix_protocol::push` and `gix_pack::data::output::missing`.
+- 2026-11-04: thread 2 (client protocol and bounded packs) is done as `gix_protocol::push` and `gix_pack::data::output::missing`.
   `push()` is blocking only, and needs a `Request` that was validated against what the server advertised. Its pack
   producer is a callback, and `missing::write_pack()` is the one to use. Tests run against real `git receive-pack` for SHA-1
   and SHA-256, with Git 2.43, 2.55 and 2.56. The limits are decisions for later threads:
@@ -699,3 +700,61 @@ sequencing; the overseer proposes each as its dependencies finish.
   - Runtimes on the shared 8-core build host, single runs at a load of 2 to 5: `mise run check` took 1,413 s and `check:thorough` 1,344 s after
     a change to a widely shared crate, as every dependent rebuilt, and 994 s, 1,045 s, 498 s, 498 s and 505 s warm for the last chunks of the thread
     (`gix` only, with its dependents); `check:thorough` is about 615 s warm. The budget of 12 minutes for the thorough check holds only warm.
+- 2026-11-05: thread 14 (cutover and release consumption) has delivered its work and evidence; the consumer's final re-pin waits for the release that adds native object checking, and the thread closes then. The consumer, a Rust command-line tool and server that keeps its
+  state in Git references, now runs on `gix` alone, pinned for now to the release tag `gitoxide-fork-v0.3.0`: opening and discovery, object and
+  commit writes, reference transactions, configuration, initialization, fetch, push, hooks and maintenance start no `git` program. Its own
+  repository holds the change and its pull requests; this entry records the fork's side and the evidence.
+  - Gaps the migration found in the fork, all closed before the tag: `Repository::write_objects_as_pack()`, which writes the commits of an
+    import as one pack (acd27bf75); reference changes inside a quarantine environment for a repository that ignores the environment
+    (2e7c3c05e); and the `gix` binary enabling neither `upload` nor `receive`, so `gix fetch` and `gix clone` from a path still tried to
+    start `git-upload-pack` (#108, merged after the tag; the consumer doesn't use the binary and needs no new release).
+  - No-Git proof: the consumer's tests run with `git`, `git-upload-pack` and `git-receive-pack` replaced on `PATH` by programs that fail
+    and record the call, a lint rejects process spawning in its sources, and its container image contains no Git. Two journeys in
+    `tests/journey/gix.sh` repeat the proof for the `gix` binary's fetch and clone from a local remote (#108).
+  - Cost, one 8-core host (load 0.3 to 6.5), the same recipe before the migration (c1b313c) and after it (920a91c; the later
+    commits are fixes), single runs except where a range is given:
+
+    | | before | after |
+    | --- | --- | --- |
+    | cold `mise run check` | 61.5 s | 85.3 s |
+    | warm `mise run check` | 4.8 to 5.1 s | 5.0 s (a run of 13 to 15 s turns up now and then in both) |
+    | `check` after editing the core crate | 7.9 s | 9.4 s |
+    | `check` after editing the CLI crate | 6.8 s | 7.7 s |
+    | cold release build | 43.3 s | 96.4 s |
+    | release build after editing the core crate | 18.7 s | 22.3 s |
+    | stripped release binary | 16.55 MB | 29.19 MB (+76%) |
+    | packages in `Cargo.lock` | 216 | 382 |
+    | duplicated crate versions, normal graph | 6 | 13 |
+
+    Latency of the CLI as shipped, median of 5 runs at 10 and 100 items: `add` 19 to 10 ms and 21 to 13 ms, `sync` 59 to 29 ms and
+    74 to 41 ms, `claim` 23 to 17 ms at 100 items; one operation, a join of a twin at 100 items, went from 129 to 136 ms. Starting
+    no process is what the faster rows owe to. The consumer's 60 s warm budget for `check` holds with a large margin; its cold
+    check was above 60 s before the migration and is still.
+  - Release size. The owner chose "LTO + 1 codegen unit only" (relayed by the overseer), with no `panic=abort` and no `opt-level=s`, as the
+    server must keep catching the panics of a task. Both kinds of LTO were measured on the second 8-core host with the web app embedded,
+    the same recipe for each (load 1 to 4): default 29.20 MB stripped, a cold release build of 97.9 s and 22.8 s after a core edit; thin
+    LTO 26.45 MB (−9%), 99.1 s and 53.6 s; fat LTO 24.23 MB (−17%), 162.4 s and 116.7 s. The latency of the CLI moved by a millisecond or
+    less (`sync` at 100 items 40, 39 and 37 ms). The consumer took thin LTO, as fat cost 1.6 times the cold build and 5 times the rebuild
+    for 8 points more. Not applied, from a scratch build without the web assets (ratios only): `panic=abort` with fat LTO −31%, `opt-level=s`
+    on top −50%, and the `curl` backend with `rustls` in place of `reqwest` with `ring` −11%.
+  - Fork checks at the tip of `dev` after #108 (9456acde0) on the second 8-core host: `mise run check:thorough` passed in 2,137 s on a
+    target directory that had never built this tip, so that figure is a cold one and no comparison with the 12-minute warm budget;
+    A second run on the now warm tree took 696 s, under the 12-minute budget and 68 s above the last warm figure of 628 s on that host (one run each, load 2.5 to 4 at the start). `mise run check:msrv` passed in 35 s, as the workspace MSRV now equals the toolchain and the build was
+    warm. CI of #108 passed all 14 jobs, including the MSRV job, the journeys and every lane of the feature matrix.
+  - Platforms: the Fork CI lanes are `linux-x86_64`. The consumer's journeys ran on Linux only. The location of the macOS credential
+    helper that the consumer points `gitoxide.credentials.execPath` at, and any Git-free run on macOS or Windows, are unverified, and a
+    machine without Git can't be made from a Mac here.
+  - Open: packs that fetch writes have mode `0600`, where Git's are `0444`.
+  - Parking lot from thread 11, refused at configuration time with an `Unsupported` error before anything is advertised (`gix/src/receive/options.rs`,
+    `gix-odb/src/quarantine.rs`, and [the evidence page](push-durability-evidence.md)): push certificates (`receive.certNonceSeed`),
+    `proc-receive` (`receive.procReceiveRefs`), and object checking on receive (`receive.fsckObjects`, `transfer.fsckObjects`). The
+    consumer's operations include none of them and its code sets none of those keys.
+  - Object checking is not a permanent limit. A local remote whose configuration, global included, sets `transfer.fsckObjects` or
+    `receive.fsckObjects` to true refuses every local push with `receive.fsckObjects and transfer.fsckObjects aren't supported, as received
+    objects can't be checked yet`, and the consumer reports that as a Git failure. Ran: a consumer `sync` against a local remote exits 4
+    with it, and against a `git://` remote it succeeds, as a server running Git does the checking. Also ran: a fetch from a local path with
+    `transfer.fsckObjects=true` works, and none of the three keys refuses anything on the fetch side. Read: the fork's fetch reads neither
+    `fetch.fsckObjects` nor `transfer.fsckObjects`, so received objects are not checked there, where Git would. The owner decided on native
+    checking for both sides ("Native checking, receive and fetch", relayed by the overseer on 2026-11-05), which a later thread is building. Its
+    estimate was 10 to 16 hours and 5 to 6 review rounds, a third of it the matrix against Git's `t1450` and `t5504` cases, and the
+    receive side alone 6 to 9 hours.
