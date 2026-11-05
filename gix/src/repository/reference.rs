@@ -210,6 +210,7 @@ impl crate::Repository {
             transaction = transaction.observer(ReferenceTransactionHook {
                 repo: self,
                 side: gix_hook::Side::of_event("reference-transaction"),
+                namespace: None,
             });
         }
         Ok(transaction
@@ -427,6 +428,8 @@ pub(crate) struct ReferenceTransactionHook<'repo> {
     pub(crate) repo: &'repo crate::Repository,
     /// The side of the hook, which decides where it runs and what it sees.
     pub(crate) side: gix_hook::Side,
+    /// The namespace to tell the hook about with `GIT_NAMESPACE`, if it's to be told.
+    pub(crate) namespace: Option<String>,
 }
 
 #[cfg(feature = "hook")]
@@ -457,11 +460,17 @@ impl gix_ref::transaction::observe::Observer for ReferenceTransactionHook<'_> {
             input.extend_from_slice(update.name.as_bstr());
             input.push(b'\n');
         }
-        let outcome = self.repo.hook_for("reference-transaction", self.side).and_then(|hook| {
-            hook.arg(event.state.as_str())
-                .stdin(gix_hook::Stdin::Bytes(input.into()))
-                .run()
-        });
+        let outcome = self
+            .repo
+            .hook_for("reference-transaction", self.side)
+            .and_then(|mut hook| {
+                if let Some(namespace) = &self.namespace {
+                    hook = hook.env("GIT_NAMESPACE", namespace);
+                }
+                hook.arg(event.state.as_str())
+                    .stdin(gix_hook::Stdin::Bytes(input.into()))
+                    .run()
+            });
         match outcome {
             Ok(outcome) if outcome.is_success() => Ok(()),
             _ if !can_refuse => Ok(()),
