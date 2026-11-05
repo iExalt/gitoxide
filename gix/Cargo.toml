@@ -115,6 +115,7 @@ sha1 = [
     "gix-pack/sha1",
     "gix-note?/sha1",
     "gix-hook?/sha1",
+    "gix-fsck?/sha1",
     "gix-worktree-stream?/sha1",
 ]
 
@@ -125,6 +126,7 @@ sha256 = [
     "gix-pack/sha256",
     "gix-note?/sha256",
     "gix-hook?/sha256",
+    "gix-fsck?/sha256",
     "gix-worktree-stream?/sha256",
 ]
 
@@ -248,7 +250,7 @@ blocking-network-client = [
 ## Serve fetches from repositories on the local machine like `git upload-pack` does with protocol version 2, without running Git and without network.
 upload = ["gix-protocol/blocking-server", "gix-pack/generate"]
 ## Receive pushes into repositories on the local machine like `git receive-pack` does, without running Git and without network, and run automatic maintenance after them like it does.
-receive = ["gix-protocol/blocking-server", "gix-odb/quarantine", "gix-pack/streaming-input", "hook", "command", "revision", "maintenance", "worktree-mutation"]
+receive = ["dep:gix-fsck", "gix-protocol/blocking-server", "gix-odb/quarantine", "gix-pack/streaming-input", "hook", "command", "revision", "maintenance", "worktree-mutation"]
 ## Stacks with `blocking-network-client` to provide support for HTTP/S using **curl**, and implies blocking networking as a whole, making the `https://` transport available.
 blocking-http-transport-curl = [
     "blocking-network-client",
@@ -444,6 +446,7 @@ gix-status = { path = "../gix-status", optional = true, features = [
 ] }
 gix-command = { path = "../gix-command", optional = true }
 gix-hook = { path = "../gix-hook", optional = true }
+gix-fsck = { path = "../gix-fsck", optional = true }
 
 gix-worktree-stream = { path = "../gix-worktree-stream", optional = true }
 gix-archive = { path = "../gix-archive", default-features = false, optional = true }

@@ -635,6 +635,7 @@ impl Cache {
     /// We never fail for here even if the permission is set to deny as we `gix-config` will fail later
     /// if it actually wants to use the home directory - we don't want to fail prematurely.
     #[cfg(any(
+        feature = "receive",
         feature = "blocking-http-transport-reqwest",
         feature = "blocking-http-transport-curl"
     ))]

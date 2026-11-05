@@ -50,6 +50,10 @@ pub struct Options {
     pub auto_gc: bool,
     /// How to store received objects.
     pub quarantine: gix_odb::quarantine::Options,
+    /// `receive.fsckObjects` or else `transfer.fsckObjects`, with `receive.fsck.<msg-id>` and `receive.fsck.skipList`: check all
+    /// received objects like `unpack-objects --strict` and `index-pack --strict` do, and refuse a push that has objects that
+    /// don't pass, or `None` to receive without checking them.
+    pub fsck: Option<gix_fsck::Options>,
 }
 
 fn parse_bool(key: &str, value: &str) -> Result<bool> {
@@ -79,8 +83,8 @@ impl Options {
     ///
     /// Fail if a setting has an invalid value or can't be honored, which is to refuse to receive instead of receiving in a
     /// way that differs from what the configuration says. That's the case if there are push certificates,
-    /// `proc-receive`, `updateInstead` for a work tree that the receiver can't update faithfully, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
-    /// can't handle.
+    /// `proc-receive`, `updateInstead` for a work tree that the receiver can't update faithfully, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
+    /// can't handle. A skip list for object checking that can't be read is a failure as well, but only if objects are checked.
     pub fn from_repository(repo: &Repository) -> Result<Self> {
         let config = repo.config_snapshot();
         let get = |key: &str| config.string(key).map(|value| value.to_string());
@@ -122,6 +126,7 @@ impl Options {
         }
         refuse_unsupported_repository(repo, Role::Receive)?;
 
+        let fsck = crate::fsck::Settings::from_repository(repo, "receive")?;
         let quarantine = gix_odb::quarantine::Options::from_config(
             repo.object_hash(),
             repo.config
@@ -148,6 +153,7 @@ impl Options {
             auto_gc: boolean("receive.autogc", true)?,
             shallow_update: boolean("receive.shallowUpdate", false)?,
             quarantine,
+            fsck: fsck.enabled.then_some(fsck.options),
         })
     }
 }

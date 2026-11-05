@@ -293,7 +293,6 @@ impl Options {
     /// Fail if the configuration contains an invalid value, or a setting that isn't supported:
     ///
     /// * `core.sharedRepository` other than `false`, `umask` or `0`
-    /// * `receive.fsckObjects` and `transfer.fsckObjects`, whichever takes effect, if `true`
     /// * `pack.indexVersion` other than `2`
     pub fn from_config(
         object_hash: gix_hash::Kind,
@@ -310,16 +309,6 @@ impl Options {
                     "core.sharedRepository={value} isn't supported as objects wouldn't get the permissions it asks for"
                 )));
             }
-        }
-        let fsck = ["receive.fsckObjects", "transfer.fsckObjects"]
-            .iter()
-            .find_map(|key| get(key).map(|value| parse_bool(key, &value)))
-            .transpose()?
-            .unwrap_or(false);
-        if fsck {
-            bail!(unsupported(
-                "receive.fsckObjects and transfer.fsckObjects aren't supported, as received objects can't be checked yet"
-            ));
         }
         if let Some(value) = get("pack.indexVersion").filter(|value| value.trim() != "2") {
             bail!(unsupported(format!(
@@ -345,17 +334,6 @@ impl Options {
         }
         Ok(opts)
     }
-}
-
-fn parse_bool(key: &str, value: &str) -> Result<bool> {
-    Ok(match value.to_ascii_lowercase().as_str() {
-        "true" | "yes" | "on" => true,
-        "false" | "no" | "off" | "" => false,
-        other => other
-            .parse::<i64>()
-            .map(|number| number != 0)
-            .map_err(|_| validation(format!("bad boolean config value '{value}' for '{key}'")).raise())?,
-    })
 }
 
 fn parse_unsigned(key: &str, value: &str) -> Result<u64> {
