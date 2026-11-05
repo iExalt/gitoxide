@@ -415,6 +415,30 @@ title "gix (with repository)"
         it "updates the remote-tracking branch" && {
           expect_run_sh $SUCCESSFULLY 'test "$(git -C clone rev-parse refs/remotes/origin/main)" = "$(git -C remote rev-parse refs/heads/main)"'
         }
+
+        (with "a PATH on which the Git programs fail"
+          # What makes this journey special: `git`, `git-upload-pack` and `git-receive-pack` are programs that record
+          # their use and fail, and the fetch is from a local path with the in-process server, so no program may run.
+          mkdir -p no-git
+          for program in git git-upload-pack git-receive-pack; do
+            printf '#!/bin/sh\necho "$0 $*" >> "%s/no-git-calls"\nexit 127\n' "$PWD" >"no-git/$program"
+            chmod +x "no-git/$program"
+          done
+          (
+            cd remote
+            echo third >file
+            git commit -q -am "third"
+          )
+          it "fetches from a local remote without running any program" && {
+            expect_run_sh $SUCCESSFULLY "cd clone && PATH=\"$PWD/no-git\" \"$exe_plumbing\" -c gitoxide.core.nativeLocalTransport=true --no-verbose fetch"
+          }
+          it "ran no Git program" && {
+            expect_run_sh $SUCCESSFULLY 'test ! -e no-git-calls'
+          }
+          it "updates the remote-tracking branch as before" && {
+            expect_run_sh $SUCCESSFULLY 'test "$(git -C clone rev-parse refs/remotes/origin/main)" = "$(git -C remote rev-parse refs/heads/main)"'
+          }
+        )
       )
     )
   )
@@ -718,6 +742,16 @@ title "gix commit-graph"
 
             it "adopts the remote object format" && {
               expect_run $SUCCESSFULLY "$exe_plumbing" clone "$PWD/remote" clone
+            }
+            it "clones a local remote without running any program" && {
+              mkdir -p no-git
+              for program in git git-upload-pack git-receive-pack; do
+                printf '#!/bin/sh\necho "$0 $*" >> "%s/no-git-calls"\nexit 127\n' "$PWD" >"no-git/$program"
+                chmod +x "no-git/$program"
+              done
+              expect_run_sh $SUCCESSFULLY "PATH=\"$PWD/no-git\" \"$exe_plumbing\" -c gitoxide.core.nativeLocalTransport=true --no-verbose clone \"$PWD/remote\" without-git"
+              expect_run_sh $SUCCESSFULLY 'test ! -e no-git-calls'
+              expect_run_sh $SUCCESSFULLY 'test "$(git -C without-git rev-parse refs/remotes/origin/main)" = "$(git -C remote rev-parse HEAD)"'
             }
             it "persists the adopted object format" && {
               expect_run_sh $SUCCESSFULLY 'test "$(git -C clone config --get extensions.objectformat)" = sha256'
