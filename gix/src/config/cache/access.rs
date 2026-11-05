@@ -177,7 +177,7 @@ impl Cache {
 
     /// Return `true` if local repositories are to be served in process, which is `gitoxide.core.nativeLocalTransport`.
     /// Lenient and defaults to `false`.
-    #[cfg(all(feature = "blocking-network-client", feature = "receive"))]
+    #[cfg(all(feature = "blocking-network-client", any(feature = "receive", feature = "upload")))]
     pub(crate) fn native_local_transport(&self) -> bool {
         self.resolved
             .boolean(config::tree::gitoxide::Core::NATIVE_LOCAL_TRANSPORT)
