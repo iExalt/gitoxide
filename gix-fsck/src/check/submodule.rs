@@ -72,12 +72,8 @@ type EntryFn<'a> = dyn FnMut(&[u8], Option<&[u8]>) + 'a;
 
 /// The characters of the configuration file as `get_next_char()` produces them.
 ///
-/// This reads the bytes like Git does when it reads the `.gitmodules` file from a work tree, which is what is going to be parsed
-/// after the checkout: all bytes but the end of the data are characters, and a byte order mark is skipped.
-///
-/// That is **a deliberate deviation** from Git's check, which reads the object from memory as `char` that is signed on many platforms.
-/// There, the byte `0xff` reads as the end of the file and a byte order mark isn't skipped, so that a `.gitmodules` file with
-/// a `0xff` byte or a byte order mark before a dangerous entry passes `fsck` while the file read after the checkout has the entry.
+/// The bytes are read the way the `.gitmodules` file in a work tree is read, which is what is parsed after a checkout:
+/// every byte but the end of the data is a character, and a byte order mark at the start is skipped.
 struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
