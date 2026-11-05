@@ -1364,7 +1364,7 @@ impl Repository {
     }
 }
 
-fn index_threads(repo: &Repository) -> Result<Option<usize>> {
+pub(crate) fn index_threads(repo: &Repository) -> Result<Option<usize>> {
     PackKeys::THREADS
         .try_into_usize(
             repo.config
@@ -1375,7 +1375,7 @@ fn index_threads(repo: &Repository) -> Result<Option<usize>> {
         .or_raise(|| message("The configured pack thread count is invalid"))
 }
 
-fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version> {
+pub(crate) fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version> {
     Ok(PackKeys::INDEX_VERSION
         .try_into_index_version(repo.config.resolved.integer(PackKeys::INDEX_VERSION))
         .with_leniency(repo.options.lenient_config)

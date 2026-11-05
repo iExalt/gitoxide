@@ -215,6 +215,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] `prune` and `prune-packed`, with expiry, temporary files and the shallow file
         * [x] expire reflogs like `git reflog expire --all`, with the ages from `gc.reflogExpire*`
         * [x] repack like `git repack -a -d`, `-A -d`, `-d` and `-d --geometric`, with cruft packs, `.keep` files, deltas and recovery after a kill at any step
+        * [x] `Repository::write_objects_as_pack()`, the objects of `git fast-import` with `fastimport.unpackLimit=0`: one read-only (`0444`) pack and index, flushed per `core.fsync`, made in a scratch directory and renamed into place, with no `.keep` file. Packs that the bundle writer makes for received objects are `0600`, where Git's are `0444`, and `core.sharedRepository` isn't applied to packs
         * [x] `Repository::gc()`, with `--auto`, `gc.pid` and `objects/maintenance.lock` taken as Git takes them, `pre-auto-gc`, `gc.log`, and pack garbage
         * [x] `Repository::run_maintenance()` with the tasks `gc`, `loose-objects`, `geometric-repack`, `pack-refs` and `reflog-expire`, and `--auto` conditions
         * [x] `Repository::auto_maintenance()` for the `maintenance run --auto` that callers like a receiver ask for

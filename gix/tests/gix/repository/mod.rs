@@ -52,6 +52,8 @@ mod state;
 #[cfg(feature = "attributes")]
 mod submodule;
 mod worktree;
+#[cfg(feature = "maintenance")]
+mod write_pack;
 
 mod format_version {
     use gix::repository::FormatVersion;
