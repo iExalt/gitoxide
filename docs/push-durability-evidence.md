@@ -227,3 +227,24 @@ and `odb/source-files.c` and were not run.
 | `geometric-repack` when all packs would be rolled up | Does a full `repack -a -d --cruft` with `gc.pruneExpire` instead, which is the only place where the default strategy expires unreachable objects *(source, and ran)* | The same, with `now` meaning that they are dropped |
 | `pre-auto-gc` | Runs it for `gc --auto`, and a second time inside the `gc` that `maintenance run --auto` starts *(source)* | Runs it once |
 | Index files without a pack | Removes all files of that name, including `.keep` *(source)*. Names that are not known, like the fork's `*.idx.removing`, stay | The same |
+
+## The fork's upload server
+
+`gix/tests/gix/upload/` runs the same requests against Git 2.56 `upload-pack` and `gix::upload`, for both hash kinds and both
+reference formats, with Git in the C locale. `ls-refs` is compared line by line, `fetch` is compared by its acknowledgments
+byte for byte and by what the pack lets a client do: a clone matches the objects Git sends exactly, and an incremental fetch
+contains everything `rev-list --objects` lists, plus the edge commits and their root trees and nothing else, after which
+`fsck --connectivity-only` of the client passes. The server differs from Git in these ways:
+
+| Case | Git | The server |
+| --- | --- | --- |
+| A repository that isn't fully trusted | Serves it, as nothing it has is run | Refuses it as unsupported, as the receiver does |
+| A shallow repository, a shallow client, `deepen*`, `filter`, `wait-for-done`, `want-ref`, `sideband-all`, bundle URIs, `packObjectsHook` | Serves them, some only when configured | Doesn't advertise them, refuses the configuration that enables them, and answers a request that uses them with `ERR` |
+| Protocol versions 0 and 1 | Serves them | Refuses them when started in the process |
+| Packs that depend on objects only the client has | Sends thin packs when asked | Sends none, so a pack is always self-contained and may be larger |
+| The `symref-target` of a symbolic reference that leads outside the namespace | Sends `(null)` | Sends the full name |
+| The order of `ERR` messages for several missing wants | Reports them in the order of the wants | Reports the first one it finds |
+| An object that can't be read once the pack has started | Not compared | Sends an error on band 3 and ends the stream |
+
+`include-tag` takes the annotated tags from `refs/tags/` of the whole repository, ignoring the namespace and `hideRefs`,
+because Git does, and the server does the same on purpose, with a test that pins it.

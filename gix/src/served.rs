@@ -1,5 +1,9 @@
+//! What receiving pushes and serving fetches have in common: hiding references and refusing what can't be served.
 //! References that aren't to be shown or updated by a receiver, which `receive.hideRefs` and `transfer.hideRefs` configure.
+use gix_error::{Result, ResultExt, bail, message, unsupported};
 use gix_object::bstr::{BStr, BString, ByteSlice};
+
+use crate::Repository;
 
 /// The patterns of `transfer.hideRefs` and `receive.hideRefs` in the order in which they were configured.
 ///
@@ -36,6 +40,7 @@ impl HiddenRefs {
         HiddenRefs { patterns }
     }
 
+    #[cfg_attr(not(feature = "receive"), allow(dead_code))]
     /// Create the patterns from their text, as they would be configured one after the other.
     pub fn from_patterns(patterns: impl IntoIterator<Item = impl Into<BString>>) -> Self {
         HiddenRefs {
@@ -44,11 +49,13 @@ impl HiddenRefs {
     }
 
     /// Return `true` if no reference is hidden.
+    #[cfg_attr(not(feature = "receive"), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.patterns.is_empty()
     }
 
     /// Return `true` if the reference named `name`, which is the full name like `refs/heads/main`, is hidden.
+    #[cfg_attr(not(feature = "receive"), allow(dead_code))]
     pub fn is_hidden(&self, name: &BStr) -> bool {
         self.is_hidden_in(Some(name), name)
     }
@@ -109,4 +116,79 @@ mod tests {
             "but a caret does"
         );
     }
+}
+
+/// What a repository is used for, which decides how refusals are worded.
+#[cfg_attr(not(all(feature = "receive", feature = "upload")), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Receive,
+    Upload,
+}
+
+/// Refuse what makes a repository unsafe or impossible to serve for `role` in the same way for both, which is to be partial,
+/// to be owned by somebody else, to declare extensions that aren't known to matter, and to be shallow.
+pub(crate) fn refuse_unsupported_repository(repo: &Repository, role: Role) -> Result<()> {
+    let config = repo.config_snapshot();
+    if config
+        .plumbing()
+        .sections_by_name("remote")
+        .into_iter()
+        .flatten()
+        .any(|section| {
+            section.body().value("promisor").is_some() || section.body().value("partialclonefilter").is_some()
+        })
+    {
+        bail!(unsupported(
+            "a promisor remote is configured, and partial clones aren't supported"
+        ));
+    }
+    // Git doesn't enter a repository that isn't owned by the user, and a reduced trust hides configured hooks from the gate
+    // below, so what Git would refuse must not be received into at all.
+    if repo.git_dir_trust() != gix_sec::Trust::Full {
+        bail!(unsupported(match role {
+            Role::Receive => "the repository isn't fully trusted, which Git refuses to receive into as well",
+            Role::Upload => {
+                "serving a repository that isn't fully trusted isn't supported yet, even though Git serves it, as nothing it has is run"
+            }
+        }));
+    }
+    // What a repository declares to need is unknown unless it was checked to not matter here, as `compatObjectFormat`
+    // makes Git store a mapping of every object that it writes.
+    for section in config.plumbing().sections_by_name("extensions").into_iter().flatten() {
+        for key in section.body().value_names() {
+            let key = key.to_string();
+            if ![
+                "objectformat",
+                "refstorage",
+                "worktreeconfig",
+                "noop",
+                "noop-v1",
+                "preciousobjects",
+                "relativeworktrees",
+                "submodulepathconfig",
+            ]
+            .iter()
+            .any(|known| key.eq_ignore_ascii_case(known))
+            {
+                bail!(unsupported(format!(
+                    "extensions.{key} isn't known to be safe to {} with",
+                    match role {
+                        Role::Receive => "receive",
+                        Role::Upload => "serve",
+                    }
+                )));
+            }
+        }
+    }
+    if repo
+        .is_shallow()
+        .or_raise(|| message("Could not read the shallow file"))?
+    {
+        bail!(unsupported(match role {
+            Role::Receive => "receiving into a shallow repository isn't supported",
+            Role::Upload => "serving a shallow repository isn't supported yet",
+        }));
+    }
+    Ok(())
 }

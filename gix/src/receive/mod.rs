@@ -4,9 +4,8 @@
 //! a receiver doesn't show or update, and [`Options`] that configure how it treats pushes.
 pub mod connectivity;
 
-mod hidden;
 mod hooks;
-pub use hidden::HiddenRefs;
+pub use crate::served::HiddenRefs;
 
 mod options;
 pub use options::{DenyAction, Options};

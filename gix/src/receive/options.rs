@@ -2,8 +2,10 @@
 use gix_error::{ErrorExt, Result, ResultExt, bail, message, unsupported, validation};
 use gix_object::bstr::ByteSlice;
 
-use super::hidden::HiddenRefs;
-use crate::Repository;
+use crate::{
+    Repository,
+    served::{HiddenRefs, Role, refuse_unsupported_repository},
+};
 
 /// What to do about a push to the branch that is checked out, or the deletion of the current branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,56 +119,7 @@ impl Options {
                 bail!(unsupported(format!("{key} isn't supported, as {what} aren't")));
             }
         }
-        if config
-            .plumbing()
-            .sections_by_name("remote")
-            .into_iter()
-            .flatten()
-            .any(|section| {
-                section.body().value("promisor").is_some() || section.body().value("partialclonefilter").is_some()
-            })
-        {
-            bail!(unsupported(
-                "a promisor remote is configured, and partial clones aren't supported"
-            ));
-        }
-        // Git doesn't enter a repository that isn't owned by the user, and a reduced trust hides configured hooks from the gate
-        // below, so what Git would refuse must not be received into at all.
-        if repo.git_dir_trust() != gix_sec::Trust::Full {
-            bail!(unsupported(
-                "the repository isn't fully trusted, which Git refuses to receive into as well"
-            ));
-        }
-        // What a repository declares to need is unknown unless it was checked to not matter here, as `compatObjectFormat`
-        // makes Git store a mapping of every object that it writes.
-        for section in config.plumbing().sections_by_name("extensions").into_iter().flatten() {
-            for key in section.body().value_names() {
-                let key = key.to_string();
-                if ![
-                    "objectformat",
-                    "refstorage",
-                    "worktreeconfig",
-                    "noop",
-                    "noop-v1",
-                    "preciousobjects",
-                    "relativeworktrees",
-                    "submodulepathconfig",
-                ]
-                .iter()
-                .any(|known| key.eq_ignore_ascii_case(known))
-                {
-                    bail!(unsupported(format!(
-                        "extensions.{key} isn't known to be safe to receive with"
-                    )));
-                }
-            }
-        }
-        if repo
-            .is_shallow()
-            .or_raise(|| message("Could not read the shallow file"))?
-        {
-            bail!(unsupported("receiving into a shallow repository isn't supported"));
-        }
+        refuse_unsupported_repository(repo, Role::Receive)?;
         reject_hooks(repo)?;
 
         let quarantine = gix_odb::quarantine::Options::from_config(

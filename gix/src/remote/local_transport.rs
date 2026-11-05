@@ -12,7 +12,7 @@ use std::{
     any::Any,
     borrow::Cow,
     io::{PipeReader, PipeWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -31,10 +31,9 @@ use gix_transport::{
     },
 };
 
-use crate::{
-    bstr::{BStr, BString},
-    receive::Receiver,
-};
+use crate::bstr::{BStr, BString};
+#[cfg(feature = "receive")]
+use crate::receive::Receiver;
 
 /// What the client end of the connection sends to the server, which can be closed from other threads to end the server's wait.
 #[derive(Clone)]
@@ -166,9 +165,9 @@ impl NativeLocal {
 
     /// Open the repository like a started `git-receive-pack` does: without what the environment of the client says about
     /// repositories and configuration, but with the namespace of `GIT_NAMESPACE`, which programs inherit.
-    fn open(&self) -> std::io::Result<crate::Repository> {
+    fn open(git_dir: &Path) -> std::io::Result<crate::Repository> {
         let mut repo = crate::open_opts(
-            &self.git_dir,
+            git_dir,
             crate::open::Options::default().ignore_repository_environment(true),
         )
         .map_err(io_error)?;
@@ -177,6 +176,59 @@ impl NativeLocal {
                 .map_err(io_error)?;
         }
         Ok(repo)
+    }
+}
+
+/// Say why `repo` can't be served for `service`, which is the case if it asks for what isn't supported, if the version of the
+/// protocol isn't one that is spoken, or if support for the service wasn't built.
+fn check_service(repo: &crate::Repository, service: Service, version: Protocol) -> Result<(), String> {
+    match service {
+        #[cfg(feature = "receive")]
+        Service::ReceivePack => repo.receive().map(|_| ()).map_err(|err| err.to_string()),
+        #[cfg(feature = "upload")]
+        Service::UploadPack => {
+            if version != Protocol::V2 {
+                return Err("serving fetches from within the process needs protocol version 2".into());
+            }
+            repo.upload().map(|_| ()).map_err(|err| err.to_string())
+        }
+        #[allow(unreachable_patterns)]
+        _ => {
+            let _ = (repo, version);
+            Err(format!(
+                "this build of `gix` can't serve {} from within the process, as the matching feature is disabled",
+                service.as_str()
+            ))
+        }
+    }
+}
+
+/// Serve `service` from `repo` to what `input` and `output` are connected to, and return what went wrong, if anything.
+fn serve(
+    repo: &crate::Repository,
+    service: Service,
+    input: &mut dyn std::io::Read,
+    output: &mut dyn Write,
+    version: Protocol,
+    interrupted: &AtomicBool,
+) -> Option<gix_error::Error> {
+    match service {
+        #[cfg(feature = "receive")]
+        Service::ReceivePack => repo
+            .receive()
+            .map(Receiver::with_hooks_without_local_repo_env)
+            .and_then(|receiver| receiver.serve(input, output, version, interrupted))
+            .err(),
+        #[cfg(feature = "upload")]
+        Service::UploadPack => repo
+            .upload()
+            .and_then(|upload| upload.serve(input, output, interrupted))
+            .err(),
+        #[allow(unreachable_patterns)]
+        _ => {
+            let _ = (repo, input, output, version, interrupted);
+            None
+        }
     }
 }
 
@@ -238,19 +290,11 @@ impl Transport for NativeLocal {
         if self.server.interrupted.load(Ordering::SeqCst) {
             return Err(interrupted());
         }
-        match service {
-            Service::ReceivePack => {}
-            Service::UploadPack => {
-                return Err(client::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "serving fetches from within the process isn't supported yet",
-                )));
-            }
-        }
         // Everything that makes a repository unsupported shows now, and not as a connection that ends for no reason.
-        let repo = self.open().map_err(client::Error::Io)?;
-        repo.receive()
-            .map_err(|err| client::Error::Io(std::io::Error::new(std::io::ErrorKind::Unsupported, err.to_string())))?;
+        let unsupported =
+            |reason: String| client::Error::Io(std::io::Error::new(std::io::ErrorKind::Unsupported, reason));
+        let repo = Self::open(&self.git_dir).map_err(client::Error::Io)?;
+        check_service(&repo, service, self.desired_version).map_err(unsupported)?;
 
         let (server_input, client_output) = std::io::pipe().map_err(client::Error::Io)?;
         let (client_input, server_output) = std::io::pipe().map_err(client::Error::Io)?;
@@ -263,15 +307,19 @@ impl Transport for NativeLocal {
 
         let server = self.server.clone();
         let version = self.desired_version;
+        let git_dir = self.git_dir.clone();
         let handle = std::thread::Builder::new()
-            .name("serve receive-pack in process".into())
+            .name("serve a local client in process".into())
             .spawn(move || {
                 let (mut input, mut output) = (server_input, server_output);
-                if let Ok(receiver) = repo.receive().map(Receiver::with_hooks_without_local_repo_env)
-                    && let Err(_err) = receiver.serve(&mut input, &mut output, version, &server.interrupted)
-                {
-                    // A started program says this on its standard error, and the client sees that it ended.
-                    gix_trace::error!("Serving a push from within the process failed: {_err:#}");
+                // A repository can't move between threads without the `parallel` feature, so the server opens its own.
+                // A started program says what went wrong on its standard error, and the client sees that it ended.
+                let failure = match NativeLocal::open(&git_dir) {
+                    Ok(repo) => serve(&repo, service, &mut input, &mut output, version, &server.interrupted),
+                    Err(err) => Some(message!("Could not open the repository to serve: {err}").raise()),
+                };
+                if let Some(_failure) = failure {
+                    gix_trace::error!("Serving a client from within the process failed: {_failure:#}");
                 }
                 // What the server writes ends with it, which tells a client that waits for more.
                 drop(output);

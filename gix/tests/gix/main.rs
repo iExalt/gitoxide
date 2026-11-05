@@ -25,3 +25,5 @@ mod revision;
 mod status;
 #[cfg(feature = "attributes")]
 mod submodule;
+#[cfg(feature = "upload")]
+mod upload;

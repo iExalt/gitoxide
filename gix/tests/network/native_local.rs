@@ -177,3 +177,49 @@ fn the_environment_of_the_client_does_not_redirect_the_server_except_with_the_na
     );
     Ok(())
 }
+
+#[test]
+fn a_fetch_from_a_local_path_runs_no_program_with_the_native_transport_and_what_cannot_be_served_is_refused()
+-> TestResult {
+    let Some(_environment) = isolated()? else {
+        return Ok(());
+    };
+    let setup = Setup::new("sha1")?;
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let (_shims, log) = put_shims_in_front(dir.path())?;
+    let url = setup.path("remote.git").display().to_string();
+
+    let fetch = |repo: &gix::Repository| -> TestResult<()> {
+        let remote = repo
+            .remote_at(url.as_str())?
+            .with_refspecs(Some("+refs/heads/*:refs/remotes/origin/*"), Direction::Fetch)?;
+        remote
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .receive(gix::progress::Discard, &AtomicBool::new(false))?;
+        Ok(())
+    };
+    let mut dest = setup.dest()?;
+    dest.config_snapshot_mut()
+        .set_raw_value("gitoxide.core.nativeLocalTransport", "true")?;
+    fetch(&dest)?;
+    assert!(
+        dest.try_find_reference("refs/remotes/origin/main")?.is_some(),
+        "the branch of the remote arrived, with the pack that the in-process server wrote"
+    );
+    assert!(
+        !log.exists(),
+        "no program was run for the fetch: {}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+
+    // A shallow repository can't be served, which is said before anything happens, and it isn't served by a program instead.
+    std::fs::write(
+        setup.path("remote.git/shallow"),
+        format!("{}\n", setup.work()?.head_id()?),
+    )?;
+    let err = fetch(&dest).err().expect("a shallow repository isn't served");
+    assert!(format!("{err:?}").contains("shallow"), "the error says why: {err:?}");
+    assert!(!log.exists(), "there is no silent fallback to a program");
+    Ok(())
+}

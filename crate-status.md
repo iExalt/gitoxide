@@ -518,7 +518,8 @@ A utility crate with types and functionality related to shallow-file handling.
         * [x] _file://_ launches service application
         * [ ] _file://_ without launching `git-upload-pack` / `git-receive-pack`
             * [x] pushes, with `gitoxide.core.nativeLocalTransport=true`, which serves them with `gix::receive` on a thread of the process
-            * [ ] fetches, which are refused with that setting instead of being served by a program
+            * [x] fetches over protocol version 2, with negotiation, which is what `gix::upload` serves
+            * [ ] fetches from shallow repositories, which are refused with that setting instead of being served by a program
         * [x] _ssh://_ launches service application in a remote shell using _ssh_
         * [ ] _ssh://_ without an external `ssh` binary
         * [x] _git://_ establishes a tcp connection to a git daemon
@@ -652,7 +653,9 @@ Fetching and pushing as a client runs no `git` and none of its credential helper
     * [ ] push certificates
     * [ ] upload-pack
         * [x] protocol version 2 advertisement, requests, and the answers for `ls-refs` and the start of the pack of `fetch`, see `upload`
-        * [ ] serving them from a repository, negotiation, shallow clones and filters
+        * [x] serving them from a repository, with `gix::upload`: `ls-refs` with `hideRefs`, namespaces and unborn heads, and `fetch` with the objects the client wants and doesn't have, compared with `git upload-pack`
+        * [x] negotiation over any number of rounds, as `git upload-pack` acknowledges haves and says when it is ready, and `include-tag`
+        * [ ] shallow clones and shallow repositories, filters, and thin packs, which are never sent
 * [ ] bundle-uri protocol integration
 * [ ] remote helper protocol and integration
 * [x] API documentation
