@@ -216,7 +216,8 @@ fn peel_to_commit(repo: &Repository, mut id: ObjectId) -> Option<ObjectId> {
     }
 }
 
-/// Finds objects like `repo` does, but makes the `roots` commits without parents.
+/// Finds objects like `repo` does, but makes the `roots` commits without parents, and commits whose identities can't be parsed
+/// have them replaced with what can, as Git reads nothing but the date of the committer when it walks the history.
 struct Roots<'a> {
     repo: &'a Repository,
     roots: Cow<'a, HashSet<ObjectId>>,
@@ -224,22 +225,27 @@ struct Roots<'a> {
 
 impl gix_object::Find for Roots<'_> {
     fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> gix_error::Result<Option<gix_object::Data<'a>>> {
-        if !self.roots.contains(id) {
-            return self.repo.objects.try_find(id, buffer);
-        }
         let Some(data) = self.repo.objects.try_find(id, buffer)? else {
             return Ok(None);
         };
         let (kind, object_hash) = (data.kind, data.object_hash);
         if kind.is_commit() {
-            let mut commit = gix_object::CommitRef::from_bytes(data.data, object_hash)?;
-            commit.parents.clear();
-            let mut without_parents = Vec::new();
-            commit
-                .write_to(&mut without_parents)
-                .or_raise(|| message("Could not write a commit without its parents"))?;
-            drop(commit);
-            *buffer = without_parents;
+            let readable = with_readable_identities(data.data, object_hash);
+            let replacement = if self.roots.contains(id) {
+                let mut commit =
+                    gix_object::CommitRef::from_bytes(readable.as_deref().unwrap_or(data.data), object_hash)?;
+                commit.parents.clear();
+                let mut without_parents = Vec::new();
+                commit
+                    .write_to(&mut without_parents)
+                    .or_raise(|| message("Could not write a commit without its parents"))?;
+                Some(without_parents)
+            } else {
+                readable
+            };
+            if let Some(replacement) = replacement {
+                *buffer = replacement;
+            }
         }
         Ok(Some(gix_object::Data {
             kind,
@@ -249,6 +255,49 @@ impl gix_object::Find for Roots<'_> {
     }
 }
 
+/// Return the commit `data` with the author and committer that can be parsed, and the date of the committer as Git reads it, or
+/// `None` if it needs no change.
+///
+/// Walking the history takes the date of the committer and the parents, and Git doesn't mind what else a commit has,
+/// so a flaw in either identity, like an email without the closing bracket, mustn't make the history unwalkable. Whether these
+/// are acceptable is for checking objects to say.
+fn with_readable_identities(data: &[u8], object_hash: gix_hash::Kind) -> Option<Vec<u8>> {
+    if gix_object::CommitRefIter::from_bytes(data, object_hash).all(|token| token.is_ok()) {
+        return None;
+    }
+    let header_end = data.find(b"\n\n").map_or(data.len(), |pos| pos + 1);
+    let (header, message) = data.split_at(header_end);
+    let lines: Vec<&[u8]> = header.split_inclusive(|byte| *byte == b'\n').collect();
+    let committer_date = lines
+        .iter()
+        .find_map(|line| line.strip_prefix(b"committer "))
+        .and_then(|line| {
+            // As `parse_commit_date()` does, find the number after the last `>` of the line.
+            let after = &line[line.iter().rposition(|byte| *byte == b'>')? + 1..];
+            let digits = after.trim_start();
+            let end = digits
+                .iter()
+                .position(|byte| !byte.is_ascii_digit())
+                .unwrap_or(digits.len());
+            digits[..end].to_str().ok()?.parse::<i64>().ok()
+        })
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(data.len());
+    // The identities come after the tree and the parents, and before everything else.
+    let mut lines = lines.into_iter().peekable();
+    while let Some(line) = lines.next_if(|line| line.starts_with(b"tree ") || line.starts_with(b"parent ")) {
+        out.extend_from_slice(line);
+    }
+    out.extend_from_slice(b"author A <a@example.com> 0 +0000\ncommitter A <a@example.com> ");
+    out.extend_from_slice(committer_date.to_string().as_bytes());
+    out.extend_from_slice(b" +0000\n");
+    for line in lines.filter(|line| !line.starts_with(b"author ") && !line.starts_with(b"committer ")) {
+        out.extend_from_slice(line);
+    }
+    out.extend_from_slice(message);
+    Some(out)
+}
+
 /// Walk the history of `tips` without what `hidden` leads to, where the commits in `roots` have no parents.
 pub(super) fn walk_without_parents(
     repo: &Repository,
@@ -256,11 +305,19 @@ pub(super) fn walk_without_parents(
     hidden: impl IntoIterator<Item = ObjectId>,
     roots: HashSet<ObjectId>,
 ) -> gix_error::Result<impl Iterator<Item = gix_error::Result<gix_traverse::commit::Info>> + '_> {
+    // The commit-graph knows nothing of roots and replacements.
+    let commit_graph = if roots.is_empty() && !repo.has_object_replacements() && repo.config.may_use_commit_graph()? {
+        repo.commit_graph().ok()
+    } else {
+        None
+    };
     let objects = Roots {
         repo,
         roots: Cow::Owned(roots),
     };
-    gix_traverse::commit::Simple::filtered(tips, objects, |_| true).hide(hidden)
+    Ok(gix_traverse::commit::Simple::filtered(tips, objects, |_| true)
+        .hide(hidden)?
+        .commit_graph(commit_graph))
 }
 
 /// Takes the commits of the boundary of a client that references are to need into the `shallow` file as the commands that need them

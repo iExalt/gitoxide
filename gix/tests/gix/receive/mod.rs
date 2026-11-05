@@ -1,4 +1,5 @@
 mod connectivity;
+mod fsck;
 mod gates;
 mod hooks;
 mod namespaces;
