@@ -279,10 +279,10 @@ impl World {
                 out.extend(pkt(line));
             }
             if *new != "0" {
-                revs.push_str(&format!("{}\n", self.id(format, new)?));
+                writeln!(revs, "{}", self.id(format, new)?)?;
             }
             if *old != "0" {
-                revs.push_str(&format!("^{}\n", self.id(format, old)?));
+                writeln!(revs, "^{}", self.id(format, old)?)?;
             }
         }
         out.extend(b"0000");
@@ -1841,7 +1841,11 @@ mod effects {
                 Event::Flush(_) | Event::Writeout(_) if line.contains("objects/") => "flush-in-quarantine",
                 Event::Rename(_, to) | Event::Link(_, to) => {
                     let to = normalize(to);
-                    if to.contains("refs/heads/") && !to.ends_with(".lock") {
+                    if to.contains("refs/heads/")
+                        && !std::path::Path::new(&to)
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("lock"))
+                    {
                         "update-reference"
                     } else if to.contains("objects/") && !to.contains("INCOMING") {
                         "migrate"

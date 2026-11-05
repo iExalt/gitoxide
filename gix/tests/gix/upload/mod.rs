@@ -128,7 +128,7 @@ pub fn fork_serve(repo: &Path, setup: &Setup<'_>, request: &[u8]) -> TestResult<
     let mut input = request;
     let result = repository
         .upload()
-        .and_then(|server| Ok(server.serve(&mut input, &mut out, &AtomicBool::new(false))?));
+        .and_then(|server| server.serve(&mut input, &mut out, &AtomicBool::new(false)));
     Ok((split_advertisement(&out), result))
 }
 
