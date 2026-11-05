@@ -41,6 +41,18 @@ impl Hook<'_> {
 }
 
 impl file::Store {
+    /// Return `true` if `git pack-refs --auto` would pack references now, regardless of the namespace.
+    pub(crate) fn pack_refs_required_inner(&self, objects: &dyn gix_object::Find) -> Result<bool> {
+        self.assure_backend_supported()?;
+        if self.namespace.is_some() {
+            let mut this = self.clone();
+            this.namespace = None;
+            this.enough_loose_refs_to_pack(objects)
+        } else {
+            self.enough_loose_refs_to_pack(objects)
+        }
+    }
+
     /// Write all loose references that can be packed into `packed-refs`, and delete the loose files if `options` say so, like
     /// `git pack-refs --all --prune` does, for all worktrees' shared references and regardless of the namespace.
     ///
