@@ -99,6 +99,9 @@ pub(crate) mod function {
             writeln!(out, "\t{:?}", fetch_outcome.handshake).or_error()?;
         }
 
+        if !fetch_outcome.object_warnings.is_empty() {
+            err.write_all(&fetch_outcome.object_warnings).ok();
+        }
         match fetch_outcome.status {
             Status::NoPackReceived { dry_run, .. } => {
                 assert!(!dry_run, "dry-run unsupported");
