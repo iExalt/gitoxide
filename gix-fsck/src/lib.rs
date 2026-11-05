@@ -1,6 +1,12 @@
 //! A library for performing object database integrity and connectivity checks
 #![deny(unsafe_code, missing_docs)]
 
+mod message;
+pub use message::{MessageId, Severity};
+
+mod options;
+pub use options::{ConfigEntry, Options};
+
 use gix_error::Result;
 use std::collections::VecDeque;
 
