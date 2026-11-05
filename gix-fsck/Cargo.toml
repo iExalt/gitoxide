@@ -26,6 +26,7 @@ gix-error = { path = "../gix-error" }
 gix-hash = { path = "../gix-hash" }
 gix-hashtable = { path = "../gix-hashtable" }
 gix-object = { path = "../gix-object" }
+gix-validate = { path = "../gix-validate" }
 
 [dev-dependencies]
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
