@@ -78,6 +78,8 @@ pub struct Outcome {
     push_options: Vec<BString>,
     /// Set if a `reference-transaction` hook refused the update, which Git doesn't report to the client but dies of.
     died: Option<String>,
+    /// The file that hooks are told about as the `shallow` file, which stays until they all ran.
+    shallow_file: Option<std::sync::Arc<shallow::TemporaryFile>>,
 }
 
 impl Repository {
@@ -278,14 +280,15 @@ impl<'repo> Receiver<'repo> {
         let heartbeat = heartbeat
             .zip(self.options.keep_alive)
             .map(|(beat, interval)| (interval, beat));
-        Runner::new(
+        let runner = Runner::new(
             self.repo,
             &outcome.push_options,
             self.namespace_name(),
             self.hooks_without_local_repo_env,
             heartbeat,
-        )?
-        .post(&outcome.commands, &mut messages);
+        )?;
+        runner.set_shallow_file(outcome.shallow_file.as_ref().map(|file| file.path().to_owned()));
+        runner.post(&outcome.commands, &mut messages);
         if outcome.maintenance_due
             && let Some(maintenance) = &self.auto_maintenance
         {
@@ -330,6 +333,7 @@ impl<'repo> Receiver<'repo> {
         let mut objects_migrated = false;
         let mut maintenance_due = false;
         let mut died = None;
+        let mut shallow_file = None;
 
         if request.expects_pack() {
             let objects_dir = repo.objects.store_ref().path().to_owned();
@@ -351,10 +355,23 @@ impl<'repo> Receiver<'repo> {
                 command.error = Some("unpacker error".into());
             }
         } else {
-            if let Some(boundary) = shallow_boundary {
-                self.reject_shallow_updates(&mut commands, quarantine.as_ref(), boundary);
-            }
-            self.verify_connectivity(&mut commands, quarantine.as_ref())?;
+            let shallow_update = match shallow_boundary {
+                Some(boundary) => {
+                    let (update, file) =
+                        self.plan_shallow_updates(&mut commands, quarantine.as_ref(), boundary, &request.shallow)?;
+                    if let Some(file) = file {
+                        runner.set_shallow_file(Some(file.path().to_owned()));
+                        shallow_file = Some(std::sync::Arc::new(file));
+                    }
+                    update
+                }
+                None => None,
+            };
+            self.verify_connectivity(&mut commands, quarantine.as_ref(), &|command| {
+                shallow_update
+                    .as_ref()
+                    .is_some_and(|update| update.is_pending(command.ref_name.as_bstr()))
+            })?;
             policy::reject_hidden(&mut commands, &|name| {
                 let mut full = self.prefix.clone();
                 full.extend_from_slice(name);
@@ -381,8 +398,13 @@ impl<'repo> Receiver<'repo> {
                     Ok(migrated) => {
                         objects_migrated = migrated.is_some();
                         keep = migrated;
-                        died =
-                            self.update_references(&mut commands, request.features.atomic, &runner, &mut messages)?;
+                        died = self.update_references(
+                            &mut commands,
+                            request.features.atomic,
+                            &runner,
+                            shallow_update.as_ref(),
+                            &mut messages,
+                        )?;
                     }
                 }
             }
@@ -412,17 +434,21 @@ impl<'repo> Receiver<'repo> {
             commands: post_commands,
             push_options: request.push_options.clone(),
             died,
+            shallow_file,
         })
     }
 
-    /// Fail the commands whose history leads to the shallow boundary of the client, as a receiver doesn't become shallow when it
-    /// isn't told to. The others go on, also if the push is atomic, as that is when Git decides.
-    fn reject_shallow_updates(
+    /// Decide what the shallow boundary of the client makes of the commands. A receiver that isn't told to become shallow rejects
+    /// the commands whose history leads to it, and the others go on, also if the push is atomic, as that is when Git decides. One
+    /// that is told takes it into its `shallow` file as the commands that need it are updated, which is what is returned
+    /// then, and for them to be left out of the check for missing objects.
+    fn plan_shallow_updates(
         &self,
         commands: &mut [Command],
         quarantine: Option<&gix_odb::quarantine::Quarantine>,
         boundary: shallow::Boundary,
-    ) {
+        lines: &[ObjectId],
+    ) -> Result<(Option<shallow::Update<'_>>, Option<shallow::TemporaryFile>)> {
         let view;
         let repo = match quarantine {
             Some(quarantine) => {
@@ -432,15 +458,42 @@ impl<'repo> Receiver<'repo> {
             None => &self.global,
         };
         let candidates = boundary.after_receiving(repo);
-        if candidates.is_empty() {
-            return;
-        }
-        let cutoffs = Cutoffs::of_all_references(repo);
-        for command in commands.iter_mut().filter(|command| !command.new_id.is_null()) {
-            if !candidates.needed(repo, cutoffs.commits(), command.new_id).is_empty() {
-                command.error = Some("shallow update not allowed".into());
+        if !self.options.shallow_update {
+            if !candidates.is_empty() {
+                let cutoffs = Cutoffs::of_all_references(repo, &|_| false);
+                for command in commands.iter_mut().filter(|command| !command.new_id.is_null()) {
+                    if !candidates.needed(repo, cutoffs.commits(), command.new_id).is_empty() {
+                        command.error = Some("shallow update not allowed".into());
+                    }
+                }
             }
+            return Ok((None, None));
         }
+        // Git turns `receive.shallowUpdate` off if nothing of what the client said is there, and otherwise tells hooks about it.
+        if !candidates.matters() {
+            return Ok((None, None));
+        }
+        let file = shallow::TemporaryFile::create(&self.global, lines)?;
+        // What Git decides is looked at when the first command is updated, after the deletions were made if they are not atomic,
+        // so what is looked at now is what references reach without those that are deleted.
+        let deleted: HashSet<BString> = commands
+            .iter()
+            .filter(|command| command.new_id.is_null())
+            .map(|command| {
+                let mut full = self.prefix.clone();
+                full.extend_from_slice(&command.ref_name);
+                full
+            })
+            .collect();
+        let cutoffs = Cutoffs::of_all_references(repo, &|name| deleted.contains(name));
+        let pending: HashSet<BString> = commands
+            .iter()
+            .filter(|command| !command.new_id.is_null())
+            .filter(|command| !candidates.needed(repo, cutoffs.commits(), command.new_id).is_empty())
+            .map(|command| command.ref_name.clone())
+            .collect();
+        let update = (!pending.is_empty()).then(|| shallow::Update::new(&self.global, candidates, pending));
+        Ok((update, Some(file)))
     }
 
     /// Fail commands whose objects aren't all there. The commands are checked as a whole first, and one by one only
@@ -449,12 +502,14 @@ impl<'repo> Receiver<'repo> {
         &self,
         commands: &mut [Command],
         quarantine: Option<&gix_odb::quarantine::Quarantine>,
+        // Commands that are checked when their shallow commits are taken, and not before.
+        is_checked_later: &dyn Fn(&Command) -> bool,
     ) -> Result<()> {
         // What was rejected already isn't checked with the others, as what the shallow boundary of a client leaves out is missing
         // by definition, but it is when it is looked at on its own, which tells what is wrong with it.
         let tips: Vec<ObjectId> = commands
             .iter()
-            .filter(|command| !command.new_id.is_null() && command.error.is_none())
+            .filter(|command| !command.new_id.is_null() && command.error.is_none() && !is_checked_later(command))
             .map(|command| command.new_id)
             .collect();
         // Without objects to check, as with deletions only, it doesn't matter what the references look like.
@@ -478,7 +533,10 @@ impl<'repo> Receiver<'repo> {
         if all_connected {
             return Ok(());
         }
-        for command in commands.iter_mut().filter(|command| !command.new_id.is_null()) {
+        for command in commands
+            .iter_mut()
+            .filter(|command| !command.new_id.is_null() && !is_checked_later(command))
+        {
             let connected = cutoffs
                 .as_ref()
                 .is_some_and(|cutoffs| connectivity::verify(repo, cutoffs, &[command.new_id]).is_ok());
@@ -494,6 +552,7 @@ impl<'repo> Receiver<'repo> {
         commands: &mut [Command],
         atomic: bool,
         runner: &Runner<'_, '_>,
+        shallow: Option<&shallow::Update<'_>>,
         messages: &mut Messages,
     ) -> Result<Option<String>> {
         let repo = &self.global;
@@ -501,11 +560,14 @@ impl<'repo> Receiver<'repo> {
         let push_to_checkout = |worktree: &Repository, new_id: &gix_hash::oid, messages: &mut Messages| {
             runner.push_to_checkout(worktree, new_id, messages)
         };
+        let update_shallow =
+            |command: &Command, messages: &mut Messages| shallow.is_some_and(|update| update.apply(command, messages));
         let world = RepoWorld {
             repo,
             prefix: &self.prefix,
             update_hook: Some(&update_hook),
             push_to_checkout: Some(&push_to_checkout),
+            update_shallow: Some(&update_shallow),
         };
         policy::check_aliased_updates(
             commands,
@@ -535,6 +597,7 @@ impl<'repo> Receiver<'repo> {
             fault: self.fault,
             messages: Vec::new(),
             hook: runner.exists("reference-transaction"),
+            shallow_file: runner.shallow_file(),
             died: None,
         };
         policy::execute(commands, atomic, &policy, &world, &mut refs, messages);
@@ -612,6 +675,7 @@ impl Repository {
 type UpdateHook<'a> = dyn Fn(&Command, &mut Messages) -> bool + 'a;
 
 /// Runs the `push-to-checkout` hook for a work tree and a new commit, if there is one that runs. `None` if there is none.
+type UpdateShallowHook<'a> = dyn Fn(&Command, &mut Messages) -> bool + 'a;
 type PushToCheckoutHook<'a> = dyn Fn(&Repository, &gix_hash::oid, &mut Messages) -> Option<bool> + 'a;
 
 /// What decisions about commands need to know about the repository.
@@ -621,6 +685,7 @@ struct RepoWorld<'a> {
     prefix: &'a BString,
     update_hook: Option<&'a UpdateHook<'a>>,
     push_to_checkout: Option<&'a PushToCheckoutHook<'a>>,
+    update_shallow: Option<&'a UpdateShallowHook<'a>>,
 }
 
 fn read_trimmed(path: &Path) -> Option<BString> {
@@ -725,6 +790,10 @@ impl World for RepoWorld<'_> {
 
     fn update_hook(&self, command: &Command, messages: &mut Messages) -> bool {
         self.update_hook.is_some_and(|hook| hook(command, messages))
+    }
+
+    fn update_shallow(&self, command: &Command, messages: &mut Messages) -> bool {
+        self.update_shallow.is_some_and(|update| update(command, messages))
     }
 
     fn update_worktree(&self, name: &BStr, command: &Command, messages: &mut Messages) -> Option<&'static str> {
@@ -849,6 +918,8 @@ struct RepoRefs<'a> {
     messages: Vec<String>,
     /// `true` if there is a `reference-transaction` hook to tell about the transaction.
     hook: bool,
+    /// The `shallow` file to tell that hook about.
+    shallow_file: Option<std::path::PathBuf>,
     /// Why Git would die, which is what a `reference-transaction` hook causes by refusing.
     died: Option<String>,
 }
@@ -927,6 +998,7 @@ impl Refs for RepoRefs<'_> {
                 repo: self.repo,
                 side: gix_hook::Side::Receive,
                 namespace: self.namespace.clone(),
+                shallow_file: self.shallow_file.clone(),
             });
         }
         let prepared = match transaction.prepare(

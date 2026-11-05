@@ -24,6 +24,8 @@ pub(super) struct Runner<'r, 'h> {
     namespace: Option<String>,
     /// Whether hooks are denied what describes the process of the client, as they are if a program was started by it.
     without_local_repo_env: bool,
+    /// The file that hooks are told about with `GIT_SHALLOW_FILE`, once there is one.
+    shallow_file: RefCell<Option<std::path::PathBuf>>,
 }
 
 impl<'r, 'h> Runner<'r, 'h> {
@@ -47,7 +49,18 @@ impl<'r, 'h> Runner<'r, 'h> {
             push_options,
             namespace,
             without_local_repo_env,
+            shallow_file: RefCell::new(None),
         })
+    }
+
+    /// The file that hooks are told about as the `shallow` file, if there is one.
+    pub fn shallow_file(&self) -> Option<std::path::PathBuf> {
+        self.shallow_file.borrow().clone()
+    }
+
+    /// Tell hooks about `file` as the `shallow` file to use, as Git does for pushes of a client that is shallow.
+    pub fn set_shallow_file(&self, file: Option<std::path::PathBuf>) {
+        *self.shallow_file.borrow_mut() = file;
     }
 
     /// Whether there is a hook for `event` that can be run.
@@ -120,6 +133,9 @@ impl<'r, 'h> Runner<'r, 'h> {
             for key in gix_command::LOCAL_REPO_ENV {
                 prepare = prepare.env_remove(*key);
             }
+        }
+        if let Some(file) = &*self.shallow_file.borrow() {
+            prepare = prepare.env("GIT_SHALLOW_FILE", file);
         }
         // Git names the Git directory of the main work tree as `.`, which it makes absolute without simplifying it, so that
         // `dirname "$GIT_DIR"` is the same for hooks of both.
@@ -231,6 +247,9 @@ impl<'r, 'h> Runner<'r, 'h> {
             .stderr(Stderr::Capture);
         for (key, value) in env {
             prepare = prepare.env(key, value);
+        }
+        if let Some(file) = &*self.shallow_file.borrow() {
+            prepare = prepare.env("GIT_SHALLOW_FILE", file);
         }
         if let Some(namespace) = &self.namespace {
             prepare = prepare.env("GIT_NAMESPACE", namespace);

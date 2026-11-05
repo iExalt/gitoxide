@@ -207,6 +207,26 @@ same. These differences remain, for the network phase to decide about:
   * Lines of the client that aren't commits are ignored. Git ignores blobs, and crashes for a tree that the receiver has, and
     rejects a push with `invalid new value provided` for a tree that the pack brings.
   * Trailing characters after the hex id of a `shallow` line are refused, as in the advertisement, where Git ignores them.
+* With `receive.shallowUpdate=true` the commits of the boundary that a command needs are added to the `shallow` file when that
+  command is updated, after the `update` hook and before its reference is queued: the file is locked, written with what it had
+  sorted and what the command needs after it in the order the client said them, and kept if the command is connected with it, or
+  else the command is told `shallow error` and the file stays as it was. What references reach is looked at once, when the first
+  command is updated, after the deletions of a push that isn't atomic. Hooks, including `reference-transaction`, are told
+  about a temporary `shallow_XXXXXX` file in the Git directory with `GIT_SHALLOW_FILE` when something that the client said is
+  there, which has what the receiver has sorted and then every line of the client as it was sent, and which stays until the
+  hooks that follow the report ran. Differences:
+  * Git 2.56 passes the command where a pointer to it is expected in `update_shallow_ref()`, so that it checks the command that
+    follows, or none, and drops all that follow. A push of two new branches where the first needs the boundary ends with
+    `remote failed to report status` for the second, and a single command whose pack lacks a tree of the boundary is accepted
+    and leaves a corrupt repository. Each command is checked and told here. That is not what Git does, which is why these rows
+    assert the outcome of the receiver and the others compare what Git does for the cases it handles as meant: the command that
+    needs the boundary is the last one, or the only one.
+  * Git writes an empty `shallow` file where a command that reaches the boundary through a path that references reach as well takes
+    nothing into it, which makes the repository shallow without a commit. The receiver doesn't write the file then, and doesn't
+    rewrite one that was there to sort it.
+  * Git dies if the file has changed since it read it, or is locked, without telling the client what happened. The command is
+    rejected with `shallow error` and a message here.
+  * The new file doesn't have the permissions of `core.sharedRepository`.
 * The post-receive and post-update hooks are skipped for reference names that can't be represented on Windows, as in Git.
 * The `reference-transaction` hook runs in the Git directory with `GIT_DIR` set, like the other receive-side hooks, for the
   one transaction of an atomic push or the two of a push without atomicity, where deletions come first. A refusal in the
@@ -218,7 +238,7 @@ same. These differences remain, for the network phase to decide about:
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
-unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, `receive.shallowUpdate`, partial repositories,
+unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.
