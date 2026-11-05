@@ -147,6 +147,10 @@ where
                 }
             };
             // This needs drop if tracing is compiled in. We just don't know it.
+            #[allow(
+                clippy::drop_non_drop,
+                reason = "the span only has a destructor if tracing is compiled in, which depends on the features of dependents"
+            )]
             drop(negotiate_span);
 
             let mut previous_response = previous_response.expect("knowledge of a pack means a response was received");
