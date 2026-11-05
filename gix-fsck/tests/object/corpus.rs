@@ -457,6 +457,40 @@ pub fn trees(base: &Base) -> Vec<Case> {
         t("tree-dotgit-hfs-zwnj", &[("100644", ".gi\u{200c}t".as_bytes(), &blob)]),
         t("tree-dotgit-hfs-bom", &[("100644", ".git\u{feff}".as_bytes(), &blob)]),
         t("tree-dotgit-hfs-invalid-utf8", &[("100644", b".gi\xc0t", &blob)]),
+        t("tree-dotgit-hfs-invalid-utf8-after", &[("100644", b".git\xff", &blob)]),
+        t(
+            "tree-dotgit-hfs-invalid-utf8-after-2",
+            &[("100644", b".git\xc3", &blob)],
+        ),
+        t(
+            "tree-dotgit-hfs-invalid-utf8-after-3",
+            &[("100644", b".GIT\xe2\x80", &blob)],
+        ),
+        t("tree-dotgit-hfs-invalid-utf8-before", &[("100644", b"\xff.git", &blob)]),
+        t(
+            "tree-gitmodules-symlink-hfs-invalid-utf8-after",
+            &[("120000", b".gitmodules\xff", &blob)],
+        ),
+        t(
+            "tree-gitmodules-symlink-hfs-invalid-utf8-within",
+            &[("120000", b".git\xc0modules", &blob)],
+        ),
+        t(
+            "tree-gitattributes-symlink-hfs-invalid-utf8-after",
+            &[("120000", b".gitattributes\xc3", &blob)],
+        ),
+        t(
+            "tree-gitignore-symlink-hfs-invalid-utf8-after",
+            &[("120000", b".gitignore\xff", &blob)],
+        ),
+        t(
+            "tree-mailmap-symlink-hfs-invalid-utf8-after",
+            &[("120000", b".mailmap\xe2\x80", &blob)],
+        ),
+        t(
+            "tree-gitmodules-symlink-hfs-ignorable-then-invalid",
+            &[("120000", b".git\xe2\x80\x8cmodules\xff", &blob)],
+        ),
         t("tree-dotgitx", &[("100644", b".gitx", &blob)]),
         t("tree-dot-git-lookalike", &[("100644", b".gi", &blob)]),
         t("tree-gitmodules-symlink", &[("120000", b".gitmodules", &blob)]),
