@@ -123,9 +123,10 @@ impl Server {
 
 /// A connection to a repository on this machine that is served by this process.
 ///
-/// Dropping it ends the connection and waits for the server for up to 5 seconds. A server that is still busy then, for example
-/// with a hook that runs after the client got its answer, is left running on its thread until it ends, and it can't be killed
-/// as a program could. Use [`wait_for_server()`](TransportWithoutIO::wait_for_server()) to wait for it, which `Connection`
+/// Dropping it ends the connection and waits for the server for up to 5 seconds, or what [`with_drop_grace()`](Self::with_drop_grace()) says. A server that is still busy then, for example
+/// with a hook that runs after the client got its answer, is interrupted, which stops the maintenance that follows a push at its
+/// next step, and waited for for up to 5 seconds more, though it doesn't stop a hook that is running. What is still busy after that is left running on its thread until it ends,
+/// and it can't be killed as a program could. Use [`wait_for_server()`](TransportWithoutIO::wait_for_server()) to wait for it, which `Connection`
 /// does when a push finishes.
 ///
 /// [Interrupting](TransportWithoutIO::interrupt_handle()) makes the transport fail from then on, and ends the server if it
@@ -138,6 +139,7 @@ pub struct NativeLocal {
     trace: bool,
     connection: Option<Connection<PipeReader, SharedWriter>>,
     server: Arc<Server>,
+    drop_grace: Duration,
 }
 
 impl NativeLocal {
@@ -160,7 +162,15 @@ impl NativeLocal {
                 input: SharedWriter(Arc::new(Mutex::new(None))),
                 thread: Mutex::new(None),
             }),
+            drop_grace: Duration::from_secs(5),
         }
+    }
+
+    /// Set how long dropping the transport waits for a server that is still busy, and then again after it interrupted that server,
+    /// which is 5 seconds by default.
+    pub fn with_drop_grace(mut self, grace: Duration) -> Self {
+        self.drop_grace = grace;
+        self
     }
 
     /// Open the repository like a started `git-receive-pack` does: without what the environment of the client says about
@@ -217,6 +227,7 @@ fn serve(
         Service::ReceivePack => repo
             .receive()
             .map(Receiver::with_hooks_without_local_repo_env)
+            .map(|receiver| receiver.with_auto_maintenance(|repo| run_auto_maintenance(repo, interrupted)))
             .and_then(|receiver| receiver.serve(input, output, version, interrupted))
             .err(),
         #[cfg(feature = "upload")]
@@ -230,6 +241,28 @@ fn serve(
             None
         }
     }
+}
+
+/// What `git receive-pack` does after objects were received and `receive.autogc` allows it: run `maintenance run --auto` if
+/// `maintenance.auto`, or else `gc.auto`, doesn't turn it off. It runs here, after the report was sent to the client, and doesn't
+/// detach into the background as Git does with `maintenance.autoDetach` or `gc.autoDetach`, so the client of a push, which reads what
+/// the server says until it ends, waits for it as it does with `maintenance.autoDetach=false`. A client that stops waiting earlier
+/// ends it with `interrupted` when the transport is dropped, which makes it stop at its next step and release its locks, as a
+/// program that ends while it runs would leave `objects/maintenance.lock` behind.
+/// The flag is the one that interrupts the whole server on purpose: an interrupt of the transport asks for the work done for it to
+/// stop, and maintenance can be stopped at any of its steps without loss, so it needs no flag of its own.
+/// A caller that wants Git's detaching can turn `receive.autogc` off and run [`auto_maintenance()`](crate::Repository::auto_maintenance())
+/// itself.
+#[cfg(feature = "receive")]
+fn run_auto_maintenance(repo: &crate::Repository, interrupted: &AtomicBool) -> gix_error::Result<()> {
+    if repo.auto_maintenance()?.enabled {
+        let options = crate::maintenance::run::Options {
+            auto: true,
+            ..Default::default()
+        };
+        repo.run_maintenance(options, interrupted)?;
+    }
+    Ok(())
 }
 
 fn io_error(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> std::io::Error {
@@ -366,6 +399,11 @@ impl Drop for NativeLocal {
         self.server.input.close();
         self.connection = None;
         // Hooks that run after the reply aren't waited for here, but by `wait_for_server()`, which callers use if it matters.
-        self.server.wait(Duration::from_secs(5)).ok();
+        // Maintenance that runs after a push is told to stop if it takes too long, and is waited for once more, as a program that
+        // ends while it runs would leave `objects/maintenance.lock` behind, which nobody removes.
+        if !self.server.wait(self.drop_grace).unwrap_or(true) {
+            self.server.interrupt();
+            self.server.wait(self.drop_grace).ok();
+        }
     }
 }
