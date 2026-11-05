@@ -323,6 +323,50 @@ fn the_hook_sees_what_git_shows_it(reftable: bool) -> TestResult {
 }
 
 #[test]
+fn a_repository_that_ignores_the_environment_changes_references_inside_a_quarantine_environment() -> TestResult {
+    let (repo, _keep) = repo(false)?;
+    let dir = repo.workdir().expect("non-bare").to_owned();
+    let quarantine = gix_testtools::tempfile::tempdir()?;
+    let _environment = gix_testtools::Env::new().set("GIT_QUARANTINE_PATH", quarantine.path().display().to_string());
+    let mut git = gix_testtools::git_command(&dir);
+    git.args(["update-ref", "refs/heads/by-git", "main"])
+        .env("GIT_QUARANTINE_PATH", quarantine.path());
+    assert!(
+        !git.output()?.status.success(),
+        "Git refuses to change references inside a quarantine environment, which is the reason for the default"
+    );
+
+    let repo = gix::open_opts(
+        repo.git_dir(),
+        crate::util::restricted().ignore_repository_environment(true),
+    )?;
+    let main = id(&repo, "main")?;
+    repo.edit_references([update("refs/heads/new", main, PreviousValue::MustNotExist, false)])?;
+    assert_eq!(
+        repo.find_reference("refs/heads/new")?.id(),
+        main,
+        "ignoring the repository environment includes the one that says a quarantine is in effect"
+    );
+
+    let logs = gix_testtools::tempfile::tempdir()?;
+    let log = logs.path().join("hook.log");
+    install_hook(&repo, &log, &logs.path().join("veto"))?;
+    repo.edit_references_with_hooks(
+        [update("refs/heads/hooked", main, PreviousValue::MustNotExist, false)],
+        Some(gix::actor::SignatureRef {
+            name: "committer".into(),
+            email: "committer@example.com".into(),
+            time: "0 +0000",
+        }),
+    )?;
+    assert!(
+        std::fs::read_to_string(&log)?.contains("committed"),
+        "the hook is run as without a quarantine environment, as the references are changed"
+    );
+    Ok(())
+}
+
+#[test]
 fn nothing_changes_inside_a_quarantine_environment_and_the_hook_isnt_called() -> TestResult {
     let (repo, _keep) = repo(false)?;
     let logs = gix_testtools::tempfile::tempdir()?;
