@@ -221,33 +221,17 @@ pub(super) fn verify_with_roots(
     let mut new_commits = Vec::new();
     let mut new_ids = HashSet::new();
     if !commit_tips.is_empty() {
-        let hidden = cutoffs.commits.iter().copied();
-        let walk: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info, String>> + '_> = match roots {
-            None => Box::new(
-                repo.rev_walk(commit_tips)
-                    .with_hidden(hidden)
-                    .all()
-                    .map_err(|err| disconnected(None, format!("Could not start to walk the history: {err}")))?
-                    .map(|info| {
-                        info.map(crate::revision::walk::Info::detach)
-                            .map_err(|err| err.to_string())
-                    }),
-            ),
-            Some(roots) => {
-                let mut all_roots = roots.clone();
-                all_roots.extend(
-                    repo.shallow_commits()
-                        .map_err(|err| disconnected(None, format!("Could not read the shallow file: {err}")))?
-                        .iter()
-                        .flat_map(|commits| commits.iter().copied()),
-                );
-                Box::new(
-                    super::shallow::walk_without_parents(repo, commit_tips, hidden, all_roots)
-                        .map_err(|err| disconnected(None, format!("Could not start to walk the history: {err}")))?
-                        .map(|info| info.map_err(|err| err.to_string())),
-                )
-            }
-        };
+        let mut all_roots = roots.cloned().unwrap_or_default();
+        all_roots.extend(
+            repo.shallow_commits()
+                .map_err(|err| disconnected(None, format!("Could not read the shallow file: {err}")))?
+                .iter()
+                .flat_map(|commits| commits.iter().copied()),
+        );
+        // The walk doesn't read what Git doesn't, so that flawed identities are a matter of checking objects only.
+        let walk = super::shallow::walk_without_parents(repo, commit_tips, cutoffs.commits.iter().copied(), all_roots)
+            .map_err(|err| disconnected(None, format!("Could not start to walk the history: {err}")))?
+            .map(|info| info.map_err(|err| err.to_string()));
         for info in walk {
             let info = info.map_err(|err| disconnected(None, format!("History is incomplete: {err}")))?;
             new_ids.insert(info.id);

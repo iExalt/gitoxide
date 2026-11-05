@@ -747,11 +747,11 @@ sequencing; the overseer proposes each as its dependencies finish.
   - Open: packs that fetch writes have mode `0600`, where Git's are `0444`.
   - Parking lot from thread 11, refused at configuration time with an `Unsupported` error before anything is advertised (`gix/src/receive/options.rs`,
     `gix-odb/src/quarantine.rs`, and [the evidence page](push-durability-evidence.md)): push certificates (`receive.certNonceSeed`),
-    `proc-receive` (`receive.procReceiveRefs`), and object checking on receive (`receive.fsckObjects`, `transfer.fsckObjects`). The
-    consumer's operations include none of them and its code sets none of those keys.
-  - Object checking is not a permanent limit. A local remote whose configuration, global included, sets `transfer.fsckObjects` or
-    `receive.fsckObjects` to true refuses every local push with `receive.fsckObjects and transfer.fsckObjects aren't supported, as received
-    objects can't be checked yet`, and the consumer reports that as a Git failure. Ran: a consumer `sync` against a local remote exits 4
+    `proc-receive` (`receive.procReceiveRefs`). The consumer's operations include neither and its code sets neither key. Object checking
+    on receive (`receive.fsckObjects`, `transfer.fsckObjects`) was in that list, and is native since thread 15.
+  - Object checking was not a permanent limit. Until thread 15, a local remote whose configuration, global included, set
+    `transfer.fsckObjects` or `receive.fsckObjects` to true refused every local push with `receive.fsckObjects and transfer.fsckObjects
+    aren't supported, as received objects can't be checked yet`, and the consumer reported that as a Git failure. Ran: a consumer `sync` against a local remote exits 4
     with it, and against a `git://` remote it succeeds, as a server running Git does the checking. Also ran: a fetch from a local path with
     `transfer.fsckObjects=true` works, and none of the three keys refuses anything on the fetch side. Read: the fork's fetch reads neither
     `fetch.fsckObjects` nor `transfer.fsckObjects`, so received objects are not checked there, where Git would. The owner decided on native

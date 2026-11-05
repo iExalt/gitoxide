@@ -371,7 +371,8 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
     * [x] complete thin packs from the object database, including its alternates
     * [x] freshen objects that exist already, flush, and move in the order Git does
     * [x] `receive.maxInputSize`, `core.createObject`, `core.fsync*`
-    * [ ] `receive.fsckObjects`, `core.sharedRepository` and `pack.indexVersion` other than 2 (refused, not ignored)
+    * [x] `receive.fsckObjects`, `transfer.fsckObjects`, `receive.fsck.<msg-id>` and `receive.fsck.skipList` through an inspector that checks every received object (see `gix-fsck`)
+    * [ ] `core.sharedRepository` and `pack.indexVersion` other than 2 (refused, not ignored)
 * **alternates**
     * _resolve links between object databases_
     * [x] safe with cycles and recursive configurations
@@ -1099,6 +1100,7 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
 ### gix-validate
 * [x] validate ref names
 * [x] validate submodule names
+* [x] detect `.git`, `.gitmodules`, `.gitattributes`, `.gitignore` and `.mailmap` in all spellings that HFS+ and NTFS fold onto them
 * [x] [validate][tagname-validation] tag names
 
 ### gix-fsck
@@ -1108,7 +1110,11 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
     - [ ] tree-cache in the `index` or any entry within
 * [ ] validate object hashes during connectivity traversal
 * [ ] progress reporting and interruptability
-* [ ] skipList to exclude objects which are known to be broken
+* [x] check objects like `git index-pack --strict` and `git unpack-objects --strict`, with their output
+    - [x] all 76 message ids with their severities, overrides and skip lists (`Options`)
+    - [x] commits, tags, trees, `.gitmodules` and `.gitattributes`, and the links between objects (`Checker`, `Transfer`)
+    - [x] compared with Git 2.56 for both hashes
+* [x] skipList to exclude objects which are known to be broken (`Options::skip_list_from_bytes()`)
 * [ ] validate blob hashes (connectivity check
 * [ ] identify objects that exist but are not reachable (i.e. what remains after a full graph traversal from all valid starting points)
 * [ ] write dangling objects to the `.git/log-found` directory structure

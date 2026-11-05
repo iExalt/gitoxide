@@ -337,14 +337,28 @@ impl<'repo> Receiver<'repo> {
 
         if request.expects_pack() {
             let objects_dir = repo.objects.store_ref().path().to_owned();
-            match gix_odb::quarantine::Quarantine::new(objects_dir, self.options.quarantine.clone()) {
+            let mut quarantine_options = self.options.quarantine.clone();
+            if let Some(fsck) = &self.options.fsck {
+                // The commits whose parents the receiver or the client doesn't have, which the links of the objects can't lead to.
+                let mut shallow: Vec<_> = repo
+                    .shallow_commits()
+                    .or_raise(|| message("Could not read the shallow file"))?
+                    .map_or_else(Vec::new, |commits| commits.iter().copied().collect());
+                shallow.extend(request.shallow.iter().copied());
+                quarantine_options.inspector = Some(crate::fsck::inspector(fsck.clone(), repo.object_hash(), shallow));
+            }
+            match gix_odb::quarantine::Quarantine::new(objects_dir, quarantine_options) {
                 Err(_) => unpack_failure = Some("unable to start object transaction".to_owned()),
                 Ok(mut created) => match created.receive_pack(pack, interrupt) {
-                    Ok(_) => {
+                    Ok(received) => {
                         maintenance_due = self.options.auto_gc;
                         quarantine = Some(created);
+                        messages.program_output(received.report);
                     }
-                    Err(rejected) => unpack_failure = Some(rejected.reason.to_string()),
+                    Err(rejected) => {
+                        messages.program_output(rejected.report);
+                        unpack_failure = Some(rejected.reason.to_string());
+                    }
                 },
             }
         }

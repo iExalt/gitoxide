@@ -226,6 +226,8 @@ pub(super) struct Push {
     pub(super) compare_work_tree: bool,
     /// Revisions of the client that are the shallow commits it sends before its commands, as a client that is shallow does.
     pub(super) shallow: Vec<&'static str>,
+    /// Make a thin pack, which is a pack that has deltas against objects of the receiver that it doesn't contain.
+    pub(super) thin: bool,
 }
 
 fn copy_dir(from: &Path, to: &Path) -> TestResult {
@@ -359,6 +361,7 @@ impl World {
                 .env("LC_ALL", "C")
                 .env("LANG", "C")
                 .args(["pack-objects", "--revs", "--stdout"])
+                .args(push.thin.then_some("--thin"))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -833,7 +836,11 @@ pub(super) fn compare_on(world: &World, label: &str, push: &Push, formats: &[&st
         } else {
             fork_report
         };
-        assert_eq!(fork_report, git_report, "{format}/{label}: the client is told the same");
+        assert_eq!(
+            fork_report, git_report,
+            "{format}/{label}: the client is told the same\nthe fork said: {}\nGit said: {}",
+            fork.messages, git.messages
+        );
         assert_eq!(
             fork.messages, git.messages,
             "{format}/{label}: people are told the same"

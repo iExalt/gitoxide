@@ -111,6 +111,12 @@ impl Messages {
             text: text.into().into(),
         });
     }
+    /// What a program that checked the received objects printed, to be relayed as it is, if it printed anything.
+    pub(super) fn program_output(&mut self, output: Vec<u8>) {
+        if !output.is_empty() {
+            self.hook_output(output);
+        }
+    }
     pub fn hook_output(&mut self, output: Vec<u8>) {
         self.0.push(Message {
             level: Level::Hook,

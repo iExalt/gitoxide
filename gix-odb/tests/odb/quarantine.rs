@@ -592,9 +592,6 @@ fn unsupported_configuration_is_refused() -> TestResult {
     for config in [
         &["core.sharedRepository=group"][..],
         &["core.sharedRepository=0660"],
-        &["receive.fsckObjects=true"],
-        &["transfer.fsckObjects=true"],
-        &["transfer.fsckObjects=true", "receive.fsckObjects=yes"],
         &["pack.indexVersion=1"],
     ] {
         assert!(
@@ -605,7 +602,8 @@ fn unsupported_configuration_is_refused() -> TestResult {
     for config in [
         &["core.sharedRepository=false"][..],
         &["core.sharedRepository=umask"],
-        &["receive.fsckObjects=false", "transfer.fsckObjects=true"],
+        // Checking objects is up to the inspector that is given to the options, not something to configure here.
+        &["receive.fsckObjects=true"],
         &["pack.indexVersion=2"],
         &["core.createObject=rename"],
     ] {

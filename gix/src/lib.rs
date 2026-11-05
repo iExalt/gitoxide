@@ -240,6 +240,9 @@ pub mod push;
 pub(crate) mod served;
 
 #[cfg(feature = "receive")]
+pub(crate) mod fsck;
+
+#[cfg(feature = "receive")]
 pub mod receive;
 
 #[cfg(feature = "upload")]

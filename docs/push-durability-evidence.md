@@ -312,3 +312,44 @@ contains everything `rev-list --objects` lists, plus the edge commits and their 
 
 `include-tag` takes the annotated tags from `refs/tags/` of the whole repository, ignoring the namespace and `hideRefs`,
 because Git does, and the server does the same on purpose, with a test that pins it.
+
+## Object checking on receive
+
+`receive.fsckObjects` or else `transfer.fsckObjects` makes the receiver check every object of the pack it receives, as
+`unpack-objects --strict` does for packs with fewer entries than the unpack limit and `index-pack --strict` does for the others,
+and refuse the push as `receive-pack` does: the status says `unpack unpack-objects abnormal exit` or `unpack index-pack abnormal exit`
+and `ng <ref> unpacker error`, after the lines Git prints about the objects. `receive.fsck.<msg-id>` and `receive.fsck.skipList`
+configure severities and objects to skip. The plain `fsck.<msg-id>` and `fsck.skipList` are for `git fsck` and don't apply, as in Git.
+The checks are those of `gix-fsck`, which has Git's 76 message ids. Everything is checked before the quarantine is migrated, a reference
+changes, a loose object is written or a `.keep` file is made.
+
+Ran, with Git 2.56 `receive-pack` as the oracle (`gix/tests/gix/receive/fsck.rs`, SHA-1 and SHA-256): the report to the client, the lines
+people see, the references, the objects and what is left behind are the same, in 10 tests: flaws in commits, trees,
+tags and `.gitmodules`, on both paths and with unpack limits of 0, 1, 2 and 100, packs of more than 100 objects, `receive.fsckObjects`
+against `transfer.fsckObjects`, overrides and skip lists, a thin pack on a base with an old flaw (accepted), the flawed tree sent again
+(refused), warnings of accepted pushes, commits with flawed identities that are accepted when nothing checks them or the flaw is ignored, and a client and a receiver that are shallow. The checker itself is compared on thousands of objects in `gix-fsck`.
+
+Measured (one 8-core host, load about 2, release build, `receive.fsckObjects` toggled): a push of the whole history of this
+repository (222,226 objects, 379 MB pack) into an empty repository took:
+
+| | Git 2.56 `receive-pack` | the receiver |
+| --- | --- | --- |
+| without checking | 8.67 s | 5.62 s |
+| with checking | 8.98 s (+3.6%) | 6.16 s (+9.7%) |
+
+The receiver decodes the objects a second time to check them, and only commits, trees and tags, as nothing is checked about other
+blobs, while Git checks them as `index-pack` resolves them. Decoding every object without a cache added 3.9 s, and with a delta cache 2.2 s.
+
+What a new tree links to that isn't new is looked at by its header only, which matters for pushes that add to a repository
+as most do. The same host, a push that changes one file of a directory of 600 files of 200 KB (a 154 KB request) into a repository
+that has the rest took 0.01 s without checking and 0.01 s with it, where Git needs 0.02 s and 0.03 s. Reading what is linked
+completely, as it first did, took 0.27 s, which is what to look out for. A push of the last 10 commits of this repository onto what
+precedes them took 0.03 s and 0.03 s (Git: 0.05 s and 0.05 s).
+
+Differences from Git:
+
+* The check isn't run in a child process, so a failure to check, like a skip list that can't be read, is a failure to receive, including for a push that only deletes references, which Git accepts as it has no objects to run its program on.
+* A configuration that Git rejects when it reads it (an invalid severity, `receive.fsckObjects` that isn't a boolean) fails every push in
+  both, also if objects aren't checked; a skip list that can't be read and a severity for a message that can't be lowered only matter
+  when objects are checked, in both.
+* `.gitmodules` is parsed the way the checked-out file is read.
