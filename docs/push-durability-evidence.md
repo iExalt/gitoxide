@@ -197,7 +197,16 @@ same. These differences remain, for the network phase to decide about:
   commit or not, as Git does. Only those commits count as having no parents: a client that leaves out history because the
   receiver advertised a reference that reaches it is told `missing necessary objects` when the receiver doesn't have what is
   below its shallow commits, which is what Git does as well, and the commit-graph file isn't believed, which tells of parents
-  that a shallow repository doesn't have. A client that is shallow itself is refused for now.
+  that a shallow repository doesn't have.
+* A client that is shallow sends the commits at its boundary, and without `receive.shallowUpdate` the commands whose history
+  leads to one of them are rejected with `shallow update not allowed`, while the others go on, in atomic pushes as well, as
+  in Git. Reached means reachable from the new tip, without going past the boundary and without counting what any reference
+  reaches: `HEAD`, hidden references and those of other namespaces too. A boundary commit that the receiver has isn't needed if
+  a reference reaches it, and one that it doesn't have is when the pack brings it. A rejected command is told
+  `missing necessary objects` instead if it doesn't connect on its own, as in Git. Differences:
+  * Lines of the client that aren't commits are ignored. Git ignores blobs, and crashes for a tree that the receiver has, and
+    rejects a push with `invalid new value provided` for a tree that the pack brings.
+  * Trailing characters after the hex id of a `shallow` line are refused, as in the advertisement, where Git ignores them.
 * The post-receive and post-update hooks are skipped for reference names that can't be represented on Windows, as in Git.
 * The `reference-transaction` hook runs in the Git directory with `GIT_DIR` set, like the other receive-side hooks, for the
   one transaction of an atomic push or the two of a push without atomicity, where deletions come first. A refusal in the
@@ -209,7 +218,7 @@ same. These differences remain, for the network phase to decide about:
   lookup of symbolic references doesn't hold locks, so under a concurrent change of such a reference the order may differ.
 
 It refuses configurations and repositories it can't handle yet, before advertising anything, and classifies the refusal as
-unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, a client that is shallow, partial repositories,
+unsupported: `updateInstead` for a work tree that needs more than the index to be rewritten, signed pushes, `proc-receive`, `receive.shallowUpdate`, partial repositories,
 `core.alternateRefs*`, `transfer.advertiseSID=true` and `receive.updateServerInfo=true`, repositories that aren't fully
 trusted, as their hooks wouldn't be seen, and every `extensions.*` other than the object format, the reference storage,
 `worktreeConfig`, `noop` and `preciousObjects`.
