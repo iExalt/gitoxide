@@ -34,6 +34,10 @@ pub(super) struct Hook {
     ignore_stdin: bool,
     /// Say nothing, to compare hooks whose output is relayed in an order that depends on timing.
     silent: bool,
+    /// Shell code to run after saying what it does, for hooks that have an effect.
+    body: &'static str,
+    /// The interpreter of the script, which can be one that doesn't exist.
+    shebang: &'static str,
 }
 
 impl Hook {
@@ -51,6 +55,8 @@ impl Hook {
             noise: 0,
             ignore_stdin: false,
             silent: false,
+            body: "",
+            shebang: "/bin/sh",
         }
     }
     /// A `reference-transaction` hook that records everything it sees to a file of its own, and says yes. The recording is
@@ -100,6 +106,14 @@ impl Hook {
         self.silent = true;
         self
     }
+    pub(super) fn running(mut self, body: &'static str) -> Self {
+        self.body = body;
+        self
+    }
+    pub(super) fn interpreted_by(mut self, shebang: &'static str) -> Self {
+        self.shebang = shebang;
+        self
+    }
     pub(super) fn ignoring_stdin(mut self) -> Self {
         self.ignore_stdin = true;
         self
@@ -116,11 +130,12 @@ impl Hook {
             None => format!("exit {}", self.exit),
         };
         let script = format!(
-            r#"#!/bin/sh
+            r#"#!{shebang}
 {{
   echo "== {label} $*"
   echo "cwd=$(pwd -P)"
   echo "GIT_DIR=${{GIT_DIR-unset}}"
+  echo "GIT_WORK_TREE=${{GIT_WORK_TREE-unset}}"
   echo "GIT_NAMESPACE=${{GIT_NAMESPACE-unset}}"
   echo "GIT_REPLACE_REF_BASE=${{GIT_REPLACE_REF_BASE-unset}}"
   echo "GIT_PUSH_OPTION_COUNT=${{GIT_PUSH_OPTION_COUNT-unset}}"
@@ -143,6 +158,7 @@ echo "{label} says it on the other output" >&2
 i=0
 while [ "$i" -lt {noise} ]; do echo "{label} noise $i"; echo "{label} noise on the other output $i" >&2; i=$((i+1)); done
 [ "{silent}" = yes ] || printf "{label} without a newline"
+{body}
 {decline}
 "#,
             log = log.display(),
@@ -150,6 +166,8 @@ while [ "$i" -lt {noise} ]; do echo "{label} noise $i"; echo "{label} noise on t
             noise = self.noise,
             silent = if self.silent { "yes" } else { "no" },
             ignore_stdin = if self.ignore_stdin { "yes" } else { "no" },
+            shebang = self.shebang,
+            body = self.body,
             decline = if self.signal { "kill -KILL $$".into() } else { decline },
         );
         let hooks = remote.join(self.dir);
@@ -685,6 +703,13 @@ fn finish(remote: &Path, stdout: &[u8], side_band: bool, died: bool) -> TestResu
             .replace("GIT_DIR=.\n", "GIT_DIR=<REMOTE>\n")
             // A work tree has the Git directory below it, where Git calls hooks with `.` and the receiver with the whole path.
             .replace("GIT_DIR=<REMOTE>/.git\n", "GIT_DIR=<REMOTE>\n")
+            .lines()
+            .map(|line| match line.split_once("/.git/worktrees/") {
+                // A linked work tree is named after its directory, which is named after what the test does.
+                Some((before, _)) if line.starts_with("GIT_DIR=") => format!("{before}/.git/worktrees/<linked>\n"),
+                _ => format!("{line}\n"),
+            })
+            .collect::<String>()
     };
     // Hooks that run at the same time have recordings of their own, which are put together in the order of their names.
     let mut recordings: Vec<_> = std::fs::read_dir(remote)?

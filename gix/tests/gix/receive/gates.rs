@@ -140,6 +140,7 @@ fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResu
         "post-receive",
         "post-update",
         "reference-transaction",
+        "push-to-checkout",
     ] {
         let hook = dir.path().join("hooks").join(event);
         std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
@@ -147,25 +148,6 @@ fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResu
         open(dir.path(), &[])?
             .receive()
             .unwrap_or_else(|err| panic!("the {event} hook can be run: {err}"));
-        std::fs::remove_file(hook)?;
-    }
-    {
-        let event = "push-to-checkout";
-        let hook = dir.path().join("hooks").join(event);
-        std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
-        let err = open(dir.path(), &[])?
-            .receive()
-            .err()
-            .unwrap_or_else(|| panic!("the {event} hook can't run yet, so the receiver has to refuse"));
-        assert!(
-            err.is_unsupported(),
-            "{event}: callers can fall back to something that runs hooks: {err}"
-        );
-        assert!(
-            err.to_string().contains(event),
-            "{event}: the refusal names the hook: {err}"
-        );
         std::fs::remove_file(hook)?;
     }
     Ok(())

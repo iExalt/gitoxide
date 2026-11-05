@@ -701,3 +701,212 @@ fn attributes_that_the_work_tree_has_and_the_index_hasnt_apply_like_they_do_for_
         OK,
     )
 }
+
+/// A `push-to-checkout` hook that records how it was called, in the Git directory of the work tree that is pushed to.
+fn push_to_checkout() -> Hook {
+    Hook::new("push-to-checkout").in_dir(".git/hooks").silent()
+}
+
+fn with_hooks(hooks: Vec<Hook>, push: Push) -> Push {
+    Push { hooks, ..push }
+}
+
+#[test]
+fn a_push_to_checkout_hook_takes_the_place_of_the_checks_and_the_checkout() -> TestResult {
+    let world = world()?;
+    // The hook is told the commit, in the environment that points to the work tree, and decides what happens to it, so that
+    // a work tree with changes in it is no reason to refuse.
+    same(
+        &world,
+        "hook-does-nothing-in-a-dirty-work-tree",
+        &prepared(with_hooks(vec![push_to_checkout()], onto_main("edit")), |remote, _| {
+            write(remote, "file", "modified")
+        }),
+        OK,
+    )?;
+    same(
+        &world,
+        "hook-updates-the-work-tree",
+        &with_hooks(
+            vec![push_to_checkout().running("git read-tree -u -m \"$1\"")],
+            onto_main("edit"),
+        ),
+        OK,
+    )?;
+    same(
+        &world,
+        "hook-declines",
+        &with_hooks(vec![push_to_checkout().exiting(1)], onto_main("edit")),
+        "ng refs/heads/main push-to-checkout hook declined",
+    )?;
+    // A hook of a push to a branch that isn't checked out doesn't run.
+    same(
+        &world,
+        "hook-for-another-branch",
+        &Push {
+            commands: vec![Cmd("0", "edit", "refs/heads/other")],
+            ..with_hooks(vec![push_to_checkout().exiting(1)], onto_main("edit"))
+        },
+        "ok refs/heads/other",
+    )?;
+    // It gets the null id when the current branch is deleted, which it may be told to allow.
+    same(
+        &world,
+        "hook-is-told-about-a-deletion",
+        &with_config(
+            Push {
+                commands: vec![Cmd("main", "0", "refs/heads/main")],
+                ..with_hooks(vec![push_to_checkout()], onto_main("edit"))
+            },
+            "config receive.denyDeleteCurrent ignore",
+        ),
+        OK,
+    )?;
+    same(
+        &world,
+        "hook-in-the-linked-work-tree",
+        &prepared(
+            Push {
+                commands: vec![Cmd("main", "edit", "refs/heads/linked")],
+                ..with_hooks(
+                    vec![push_to_checkout().running("git read-tree -u -m \"$1\"")],
+                    onto_main("edit"),
+                )
+            },
+            add_linked,
+        ),
+        OK_LINKED,
+    )
+}
+
+#[test]
+fn what_comes_before_and_after_the_push_to_checkout_hook() -> TestResult {
+    let world = world()?;
+    // The `update` hook decides first, so the other hook doesn't run.
+    same(
+        &world,
+        "update-hook-declines-first",
+        &with_hooks(
+            vec![
+                Hook::new("update")
+                    .in_dir(".git/hooks")
+                    .declining("refs/heads/main")
+                    .silent(),
+                push_to_checkout().named("push-to-checkout"),
+            ],
+            onto_main("edit"),
+        ),
+        "ng refs/heads/main hook declined",
+    )?;
+    // The work tree is updated when the command is processed, so a failing command that follows doesn't undo that.
+    same(
+        &world,
+        "hook-then-a-failing-atomic-command",
+        &Push {
+            atomic: true,
+            pack_of: Some(vec!["edit"]),
+            commands: vec![
+                Cmd("main", "edit", "refs/heads/main"),
+                Cmd("main", "0", "refs/heads/not-there"),
+            ],
+            ..with_hooks(
+                vec![push_to_checkout().running("git read-tree -u -m \"$1\"")],
+                onto_main("edit"),
+            )
+        },
+        "ng refs/heads/not-there atomic transaction failed",
+    )
+}
+
+#[test]
+fn a_hook_that_cannot_be_run_is_no_hook_and_the_work_tree_is_updated_by_the_checks() -> TestResult {
+    let world = world()?;
+    // Git only knows that a hook ran if it ended, so one that can't start leaves it to the checks, which refuse a dirty work tree.
+    let dirty: Prepare = |remote, _| write(remote, "file", "modified");
+    same(
+        &world,
+        "interpreter-is-missing",
+        &prepared(
+            with_hooks(
+                vec![push_to_checkout().interpreted_by("/nonexistent/sh")],
+                onto_main("edit"),
+            ),
+            dirty,
+        ),
+        UNSTAGED,
+    )?;
+    same(
+        &world,
+        "hook-is-not-executable",
+        &prepared(
+            with_hooks(vec![push_to_checkout().with_mode(0o644)], onto_main("edit")),
+            dirty,
+        ),
+        UNSTAGED,
+    )?;
+    same(
+        &world,
+        "interpreter-is-missing-in-a-clean-work-tree",
+        &with_hooks(
+            vec![push_to_checkout().interpreted_by("/nonexistent/sh")],
+            onto_main("edit"),
+        ),
+        OK,
+    )
+}
+
+#[test]
+fn a_configured_hook_and_a_hook_file_both_run_and_either_one_declines() -> TestResult {
+    let world = world()?;
+    same(
+        &world,
+        "configured-hook-declines",
+        &with_config(
+            with_config(
+                with_hooks(vec![push_to_checkout()], onto_main("edit")),
+                "config hook.guard.event push-to-checkout",
+            ),
+            "config hook.guard.command false",
+        ),
+        "ng refs/heads/main push-to-checkout hook declined",
+    )
+}
+
+#[test]
+fn a_configured_hook_that_cannot_start_ends_the_run_and_declines_only_if_one_ran_before_it() -> TestResult {
+    let world = world()?;
+    same(
+        &world,
+        "configured-hook-cannot-start",
+        &with_config(
+            with_config(
+                with_hooks(vec![push_to_checkout()], onto_main("edit")),
+                "config hook.broken.event push-to-checkout",
+            ),
+            "config hook.broken.command /nonexistent/program",
+        ),
+        OK,
+    )
+}
+
+#[test]
+fn a_hook_that_cannot_start_after_one_that_ran_declines() -> TestResult {
+    let world = world()?;
+    // Configured hooks run in the order of their configuration, so the one that works goes first, and then the one that
+    // can't start counts as a failure of the hook that took over, which leaves nothing to fall back to.
+    same(
+        &world,
+        "configured-hook-cannot-start-after-one-that-ran",
+        &with_config(
+            with_config(
+                with_config(
+                    with_config(onto_main("edit"), "config hook.fine.event push-to-checkout"),
+                    "config hook.fine.command true",
+                ),
+                "config hook.broken.event push-to-checkout",
+            ),
+            "config hook.broken.command /nonexistent/program",
+        ),
+        "ng refs/heads/main push-to-checkout hook declined",
+    )
+}
