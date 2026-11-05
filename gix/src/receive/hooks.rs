@@ -93,6 +93,68 @@ impl<'r, 'h> Runner<'r, 'h> {
         self.run("update", args, Vec::new(), Vec::new(), messages) != 0
     }
 
+    /// `push-to-checkout`, which does what `updateInstead` does itself if there is one. It runs where `receive-pack` is, with the
+    /// work tree and Git directory of `worktree` in the environment, and with neither input nor a place on the side band.
+    ///
+    /// Return `None` if no hook ran to its end, which includes hooks that couldn't be started. Git does what it does without
+    /// one then. Otherwise return whether the hook declined.
+    pub fn push_to_checkout(
+        &self,
+        worktree: &Repository,
+        new_id: &gix_hash::oid,
+        messages: &mut Messages,
+    ) -> Option<bool> {
+        if !self.exists("push-to-checkout") {
+            return None;
+        }
+        let absolute = |path: &std::path::Path| self.repo.current_dir().join(path);
+        let work_dir = absolute(worktree.workdir()?);
+        let mut prepare = match self.repo.hook("push-to-checkout") {
+            Ok(prepare) => prepare,
+            Err(err) => {
+                messages.diagnostic(format!("cannot run the 'push-to-checkout' hook: {err}"));
+                return None;
+            }
+        };
+        if self.without_local_repo_env {
+            for key in gix_command::LOCAL_REPO_ENV {
+                prepare = prepare.env_remove(*key);
+            }
+        }
+        // Git names the Git directory of the main work tree as `.`, which it makes absolute without simplifying it, so that
+        // `dirname "$GIT_DIR"` is the same for hooks of both.
+        let mut git_dir = absolute(worktree.git_dir());
+        if worktree.git_dir() == worktree.common_dir() {
+            git_dir.push(".");
+        }
+        let outcome = prepare
+            .with_context(gix_command::Context {
+                git_dir: Some(git_dir),
+                worktree_dir: Some(work_dir),
+                ..Default::default()
+            })
+            .arg(new_id.to_hex().to_string())
+            .stdin(Stdin::Null)
+            .stdout(Stdout::ToStderr)
+            .stderr(Stderr::Capture)
+            .force_serial()
+            .run()
+            .ok()?;
+        // Everything the hook says goes to the standard error of the receiver, which isn't for the client.
+        for hook in &outcome.hooks {
+            if !hook.output.is_empty() {
+                messages.diagnostic(String::from_utf8_lossy(&hook.output).into_owned());
+            }
+        }
+        // A hook that never ran to its end counts as none, which is how Git knows that it has to do the update itself. If one did,
+        // a hook that couldn't be started after it declines, as it counts as failed, and nothing is started after it.
+        outcome
+            .hooks
+            .iter()
+            .any(|hook| hook.status.is_some())
+            .then(|| outcome.exit_code() != 0)
+    }
+
     /// `post-receive` and `post-update`, which can't change what happened, so their exit codes are ignored.
     pub fn post(&self, commands: &[Command], messages: &mut Messages) {
         let mut valid = commands

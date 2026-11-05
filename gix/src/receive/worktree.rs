@@ -44,6 +44,8 @@ pub(super) enum Refusal {
     Staged,
     /// The new state couldn't be put in place, or the request was refused, which `notes` explain.
     Update,
+    /// The `push-to-checkout` hook that does the update instead declined.
+    Hook,
 }
 
 impl Refusal {
@@ -53,6 +55,7 @@ impl Refusal {
             Refusal::Unstaged => "Working directory has unstaged changes",
             Refusal::Staged => "Working directory has staged changes",
             Refusal::Update => "Could not update working tree to new HEAD",
+            Refusal::Hook => "push-to-checkout hook declined",
         }
     }
 }
