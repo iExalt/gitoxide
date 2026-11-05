@@ -651,6 +651,8 @@ Fetching and pushing as a client runs no `git` and none of its credential helper
         * [ ] `receive.denyCurrentBranch=updateInstead` and `push-to-checkout`, shallow pushes, and fetching through a local transport
     * [ ] push certificates
     * [ ] upload-pack
+        * [x] protocol version 2 advertisement, requests, and the answers for `ls-refs` and the start of the pack of `fetch`, see `upload`
+        * [ ] serving them from a repository, negotiation, shallow clones and filters
 * [ ] bundle-uri protocol integration
 * [ ] remote helper protocol and integration
 * [x] API documentation

@@ -35,10 +35,7 @@ pub fn write_advertisement(out: &mut dyn io::Write, advertisement: &Advertisemen
 /// among them an unexpected end of `reader`. Protocol errors have the class of the errors of [`Parser::feed()`], while errors of `reader` are as reported by it.
 /// Packet lines are decoded like Git does, which accepts a data packet without payload and longer packets than `gix-packetline` does.
 pub fn read_request(reader: &mut dyn io::Read, capabilities: &Capabilities) -> Result<Request> {
-    let mut lines = LineReader {
-        inner: reader,
-        buf: Vec::new(),
-    };
+    let mut lines = LineReader::new(reader);
     let mut parser = Parser::new(capabilities);
     while parser.feed(lines.next_line()?)? == Step::More {}
     let mut request = parser.finish();
@@ -50,12 +47,16 @@ pub fn read_request(reader: &mut dyn io::Read, capabilities: &Capabilities) -> R
     Ok(request)
 }
 
-struct LineReader<'a> {
+pub(crate) struct LineReader<'a> {
     inner: &'a mut dyn io::Read,
     buf: Vec<u8>,
 }
 
-impl LineReader<'_> {
+impl<'a> LineReader<'a> {
+    pub(crate) fn new(inner: &'a mut dyn io::Read) -> Self {
+        LineReader { inner, buf: Vec::new() }
+    }
+
     fn read_exact(&mut self, len: usize) -> Result<()> {
         self.buf.resize(len, 0);
         self.inner.read_exact(&mut self.buf).map_err(|err| {
@@ -68,8 +69,39 @@ impl LineReader<'_> {
     }
 
     /// Read the next packet line, decoded like `packet_read_with_status()` of Git does.
-    fn next_line(&mut self) -> Result<PacketLineRef<'_>> {
+    pub(crate) fn next_line(&mut self) -> Result<PacketLineRef<'_>> {
         self.read_exact(4)?;
+        self.decode()
+    }
+
+    /// Like [`next_line()`](Self::next_line()), but return `None` if the reader ends before the next line starts.
+    #[cfg(feature = "blocking-server")]
+    pub(crate) fn next_line_or_end(&mut self) -> Result<Option<PacketLineRef<'_>>> {
+        let mut first = [0u8; 1];
+        loop {
+            match self.inner.read(&mut first) {
+                Ok(0) => return Ok(None),
+                Ok(_) => break,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err.and_raise(message("Could not read the request"))),
+            }
+        }
+        let mut rest = [0u8; 3];
+        self.inner.read_exact(&mut rest).map_err(|err| {
+            if err.kind() == io::ErrorKind::UnexpectedEof {
+                validation("the remote end hung up unexpectedly").raise()
+            } else {
+                err.and_raise(message("Could not read the request"))
+            }
+        })?;
+        self.buf.clear();
+        self.buf.extend_from_slice(&first);
+        self.buf.extend_from_slice(&rest);
+        self.decode().map(Some)
+    }
+
+    /// Decode the packet line whose four bytes of length are in the buffer.
+    fn decode(&mut self) -> Result<PacketLineRef<'_>> {
         let header = self.buf.clone();
         let len = header
             .iter()
