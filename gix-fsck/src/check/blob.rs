@@ -6,7 +6,7 @@ use gix_object::Kind;
 
 use crate::{
     MessageId, Options,
-    check::{Diagnostic, Reporter},
+    check::{Diagnostic, Reporter, submodule},
 };
 
 /// The size of `.gitattributes` files above which they are reported as too large, which is Git's `ATTR_MAX_FILE_SIZE`.
@@ -79,13 +79,13 @@ impl Found {
         let mut failed = false;
         if self.gitmodules.contains(id) {
             self.gitmodules.done.insert(id.to_owned());
-            let Some(data) = data else {
+            let Some(data) = data.filter(|_| size <= options.big_file_threshold()) else {
                 return r.report(
                     MessageId::GitmodulesLarge,
                     format_args!(".gitmodules too large to parse"),
                 );
             };
-            failed |= gitmodules(&mut r, data);
+            failed |= submodule::check(&mut r, data);
         }
         if self.attributes.contains(id) {
             self.attributes.done.insert(id.to_owned());
@@ -139,10 +139,12 @@ impl Found {
                         .report(not_a_blob, format_args!("non-blob found at {name}"));
                     continue;
                 }
-                // Git reads the object in full, even if it is larger than the threshold for big files.
-                let only_too_large_attributes =
-                    attributes_only && !self.gitmodules.contains(&id) && header.size > ATTR_MAX_FILE_SIZE;
-                let data = if only_too_large_attributes {
+                // Contrary to Git, which reads the object in full, don't load what is too large to be parsed
+                // into memory, as it would be reported as such anyway.
+                let wanted = (self.gitmodules.contains(&id) && header.size <= options.big_file_threshold())
+                    || (self.attributes.contains(&id)
+                        && header.size <= ATTR_MAX_FILE_SIZE.min(options.big_file_threshold()));
+                let data = if !wanted {
                     None
                 } else {
                     match find.try_find(&id, &mut buf).ok().flatten() {
@@ -164,11 +166,6 @@ impl Found {
 
 fn object_id(id: &[u8], hash_kind: gix_hash::Kind) -> Option<ObjectId> {
     ObjectId::try_from(id).ok().filter(|id| id.kind() == hash_kind)
-}
-
-/// Check the content of a `.gitmodules` file. Return `true` on failure.
-fn gitmodules(_r: &mut Reporter<'_>, _data: &[u8]) -> bool {
-    false
 }
 
 /// Check the content of a `.gitattributes` file for lines that are too long. Return `true` on failure.

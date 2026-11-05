@@ -1,5 +1,6 @@
 //! Run Git as the oracle for what the checker is supposed to do, and compare.
 use std::{
+    collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
     process::Stdio,
@@ -12,7 +13,7 @@ use std::{
 use gix_error::TestResult;
 use gix_fsck::{Checker, Diagnostic, Options, Refusal, Severity};
 use gix_hash::ObjectId;
-use gix_object::Kind;
+use gix_object::{Data, Find, FindHeader, Header, Kind};
 
 /// The objects every case can refer to, and the repository that has them.
 pub struct Base {
@@ -61,6 +62,21 @@ pub struct Case {
     pub overrides: Vec<(&'static str, &'static str)>,
     /// Put the object itself on the skip list.
     pub skipped: bool,
+    /// Objects that come before and after the object in the pack.
+    pub before: Vec<(Kind, Vec<u8>)>,
+    pub after: Vec<(Kind, Vec<u8>)>,
+}
+
+pub fn case(name: impl Into<String>, kind: Kind, data: impl Into<Vec<u8>>) -> Case {
+    Case {
+        name: name.into(),
+        kind,
+        data: data.into(),
+        overrides: Vec::new(),
+        skipped: false,
+        before: Vec::new(),
+        after: Vec::new(),
+    }
 }
 
 impl Case {
@@ -76,8 +92,28 @@ impl Case {
         self
     }
 
+    pub fn blob_before(mut self, data: impl Into<Vec<u8>>) -> Self {
+        self.name = format!("{}-blob-first", self.name);
+        self.before.push((Kind::Blob, data.into()));
+        self
+    }
+
+    pub fn blob_after(mut self, data: impl Into<Vec<u8>>) -> Self {
+        self.name = format!("{}-blob-last", self.name);
+        self.after.push((Kind::Blob, data.into()));
+        self
+    }
+
+    /// All objects of the pack in their order.
+    pub fn objects(&self) -> Vec<(Kind, &[u8])> {
+        let mut out: Vec<(Kind, &[u8])> = self.before.iter().map(|(k, d)| (*k, d.as_slice())).collect();
+        out.push((self.kind, &self.data));
+        out.extend(self.after.iter().map(|(k, d)| (*k, d.as_slice())));
+        out
+    }
+
     pub fn id(&self) -> ObjectId {
-        gix_object::compute_hash(gix_testtools::object_hash(), self.kind, &self.data).expect("hashable")
+        id_of(self.kind, &self.data)
     }
 
     /// The options the checker has to be given to do what the arguments to Git say.
@@ -93,14 +129,8 @@ impl Case {
     }
 }
 
-pub fn case(name: impl Into<String>, kind: Kind, data: impl Into<Vec<u8>>) -> Case {
-    Case {
-        name: name.into(),
-        kind,
-        data: data.into(),
-        overrides: Vec::new(),
-        skipped: false,
-    }
+pub fn id_of(kind: Kind, data: &[u8]) -> ObjectId {
+    gix_object::compute_hash(gix_testtools::object_hash(), kind, data).expect("hashable")
 }
 
 /// How an object was received.
@@ -111,46 +141,46 @@ pub struct Observed {
     pub lines: Vec<String>,
 }
 
-/// A pack of one object, which has as many entries as the `unpack-objects` limit of receive-pack needs to explode it
-/// and as little compression as is needed to not need a compressor.
-fn pack_of_one(kind: Kind, data: &[u8]) -> Vec<u8> {
+/// A pack of the objects, which are stored in zlib streams of stored blocks to not need a compressor.
+fn pack_of(objects: &[(Kind, &[u8])]) -> Vec<u8> {
     let mut pack = b"PACK".to_vec();
     pack.extend_from_slice(&2u32.to_be_bytes());
-    pack.extend_from_slice(&1u32.to_be_bytes());
-    let type_bits = match kind {
-        Kind::Commit => 1,
-        Kind::Tree => 2,
-        Kind::Blob => 3,
-        Kind::Tag => 4,
-    };
-    let mut size = data.len();
-    let mut first = (type_bits << 4) | (size & 0xf) as u8;
-    size >>= 4;
-    while size != 0 {
-        pack.push(first | 0x80);
-        first = (size & 0x7f) as u8;
-        size >>= 7;
+    pack.extend_from_slice(&(objects.len() as u32).to_be_bytes());
+    for (kind, data) in objects {
+        let type_bits = match kind {
+            Kind::Commit => 1,
+            Kind::Tree => 2,
+            Kind::Blob => 3,
+            Kind::Tag => 4,
+        };
+        let mut size = data.len();
+        let mut first = (type_bits << 4) | (size & 0xf) as u8;
+        size >>= 4;
+        while size != 0 {
+            pack.push(first | 0x80);
+            first = (size & 0x7f) as u8;
+            size >>= 7;
+        }
+        pack.push(first);
+        pack.extend_from_slice(&[0x78, 0x01]);
+        let mut chunks = data.chunks(0xffff).peekable();
+        if chunks.peek().is_none() {
+            pack.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
+        }
+        while let Some(chunk) = chunks.next() {
+            let len = chunk.len() as u16;
+            pack.push(u8::from(chunks.peek().is_none()));
+            pack.extend_from_slice(&len.to_le_bytes());
+            pack.extend_from_slice(&(!len).to_le_bytes());
+            pack.extend_from_slice(chunk);
+        }
+        let (mut a, mut b) = (1u32, 0u32);
+        for byte in *data {
+            a = (a + u32::from(*byte)) % 65521;
+            b = (b + a) % 65521;
+        }
+        pack.extend_from_slice(&((b << 16) | a).to_be_bytes());
     }
-    pack.push(first);
-    // A zlib stream of stored blocks.
-    pack.extend_from_slice(&[0x78, 0x01]);
-    let mut chunks = data.chunks(0xffff).peekable();
-    if chunks.peek().is_none() {
-        pack.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
-    }
-    while let Some(chunk) = chunks.next() {
-        let len = chunk.len() as u16;
-        pack.push(u8::from(chunks.peek().is_none()));
-        pack.extend_from_slice(&len.to_le_bytes());
-        pack.extend_from_slice(&(!len).to_le_bytes());
-        pack.extend_from_slice(chunk);
-    }
-    let (mut a, mut b) = (1u32, 0u32);
-    for byte in data {
-        a = (a + u32::from(*byte)) % 65521;
-        b = (b + a) % 65521;
-    }
-    pack.extend_from_slice(&((b << 16) | a).to_be_bytes());
     let mut hasher = gix_hash::hasher(gix_testtools::object_hash());
     hasher.update(&pack);
     let trailer = hasher.try_finalize().expect("no collision");
@@ -181,7 +211,7 @@ pub enum Driver {
     IndexPack,
 }
 
-/// Let Git receive the object `case` as part of a pack, with `receive-pack`'s options for fsck, and see what happens.
+/// Let Git receive the objects of `case` as a pack, with `receive-pack`'s options for fsck, and see what happens.
 pub fn git_observed(base: &Base, worker: &Path, scratch: &Path, case: &Case, driver: Driver) -> TestResult<Observed> {
     let objects = scratch.join("objects");
     std::fs::create_dir_all(objects.join("pack"))?;
@@ -211,17 +241,13 @@ pub fn git_observed(base: &Base, worker: &Path, scratch: &Path, case: &Case, dri
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
-    let pack = pack_of_one(case.kind, &case.data);
+    let pack = pack_of(&case.objects());
     // Git may stop reading as soon as it found a problem.
     child.stdin.take().expect("piped").write_all(&pack).ok();
     let output = child.wait_with_output()?;
     let lines = String::from_utf8_lossy(&output.stderr)
         .lines()
-        .filter(|line| {
-            ["error: ", "warning: ", "fatal: "]
-                .iter()
-                .any(|prefix| line.starts_with(prefix))
-        })
+        .filter(|line| is_diagnostic_line(line))
         .map(ToOwned::to_owned)
         .collect();
     std::fs::remove_dir_all(scratch).ok();
@@ -244,26 +270,65 @@ fn printable(line: String) -> String {
         .collect()
 }
 
+fn render(diagnostic: &Diagnostic) -> String {
+    match diagnostic {
+        Diagnostic::Note(text) => format!("error: {text}"),
+        Diagnostic::Report(report) => format!(
+            "{}: {report}",
+            if report.severity == Severity::Error {
+                "error"
+            } else {
+                "warning"
+            }
+        ),
+    }
+}
+
+/// The objects of the pack, and what the repository has.
+struct Overlay<'a> {
+    pack: HashMap<ObjectId, (Kind, Vec<u8>)>,
+    odb: &'a gix_odb::Handle,
+}
+
+impl Find for Overlay<'_> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> gix_error::Result<Option<Data<'a>>> {
+        match self.pack.get(id) {
+            Some((kind, data)) => {
+                buffer.clear();
+                buffer.extend_from_slice(data);
+                Ok(Some(Data {
+                    kind: *kind,
+                    object_hash: gix_testtools::object_hash(),
+                    data: buffer,
+                }))
+            }
+            None => self.odb.try_find(id, buffer),
+        }
+    }
+}
+
+impl FindHeader for Overlay<'_> {
+    fn try_header(&self, id: &gix_hash::oid) -> gix_error::Result<Option<Header>> {
+        match self.pack.get(id) {
+            Some((kind, data)) => Ok(Some(Header {
+                kind: *kind,
+                size: data.len() as u64,
+            })),
+            None => self.odb.try_header(id),
+        }
+    }
+}
+
 /// What the checker has to say about `case`, phrased as `unpack-objects` does.
 pub fn checker_observed(odb: &gix_odb::Handle, options: Options, case: &Case, driver: Driver) -> Observed {
     let mut checker = Checker::new(options, gix_testtools::object_hash());
-    let id = gix_object::compute_hash(gix_testtools::object_hash(), case.kind, &case.data).expect("hashable");
-    let mut out = Vec::new();
-    let result = checker.check(&id, case.kind, case.data.len() as u64, Some(&case.data), &mut out);
-    let mut lines: Vec<String> = out
+    let objects = case.objects();
+    let pack = objects
         .iter()
-        .map(|diagnostic| match diagnostic {
-            Diagnostic::Note(text) => format!("error: {text}"),
-            Diagnostic::Report(report) => format!(
-                "{}: {report}",
-                if report.severity == Severity::Error {
-                    "error"
-                } else {
-                    "warning"
-                }
-            ),
-        })
+        .map(|(kind, data)| (id_of(*kind, data), (*kind, data.to_vec())))
         .collect();
+    let overlay = Overlay { pack, odb };
+    let mut lines = Vec::new();
     let (link_error, check_failed) = match driver {
         Driver::UnpackObjects => ("fatal: object of unexpected type", "fatal: fsck error in packed object"),
         Driver::IndexPack => (
@@ -271,54 +336,60 @@ pub fn checker_observed(odb: &gix_odb::Handle, options: Options, case: &Case, dr
             "fatal: fsck error in packed object",
         ),
     };
-    let accepted = match result {
-        Err(Refusal::Unparsable { kind, detail, .. }) => {
-            lines.extend(detail.map(|detail| format!("error: {detail}")));
-            lines.push(format!("fatal: invalid {kind}"));
-            false
-        }
-        Err(refusal) => {
-            lines.push(format!("fatal: {refusal}"));
-            false
-        }
-        Ok(true) => {
-            lines.push(check_failed.into());
-            false
-        }
-        Ok(false) => {
-            let mut deferred = Vec::new();
-            match checker.finish(odb, &mut deferred) {
-                Err(_) => {
-                    lines.push(link_error.into());
-                    false
+    let mut accepted = false;
+    'objects: {
+        for (kind, data) in &objects {
+            let id = id_of(*kind, data);
+            let content = (*kind != Kind::Blob || checker.needs_blob_content(&id, data.len() as u64)).then_some(*data);
+            let mut out = Vec::new();
+            let result = checker.check(&id, *kind, data.len() as u64, content, &mut out);
+            lines.extend(out.iter().map(render));
+            match result {
+                Err(Refusal::Unparsable { kind, detail, .. }) => {
+                    lines.extend(detail.map(|detail| format!("error: {detail}")));
+                    lines.push(format!("fatal: invalid {kind}"));
+                    break 'objects;
                 }
-                Ok(failed) => {
-                    lines.extend(deferred.iter().map(|d| match d {
-                        Diagnostic::Report(report) => format!(
-                            "{}: {report}",
-                            if report.severity == Severity::Error {
-                                "error"
-                            } else {
-                                "warning"
-                            }
-                        ),
-                        Diagnostic::Note(text) => format!("error: {text}"),
-                    }));
-                    if failed {
-                        lines.push("fatal: fsck error in pack objects".into());
-                    }
-                    !failed
+                Err(refusal) => {
+                    lines.push(format!("fatal: {refusal}"));
+                    break 'objects;
                 }
+                Ok(true) => {
+                    lines.push(check_failed.into());
+                    break 'objects;
+                }
+                Ok(false) => {}
             }
         }
-    };
-    Observed {
-        accepted,
-        lines: lines.into_iter().map(printable).collect(),
+        let mut deferred = Vec::new();
+        match checker.finish(&overlay, &mut deferred) {
+            Err(_) => lines.push(link_error.into()),
+            Ok(failed) => {
+                lines.extend(deferred.iter().map(render));
+                if failed {
+                    lines.push("fatal: fsck error in pack objects".into());
+                }
+                accepted = !failed;
+            }
+        }
     }
+    // Git's output is read by line, and what follows a newline in a message isn't one of the lines that are looked at.
+    let lines = lines
+        .into_iter()
+        .flat_map(|line| line.split('\n').map(ToOwned::to_owned).collect::<Vec<_>>())
+        .filter(|line| is_diagnostic_line(line))
+        .map(printable)
+        .collect();
+    Observed { accepted, lines }
 }
 
-/// Run all `cases` against Git and the checker with `threads` workers, and return a description of every case where they differ.
+fn is_diagnostic_line(line: &str) -> bool {
+    ["error: ", "warning: ", "fatal: "]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
+/// Run all `cases` against Git and the checker with a few workers, and return a description of every case where they differ.
 ///
 /// What of the output is compared depends on `compare`. `driver` selects what Git does.
 pub fn differences(

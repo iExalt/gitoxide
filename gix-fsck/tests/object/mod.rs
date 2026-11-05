@@ -1,10 +1,11 @@
 //! Compare what the checker finds with what `unpack-objects --strict` and `index-pack --strict` of Git find.
 mod corpus;
+mod gitmodules;
 mod oracle;
 
 use gix_error::TestResult;
 use gix_fsck::{Checker, Options};
-use oracle::{Base, Case, Compare, Driver, differences};
+use oracle::{Base, Case, Compare, Driver, checker_observed, differences};
 
 /// Cases whose outcome depends on objects other than the one that is checked, which Git words differently per program.
 fn is_about_links(case: &Case) -> bool {
@@ -146,3 +147,47 @@ fn overrides_and_skip_lists_match_index_pack() -> TestResult {
 }
 
 mod checker;
+
+#[test]
+fn gitmodules_checks_match_unpack_objects() -> TestResult {
+    let base = Base::new()?;
+    let cases = gitmodules::cases(&base);
+    let problems = differences(&base, &cases, Driver::UnpackObjects, &|_| Compare::WithoutFatal)?;
+    assert_no_differences(problems, cases.len());
+    Ok(())
+}
+
+#[test]
+fn gitmodules_checks_match_index_pack() -> TestResult {
+    let base = Base::new()?;
+    // What is in the file doesn't depend on the program that is run, so only a sample is needed to see
+    // that both orders of blob and tree work. 7 is coprime with the 2 that decides the order.
+    let cases: Vec<_> = gitmodules::cases(&base)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, case)| (idx % 7 == 0).then_some(case))
+        .collect();
+    let problems = differences(&base, &cases, Driver::IndexPack, &|_| Compare::WithoutFatal)?;
+    assert_no_differences(problems, cases.len());
+    Ok(())
+}
+
+#[test]
+fn random_submodule_urls_match_unpack_objects() -> TestResult {
+    let base = Base::new()?;
+    let cases = gitmodules::random_url_cases(&base, 2000);
+    // The corpus is only useful if it has enough of what's refused and what isn't.
+    let odb = base.odb()?;
+    let refused = cases
+        .iter()
+        .filter(|case| !checker_observed(&odb, case.options(), case, Driver::UnpackObjects).accepted)
+        .count();
+    assert!(
+        (300..1700).contains(&refused),
+        "{refused} of {} are refused, which isn't a good mix",
+        cases.len()
+    );
+    let problems = differences(&base, &cases, Driver::UnpackObjects, &|_| Compare::WithoutFatal)?;
+    assert_no_differences(problems, cases.len());
+    Ok(())
+}
