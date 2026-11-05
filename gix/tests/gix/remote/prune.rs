@@ -13,6 +13,8 @@ const HEADS: &str = "+refs/heads/*:refs/p/heads/*";
 
 struct World {
     dir: gix_testtools::tempfile::TempDir,
+    /// Fetch without spawning `git upload-pack`, with the server of this process.
+    native: bool,
 }
 
 impl World {
@@ -22,12 +24,15 @@ impl World {
             [kind.to_string()],
             Creation::CopyFromReadOnly,
         )?;
-        Ok(World { dir })
+        Ok(World { dir, native: false })
     }
 
-    /// Two copies of the same fixture, one for Git and one for the fork, in that order.
-    fn twins(kind: Kind) -> TestResult<(Self, Self)> {
-        Ok((World::new(kind)?, World::new(kind)?))
+    /// Two copies of the same fixture, one for Git and one for the fork, in that order. The fork fetches from the server of this
+    /// process if `native` is set, and from a spawned `git upload-pack` otherwise.
+    fn twins(kind: Kind, native: bool) -> TestResult<(Self, Self)> {
+        let mut fork = World::new(kind)?;
+        fork.native = native;
+        Ok((World::new(kind)?, fork))
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -71,7 +76,13 @@ impl World {
         tags: Tags,
         dry_run: bool,
     ) -> TestResult<gix::remote::fetch::Outcome> {
-        let repo = gix::open_opts(self.path("client"), gix::open::Options::isolated())?;
+        let options = gix::open::Options::isolated();
+        let options = if self.native {
+            options.config_overrides(["gitoxide.core.nativeLocalTransport=true"])
+        } else {
+            options
+        };
+        let repo = gix::open_opts(self.path("client"), options)?;
         let remote = repo
             .remote_at(self.path("upstream").to_string_lossy().into_owned())?
             .with_fetch_tags(tags)
@@ -101,8 +112,7 @@ fn isolated() -> TestResult<bool> {
     Ok(gix_testtools::run_in_isolated_process()?)
 }
 
-#[test]
-fn stale_destinations_are_deleted_after_a_fetch_and_nothing_else_matches_git() -> TestResult {
+fn stale_destinations_are_deleted_after_a_fetch_and_nothing_else_matches_git(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
@@ -110,7 +120,7 @@ fn stale_destinations_are_deleted_after_a_fetch_and_nothing_else_matches_git() -
         .into_iter()
         .filter(|kind| *kind == Kind::Sha1 || cfg!(feature = "sha256"))
     {
-        let (git, fork) = World::twins(kind)?;
+        let (git, fork) = World::twins(kind, native)?;
         for world in [&git, &fork] {
             world.delete_upstream_branch("b2")?;
         }
@@ -151,12 +161,11 @@ fn stale_destinations_are_deleted_after_a_fetch_and_nothing_else_matches_git() -
     Ok(())
 }
 
-#[test]
-fn a_fetch_without_news_prunes_too() -> TestResult {
+fn a_fetch_without_news_prunes_too(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     for world in [&git, &fork] {
         // Bring the client up to date first, so the next fetch has no pack to receive.
         assert!(world.git_fetch(&[HEADS], &[])?);
@@ -173,12 +182,11 @@ fn a_fetch_without_news_prunes_too() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn nothing_is_pruned_unless_asked_to_and_a_dry_run_only_reports() -> TestResult {
+fn nothing_is_pruned_unless_asked_to_and_a_dry_run_only_reports(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = World::twins(Kind::Sha1)?;
+    let (_, fork) = World::twins(Kind::Sha1, native)?;
     fork.delete_upstream_branch("b2")?;
     let before = fork.refs()?;
     let outcome = fork.fetch_with(&[HEADS], true, Tags::Included, true)?;
@@ -198,12 +206,11 @@ fn nothing_is_pruned_unless_asked_to_and_a_dry_run_only_reports() -> TestResult 
     Ok(())
 }
 
-#[test]
-fn tags_are_not_destinations_of_the_implicit_tag_spec() -> TestResult {
+fn tags_are_not_destinations_of_the_implicit_tag_spec(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     assert!(git.git_fetch(&[HEADS], &["--tags"])?);
     let outcome = fork.fetch_with(&[HEADS], true, Tags::All, false)?;
     assert!(
@@ -215,12 +222,11 @@ fn tags_are_not_destinations_of_the_implicit_tag_spec() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn a_partial_source_name_is_covered_but_its_destination_is_not_stale() -> TestResult {
+fn a_partial_source_name_is_covered_but_its_destination_is_not_stale(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     let spec = "+main:refs/p/exact/main";
     assert!(git.git_fetch(&[spec], &[])?);
     let outcome = fork.fetch(&[spec], true)?;
@@ -233,12 +239,11 @@ fn a_partial_source_name_is_covered_but_its_destination_is_not_stale() -> TestRe
     Ok(())
 }
 
-#[test]
-fn what_another_spec_maps_into_the_same_namespace_is_not_stale() -> TestResult {
+fn what_another_spec_maps_into_the_same_namespace_is_not_stale(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     let specs = [HEADS, "+refs/tags/*:refs/p/heads/tags/*"];
     for world in [&git, &fork] {
         world.git("client", "update-ref refs/p/heads/tags/t1 refs/p/heads/main")?;
@@ -258,12 +263,11 @@ fn what_another_spec_maps_into_the_same_namespace_is_not_stale() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn negative_specs_protect_what_they_exclude() -> TestResult {
+fn negative_specs_protect_what_they_exclude(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     let specs = [HEADS, "^refs/heads/b2"];
     for world in [&git, &fork] {
         world.delete_upstream_branch("b1")?;
@@ -281,12 +285,13 @@ fn negative_specs_protect_what_they_exclude() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn a_wildcard_source_without_a_fixed_prefix_lists_everything_so_nothing_that_exists_is_pruned() -> TestResult {
+fn a_wildcard_source_without_a_fixed_prefix_lists_everything_so_nothing_that_exists_is_pruned(
+    native: bool,
+) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     let specs = ["+refs/*:refs/p/all/*"];
     for world in [&git, &fork] {
         world.git("client", "update-ref refs/p/all/heads/main refs/p/heads/main")?;
@@ -308,12 +313,11 @@ fn a_wildcard_source_without_a_fixed_prefix_lists_everything_so_nothing_that_exi
     Ok(())
 }
 
-#[test]
-fn a_wildcard_in_the_middle_of_a_source_is_listed_beside_the_prefix_of_another_spec() -> TestResult {
+fn a_wildcard_in_the_middle_of_a_source_is_listed_beside_the_prefix_of_another_spec(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     let specs = [HEADS, "+refs/*/main:refs/p/m/*/main"];
     for world in [&git, &fork] {
         world.git("upstream", "update-ref refs/notes/main refs/heads/b1")?;
@@ -338,12 +342,11 @@ fn a_wildcard_in_the_middle_of_a_source_is_listed_beside_the_prefix_of_another_s
     Ok(())
 }
 
-#[test]
-fn a_failing_update_prunes_nothing() -> TestResult {
+fn a_failing_update_prunes_nothing(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (_, fork) = World::twins(Kind::Sha1)?;
+    let (_, fork) = World::twins(Kind::Sha1, native)?;
     fork.delete_upstream_branch("b2")?;
     let before = fork.refs()?;
     // Somebody else holds the reference `main` is going to be updated at.
@@ -358,12 +361,11 @@ fn a_failing_update_prunes_nothing() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn a_stale_reference_in_the_way_of_an_update_is_deleted_first_and_alone() -> TestResult {
+fn a_stale_reference_in_the_way_of_an_update_is_deleted_first_and_alone(native: bool) -> TestResult {
     if isolated()? {
         return Ok(());
     }
-    let (git, fork) = World::twins(Kind::Sha1)?;
+    let (git, fork) = World::twins(Kind::Sha1, native)?;
     // `refs/p/heads/x` is a file where `refs/p/heads/x/y` has to be created, and the remote has no `x` anymore.
     for world in [&git, &fork] {
         world.git("client", "update-ref refs/p/heads/x refs/p/heads/main")?;
@@ -379,7 +381,7 @@ fn a_stale_reference_in_the_way_of_an_update_is_deleted_first_and_alone() -> Tes
     assert!(fork.refs()?.contains("refs/p/heads/x/y"));
 
     // If the update fails after the blocking reference was deleted, only that one is gone: Git deletes everything first.
-    let (_, fork) = World::twins(Kind::Sha1)?;
+    let (_, fork) = World::twins(Kind::Sha1, native)?;
     fork.git("client", "update-ref refs/p/heads/x refs/p/heads/main")?;
     std::fs::write(fork.path("client/.git/refs/p/heads/main.lock"), b"")?;
     fork.fetch(&[HEADS], true)
@@ -395,3 +397,36 @@ fn a_stale_reference_in_the_way_of_an_update_is_deleted_first_and_alone() -> Tes
     );
     Ok(())
 }
+
+/// Run the scenarios once with the `git upload-pack` Git spawns and once with the server of this process, which must leave
+/// behind what Git does.
+macro_rules! over_transports {
+    ($($name:ident),+ $(,)?) => {$(
+        mod $name {
+            #[test]
+            fn spawned_git() -> gix_testtools::TestResult {
+                super::$name(false)
+            }
+
+            #[cfg(feature = "upload")]
+            #[test]
+            fn in_process() -> gix_testtools::TestResult {
+                super::$name(true)
+            }
+        }
+    )+};
+}
+
+over_transports!(
+    stale_destinations_are_deleted_after_a_fetch_and_nothing_else_matches_git,
+    a_fetch_without_news_prunes_too,
+    nothing_is_pruned_unless_asked_to_and_a_dry_run_only_reports,
+    tags_are_not_destinations_of_the_implicit_tag_spec,
+    a_partial_source_name_is_covered_but_its_destination_is_not_stale,
+    what_another_spec_maps_into_the_same_namespace_is_not_stale,
+    negative_specs_protect_what_they_exclude,
+    a_wildcard_source_without_a_fixed_prefix_lists_everything_so_nothing_that_exists_is_pruned,
+    a_wildcard_in_the_middle_of_a_source_is_listed_beside_the_prefix_of_another_spec,
+    a_failing_update_prunes_nothing,
+    a_stale_reference_in_the_way_of_an_update_is_deleted_first_and_alone,
+);
