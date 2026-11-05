@@ -530,6 +530,92 @@ fn rolling_up_packs_geometrically_has_what_git_has() -> TestResult {
     Ok(())
 }
 
+const CRASH_CHILD: &str = "GIX_REPACK_TEST_CRASH_CHILD";
+
+/// The options that the process that is killed repacks with, and that the run that finishes the job has.
+fn crash_options(name: &str) -> Options {
+    let mut options = Options::default();
+    options.unreachable = match name {
+        "loosen" => Unreachable::Loosen,
+        _ => Unreachable::Cruft { expire: None },
+    };
+    options
+}
+
+#[test]
+fn a_process_that_is_killed_while_repacking_leaves_a_repository_that_the_next_run_finishes() -> TestResult {
+    // The same test is the program that is killed, which repacks slowly so that the kill falls into every step.
+    if let Ok(repo_dir) = std::env::var(CRASH_CHILD) {
+        let options = crash_options(&std::env::var("GIX_REPACK_TEST_CRASH_OPTIONS")?);
+        gix::open_opts(repo_dir, crate::restricted())?.repack_observed(options, &never(), &mut |_| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            Ok(())
+        })?;
+        return Ok(());
+    }
+    let test_name = module_path!()
+        .split_once("::")
+        .map(|(_, path)| {
+            format!("{path}::a_process_that_is_killed_while_repacking_leaves_a_repository_that_the_next_run_finishes")
+        })
+        .expect("the module path has the name of the crate in front");
+    for kind in kinds() {
+        for how in ["loosen", "cruft"] {
+            let finished = fixture(kind)?;
+            gix::open_opts(finished.path().join("repo"), crate::restricted())?.repack(crash_options(how), &never())?;
+            let expected = (
+                state(&finished.path().join("repo"))?,
+                cruft_times(&finished.path().join("repo"), kind)?,
+            );
+            for delay_ms in (0..=140).step_by(20) {
+                let dir = fixture(kind)?;
+                let repo_dir = dir.path().join("repo");
+                let before = state(&repo_dir)?;
+                let mut child = std::process::Command::new(std::env::current_exe()?)
+                    .args(["--exact", &test_name, "--nocapture", "--test-threads=1"])
+                    .env(CRASH_CHILD, &repo_dir)
+                    .env("GIX_REPACK_TEST_CRASH_OPTIONS", how)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()?;
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                child.kill()?; // SIGKILL on Unix: nothing is cleaned up
+                child.wait()?;
+
+                let what = format!("{kind} {how} killed after {delay_ms}ms");
+                let after = state(&repo_dir)?;
+                assert!(
+                    after.objects.is_superset(&before.objects),
+                    "{what}: no object is lost, missing: {:?}",
+                    before.objects.difference(&after.objects).collect::<Vec<_>>()
+                );
+                gix_testtools::git(&repo_dir, "fsck --full --strict")?;
+
+                if !cfg!(target_os = "linux") {
+                    // only Linux tells that the process is gone, the others go by the age of the marker
+                    for entry in std::fs::read_dir(repo_dir.join(".git/objects/pack"))? {
+                        let path = entry?.path();
+                        if path.extension().is_some_and(|ext| ext == "keep")
+                            && std::fs::read_to_string(&path)?.starts_with("gix repack in progress")
+                        {
+                            std::fs::write(&path, "gix repack in progress\npid 1\nhost nowhere\ntime 1\n")?;
+                        }
+                    }
+                }
+                gix::open_opts(&repo_dir, crate::restricted())?.repack(crash_options(how), &never())?;
+                assert_same_state(
+                    &state(&repo_dir)?,
+                    &expected.0,
+                    &format!("{what}: the run that follows ends with what an uninterrupted one has"),
+                );
+                assert_eq!(cruft_times(&repo_dir, kind)?, expected.1, "{what}: including the times");
+                gix_testtools::git(&repo_dir, "fsck --full --strict")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn blob_id(kind: Kind, content: &str) -> gix_hash::ObjectId {
     gix_object::compute_hash(kind, gix_object::Kind::Blob, content.as_bytes()).expect("valid object hash")
 }
