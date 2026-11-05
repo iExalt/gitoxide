@@ -483,8 +483,7 @@ fn gitmodules_are_parsed_like_the_file_that_is_checked_out_is() -> TestResult {
     let entry = b"[submodule \"a\"]\n\turl = -oProxyCommand=x\n";
     assert_eq!(gitmodules_ids(entry)?, bad, "the baseline is refused");
 
-    // Git's check reads the buffer as signed `char`, which turns `0xff` into the end of the file, and doesn't skip the byte order mark.
-    // The file that is read after the checkout isn't like that, so the entry would be found there while it wasn't during the check.
+    // The file is read like the one in a work tree: every byte but the end is data, and a byte order mark at the start is skipped.
     for (name, content) in [
         ("bom", [&[0xef, 0xbb, 0xbf][..], entry].concat()),
         (

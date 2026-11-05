@@ -226,8 +226,7 @@ pub fn syntax_variants() -> Vec<(&'static str, Vec<u8>)> {
         v("value-no-newline-at-end", "[submodule \"a\"]\n\turl = -x"),
         v("crlf", "[submodule \"a\"]\r\n\turl = -x\r\n"),
         v("cr-in-value", "[submodule \"a\"]\n\turl = -x\r\r\n"),
-        // A byte order mark and a byte of `0xff` are only the same as for Git when the file is read from disk,
-        // so that's what is tested in `checker.rs`. What can be compared is a second mark, and a partial one.
+        // Byte order marks and `0xff` bytes are tested in `checker.rs`. What is compared with Git here is a second mark, and a partial one.
         v("double-bom", "\u{feff}\u{feff}[submodule \"a\"]\n\turl = -x\n"),
         (
             "partial-bom-bytes",
