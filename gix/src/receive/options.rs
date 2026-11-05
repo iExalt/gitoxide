@@ -117,6 +117,11 @@ impl Options {
                 bail!(unsupported(format!("{key} isn't supported, as {what} aren't")));
             }
         }
+        if boolean("receive.shallowUpdate", false)? {
+            bail!(unsupported(
+                "receive.shallowUpdate isn't supported, as writing the shallow file of the repository isn't"
+            ));
+        }
         refuse_unsupported_repository(repo, Role::Receive)?;
 
         let quarantine = gix_odb::quarantine::Options::from_config(

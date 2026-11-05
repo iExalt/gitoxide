@@ -80,6 +80,37 @@ impl Cutoffs {
         Ok(cutoffs)
     }
 
+    /// Collect the commits that `HEAD` and all references of `repo` lead to, including the hidden ones and those of other namespaces,
+    /// and not those of alternates. These are the references that Git decides with whether a shallow update is needed.
+    ///
+    /// Like Git does there, skip what can't be read or isn't a commit.
+    pub(super) fn of_all_references(repo: &Repository) -> Self {
+        let mut ids = Vec::new();
+        if let Some(id) = repo.head().ok().and_then(|head| head.id()) {
+            ids.push(id.detach());
+        }
+        if let Ok(platform) = repo.references()
+            && let Ok(all) = platform.all()
+        {
+            ids.extend(
+                all.flatten()
+                    .filter_map(|reference| reference.try_id().map(crate::Id::detach)),
+            );
+        }
+        let mut cutoffs = Cutoffs::default();
+        for id in ids {
+            cutoffs.add_object(repo, id).ok();
+        }
+        cutoffs.commits.sort();
+        cutoffs.commits.dedup();
+        cutoffs
+    }
+
+    /// The commits that are the cutoffs.
+    pub(super) fn commits(&self) -> &[ObjectId] {
+        &self.commits
+    }
+
     fn add_references(
         &mut self,
         repo: &Repository,

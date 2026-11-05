@@ -222,6 +222,8 @@ pub(super) struct Push {
     pub(super) prepare: Option<fn(remote: &Path, client: &Path) -> TestResult>,
     /// Compare the index and the files of the work tree of a remote that has one, which is for what changes them.
     pub(super) compare_work_tree: bool,
+    /// Revisions of the client that are the shallow commits it sends before its commands, as a client that is shallow does.
+    pub(super) shallow: Vec<&'static str>,
 }
 
 fn copy_dir(from: &Path, to: &Path) -> TestResult {
@@ -303,6 +305,9 @@ impl World {
             caps.push_str(" push-options");
         }
         let mut out = Vec::new();
+        for rev in &push.shallow {
+            out.extend(pkt(format!("shallow {}\n", self.id(format, rev)?)));
+        }
         let mut revs = String::new();
         for (index, Cmd(old, new, name)) in push.commands.iter().enumerate() {
             let line = format!("{} {} {name}", self.id(format, old)?, self.id(format, new)?);

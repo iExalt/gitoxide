@@ -6,7 +6,7 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use gix_error::{Result, ResultExt, bail, message, unsupported};
+use gix_error::{Result, ResultExt, bail, message};
 use gix_hash::{ObjectId, oid};
 use gix_object::bstr::{BStr, BString, ByteSlice};
 use gix_protocol::{
@@ -26,6 +26,7 @@ use super::{
         self, Ancestry, CheckedOut, Command, Level, Message, Messages, Plan, Policy, Queued, Refs, Resolved,
         StoreFailure, World,
     },
+    shallow,
     worktree::{self, Refusal},
 };
 use crate::Repository;
@@ -300,11 +301,6 @@ impl<'repo> Receiver<'repo> {
         interrupt: &AtomicBool,
         heartbeat: Option<Heartbeat<'_>>,
     ) -> Result<Outcome> {
-        if !request.shallow.is_empty() {
-            bail!(unsupported(
-                "pushes from or to shallow repositories aren't supported yet"
-            ));
-        }
         let repo = self.repo;
         let mut commands: Vec<Command> = request
             .commands
@@ -322,6 +318,13 @@ impl<'repo> Receiver<'repo> {
             self.hooks_without_local_repo_env,
             heartbeat,
         )?;
+        // Which commits of a shallow client the receiver has is told before it gets any, and only a push that writes needs to know.
+        let shallow_boundary = if request.shallow.is_empty() || commands.iter().all(|command| command.new_id.is_null())
+        {
+            None
+        } else {
+            Some(shallow::Boundary::new(&self.global, &request.shallow)?)
+        };
         let mut unpack_failure = None;
         let mut quarantine = None;
         let mut objects_migrated = false;
@@ -348,6 +351,9 @@ impl<'repo> Receiver<'repo> {
                 command.error = Some("unpacker error".into());
             }
         } else {
+            if let Some(boundary) = shallow_boundary {
+                self.reject_shallow_updates(&mut commands, quarantine.as_ref(), boundary);
+            }
             self.verify_connectivity(&mut commands, quarantine.as_ref())?;
             policy::reject_hidden(&mut commands, &|name| {
                 let mut full = self.prefix.clone();
@@ -409,6 +415,34 @@ impl<'repo> Receiver<'repo> {
         })
     }
 
+    /// Fail the commands whose history leads to the shallow boundary of the client, as a receiver doesn't become shallow when it
+    /// isn't told to. The others go on, also if the push is atomic, as that is when Git decides.
+    fn reject_shallow_updates(
+        &self,
+        commands: &mut [Command],
+        quarantine: Option<&gix_odb::quarantine::Quarantine>,
+        boundary: shallow::Boundary,
+    ) {
+        let view;
+        let repo = match quarantine {
+            Some(quarantine) => {
+                view = self.global.with_quarantine(quarantine);
+                &view
+            }
+            None => &self.global,
+        };
+        let candidates = boundary.after_receiving(repo);
+        if candidates.is_empty() {
+            return;
+        }
+        let cutoffs = Cutoffs::of_all_references(repo);
+        for command in commands.iter_mut().filter(|command| !command.new_id.is_null()) {
+            if !candidates.needed(repo, cutoffs.commits(), command.new_id).is_empty() {
+                command.error = Some("shallow update not allowed".into());
+            }
+        }
+    }
+
     /// Fail commands whose objects aren't all there. The commands are checked as a whole first, and one by one only
     /// if that fails, to tell which of them is at fault.
     fn verify_connectivity(
@@ -416,9 +450,11 @@ impl<'repo> Receiver<'repo> {
         commands: &mut [Command],
         quarantine: Option<&gix_odb::quarantine::Quarantine>,
     ) -> Result<()> {
+        // What was rejected already isn't checked with the others, as what the shallow boundary of a client leaves out is missing
+        // by definition, but it is when it is looked at on its own, which tells what is wrong with it.
         let tips: Vec<ObjectId> = commands
             .iter()
-            .filter(|command| !command.new_id.is_null())
+            .filter(|command| !command.new_id.is_null() && command.error.is_none())
             .map(|command| command.new_id)
             .collect();
         // Without objects to check, as with deletions only, it doesn't matter what the references look like.
