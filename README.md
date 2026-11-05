@@ -436,8 +436,12 @@ Please take a look at the [`SHORTCOMINGS.md` file](https://github.com/GitoxideLa
 
 * **itertools** _(MIT Licensed)_
   * We use the `izip!` macro in code
-* **flate2** _(MIT Licensed)_
-  * We use the high-level `flate2` library to implement decompression and compression, which builds on the high-performance `zlib-rs` crate.
+* **zlib-rs** _(Zlib Licensed)_
+  * `gix-zlib` uses the high-performance `zlib-rs` crate directly for its standalone `Decompress` and `Compress` APIs, and for all compression and decompression when the `sirocco` feature is off.
+* **sirocco** _(MIT or Apache-2.0 Licensed)_
+  * `gix-zlib` uses it by default through the `zlib-sirocco` feature of `gix`, where it is faster than `zlib-rs` when decompressing and when compressing at level 6.
+* **flate2** _(MIT or Apache-2.0 Licensed)_
+  * Only `gix-archive` uses the high-level `flate2` library, to write `tar.gz` and `zip` archives, and it builds on `zlib-rs` there.
 
 ## 🙏 Special Thanks 🙏
 
