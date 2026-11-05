@@ -56,7 +56,8 @@
 //! * Objects in packs are never deltified, see above.
 //! * There are no bitmaps, multi-pack-indices or reverse indices written.
 //! * Loose copies of objects that a kept pack has stay, while Git's `prune-packed` removes them.
-//! * Files of packs that have no index, which a crash in the middle of removing a pack leaves, are not cleaned up.
+//! * Files of a pack that has no index and no marker, which a crash in the middle of removing a pack leaves, are not cleaned up,
+//!   while those that a killed repack left are removed by the next run once its marker is found to be stale.
 //! * Setting the time of loose objects needs write access on Windows, where this was not tried.
 //! * Whether the process of an interrupted run is gone is only known on Linux, so elsewhere its marker blocks the next run until it is 12 hours old.
 //! * `gc.maxCruftSize` and `--max-cruft-size` aren't supported, so there is one cruft pack, which is what Git writes without them.
@@ -367,6 +368,13 @@ fn remove_stale_markers(pack_dir: &Path) -> Result<()> {
         }
         match std::fs::read(&path).ok().as_deref().and_then(marker_is_stale) {
             Some(true) => {
+                // A run that was killed between moving the pack into place and moving its index leaves a pack that nothing
+                // can find, and it left its marker before it made any of these files. With an index the pack is complete.
+                if !path.with_extension("idx").exists() {
+                    for extension in ["pack", "mtimes", "rev", "bitmap", "promisor"] {
+                        remove_if_there(&path.with_extension(extension))?;
+                    }
+                }
                 std::fs::remove_file(&path).ok();
             }
             Some(false) => bail!(message!(
@@ -716,6 +724,15 @@ impl Repository {
         let objects_of = |pack: &Option<NewPack>| -> Result<HashSet<ObjectId>> {
             Ok(match pack {
                 Some(pack) => {
+                    // What replaces the packs that are removed below has to be whole, which it isn't if somebody took its
+                    // files away, like a cleanup that took this run for one that is gone.
+                    let pack_path = pack.stem.with_extension("pack");
+                    if !pack_path.is_file() {
+                        bail!(message!(
+                            "The new pack {} is gone, so nothing was removed",
+                            pack_path.display()
+                        ));
+                    }
                     let index_path = pack.stem.with_extension("idx");
                     gix_pack::index::File::at(&index_path, hash)
                         .or_raise(|| message!("Could not read the pack index {}", index_path.display()))?

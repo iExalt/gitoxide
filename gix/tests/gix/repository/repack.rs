@@ -681,9 +681,24 @@ fn what_an_interrupted_run_left_to_mark_its_pack_is_removed_by_the_next_one_and_
         // the process that wrote it is long gone, which is told by its time on all platforms
         std::fs::write(&marker, "gix repack in progress\npid 1\nhost nowhere\ntime 1\n")?;
         std::fs::write(&received, "")?;
+        // what a run that was killed after moving its pack into place and before moving its index left
+        let half_installed: Vec<_> = ["pack", "mtimes"]
+            .iter()
+            .map(|extension| marker.with_extension(extension))
+            .collect();
+        for file in &half_installed {
+            std::fs::write(file, "partial")?;
+        }
 
         gix::open_opts(&repo_dir, crate::restricted())?.repack(Options::default(), &never())?;
         assert!(!marker.exists(), "{kind}: the marker of an interrupted run is gone");
+        for file in &half_installed {
+            assert!(
+                !file.exists(),
+                "{kind}: {} had no index, so nothing could find it",
+                file.display()
+            );
+        }
         assert!(
             received.exists(),
             "{kind}: a `.keep` file of somebody else is not touched"
