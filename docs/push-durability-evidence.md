@@ -153,7 +153,7 @@ each pinned by a test:
 | Deleting a reference with a null old value, which a client that sends no old value does | Skips `receive.denyDeletes` and `receive.denyDeleteCurrent` | Applies them like any deletion |
 | An update whose old value is stale, through a symbolic reference | Reports `ok` for a reference that didn't change | Reports `ng … incorrect old value provided` |
 | Updating the branch `HEAD` points at without changing it | Appends to the `HEAD` reflog and locks `HEAD` | Does neither |
-| A request that `receive.autogc` would act on | Runs `git gc --auto` | Reports `Outcome::maintenance_due` and leaves it to the caller |
+| A request that `receive.autogc` would act on | Runs `git gc --auto` | Reports `Outcome::maintenance_due` and leaves it to the caller. `NativeLocal` doesn't attach `Receiver::with_auto_maintenance()`, so a push through it runs no maintenance at all, which Git's `receive-pack` would run |
 | A reverse index next to a kept pack | Writes one | Writes none, see above |
 | An update that is rejected while it is queued, for the branch `HEAD` points at | Appends to the reflog of `HEAD` anyway | Doesn't |
 | Deleting or updating the current branch through a symbolic reference | Protects the name that is pushed to only, so `receive.denyDeleteCurrent` and `receive.denyCurrentBranch` are bypassed by an alias | Protects what the reference leads to as well, and refuses |

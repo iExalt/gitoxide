@@ -7,7 +7,7 @@
 #![cfg(unix)]
 use gix_testtools::TestResult;
 
-use super::receive_pack::{Cmd, Hook, Push, World, assert_same, compare_on, push, with_setup};
+use super::receive_pack::{Cmd, Hook, Push, SERVER_ENVIRONMENT, World, assert_same, compare_on, push, with_setup};
 
 fn all_hooks() -> Vec<Hook> {
     ["pre-receive", "update", "post-receive", "post-update"]
@@ -405,6 +405,28 @@ fn the_objects_of_the_push_are_found_in_a_repository_that_has_a_colon_in_its_pat
     assert!(
         log.contains("visible: commit"),
         "Git finds the objects of the quarantine, and the receiver is compared to it:\n{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_receiver_that_is_a_server_of_its_own_passes_its_environment_on_to_hooks_like_receive_pack_does() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    // Only a client that starts `git-receive-pack` removes variables like this one, which the receive pack of a server passes on to its
+    // hooks, so a receiver that doesn't serve a client of its own process must pass it on too. `GIT_CONFIG_COUNT` can't show it, as
+    // the test tools set it for Git.
+    let _env = gix_testtools::Env::new().set(SERVER_ENVIRONMENT, "refs/replace-of-the-server/");
+    let world = World::new()?;
+    let pushed = with_hooks(
+        push(&[Cmd("0", "next", "refs/heads/next")]),
+        vec![Hook::new("pre-receive")],
+    );
+    let log = git_log(&world, "server-environment", &pushed, &["files"])?;
+    assert!(
+        log.contains("GIT_REPLACE_REF_BASE=refs/replace-of-the-server/\n"),
+        "Git's hooks see the environment of `receive-pack`, and the receiver is compared to it:\n{log}"
     );
     Ok(())
 }

@@ -44,6 +44,15 @@ impl<'repo> Remote<'repo> {
         direction: crate::remote::Direction,
     ) -> Result<Connection<'_, 'static, 'repo, Box<dyn Transport + Send>>> {
         let (url, version) = self.sanitized_url_and_version(direction)?;
+        #[cfg(all(feature = "blocking-network-client", feature = "receive"))]
+        if url.scheme == gix_url::Scheme::File && self.repo.config.native_local_transport() {
+            let git_dir = gix_path::from_bstr(crate::bstr::BStr::new(url.path.as_slice()))
+                .or_raise(|| message("The path of the repository can't be used"))?
+                .into_owned();
+            let transport =
+                crate::remote::local_transport::NativeLocal::new(git_dir, version, self.repo.config.trace_packet());
+            return Ok(self.to_connection_with_transport(Box::new(transport)));
+        }
         #[cfg(feature = "blocking-network-client")]
         let scheme_is_ssh = url.scheme == gix_url::Scheme::Ssh;
         let transport = connect::connect(

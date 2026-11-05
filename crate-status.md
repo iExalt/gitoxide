@@ -517,6 +517,8 @@ A utility crate with types and functionality related to shallow-file handling.
     * [x] general purpose `connect(…)` for clients
         * [x] _file://_ launches service application
         * [ ] _file://_ without launching `git-upload-pack` / `git-receive-pack`
+            * [x] pushes, with `gitoxide.core.nativeLocalTransport=true`, which serves them with `gix::receive` on a thread of the process
+            * [ ] fetches, which are refused with that setting instead of being served by a program
         * [x] _ssh://_ launches service application in a remote shell using _ssh_
         * [ ] _ssh://_ without an external `ssh` binary
         * [x] _git://_ establishes a tcp connection to a git daemon
@@ -600,6 +602,8 @@ Fetching and pushing as a client runs no `git` and none of its credential helper
 
 * A `file://` URL or a plain path runs `git-upload-pack` or `git-receive-pack` as a program, and `git <subcommand>` if neither is
   in `PATH` or in the exec-path. `protocol.file.allow=never` and `protocol.allow=never` refuse it before anything is run, which is tested.
+  Pushes to such a path run no program with `gitoxide.core.nativeLocalTransport=true`, which is tested with programs in `PATH` that fail
+  when run. Hooks of the remote repository still run, and a repository that the receiver can't serve is refused rather than pushed to by a program.
 * `gix_credentials::builtin` runs `git credential`. Two commands that have no repository, and so no configuration to build a
   native cascade from, keep it on purpose: `gix free remote refs` and `gix free pack receive`. Everything else uses the native
   cascade: `get`, `store` and `erase`, chaining and reset, the `store` helper without running a program, and named helpers that are found
@@ -644,7 +648,7 @@ Fetching and pushing as a client runs no `git` and none of its credential helper
         * [x] refusing what isn't supported yet instead of ignoring it: `push-to-checkout` hooks, signed pushes, `proc-receive`, shallow and partial repositories, `core.alternateRefs*`
         * [x] the `reference-transaction` hook while receiving, with the refusal of Git, which ends the push without a report
         * [x] namespaces, with `.have` for what is outside of them and `GIT_NAMESPACE` for hooks
-        * [ ] `receive.denyCurrentBranch=updateInstead` and `push-to-checkout`, shallow pushes, and receiving through a local transport
+        * [ ] `receive.denyCurrentBranch=updateInstead` and `push-to-checkout`, shallow pushes, and fetching through a local transport
     * [ ] push certificates
     * [ ] upload-pack
 * [ ] bundle-uri protocol integration

@@ -24,6 +24,29 @@ use std::{
 
 use bstr::{BString, ByteSlice};
 
+/// The environment variables that Git removes before it starts a program for another repository, such as `git-receive-pack`
+/// or `git-upload-pack`, because they describe the repository, the configuration or the working tree of the current process.
+///
+/// This is `local_repo_env` of `environment.c` in Git.
+pub const LOCAL_REPO_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG_COUNT",
+];
+
 ///
 pub mod parse;
 

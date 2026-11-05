@@ -13,7 +13,7 @@ use gix_testtools::{
 
 use crate::{Helper, PASSWORD, Protect, Setup, USER, for_each_backend, isolated, transport};
 
-fn put_shims_in_front(dir: &Path) -> TestResult<(Env<'static>, std::path::PathBuf)> {
+pub(crate) fn put_shims_in_front(dir: &Path) -> TestResult<(Env<'static>, std::path::PathBuf)> {
     use std::os::unix::fs::PermissionsExt;
     let shims = dir.join("shims");
     std::fs::create_dir(&shims)?;
