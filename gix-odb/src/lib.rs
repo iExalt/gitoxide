@@ -81,6 +81,10 @@ pub mod alternate;
 #[cfg(feature = "quarantine")]
 pub mod quarantine;
 
+/// Look at a pack that was written but isn't accepted yet, see the module documentation.
+#[cfg(feature = "inspect")]
+pub mod inspect;
+
 /// A way to access objects along with pre-configured thread-local caches for packed base objects as well as objects themselves.
 ///
 /// By default, no cache will be used.
