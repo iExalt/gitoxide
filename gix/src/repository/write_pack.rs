@@ -79,10 +79,10 @@ impl Repository {
         drop(writer);
         let pack_dir = self.objects.store_ref().path().join("pack");
         std::fs::create_dir_all(&pack_dir).or_raise(|| message!("Could not create {}", pack_dir.display()))?;
-        let scratch = Scratch::new(&pack_dir)?;
+        let scratch = crate::scratch::Scratch::new(&pack_dir)?;
         let written = gix_pack::Bundle::write_to_directory(
             &mut Cursor::new(pack),
-            Some(&scratch.0),
+            Some(scratch.path()),
             &mut gix_utils::progress::Discard,
             should_interrupt,
             None::<gix_object::find::Never>,
@@ -131,31 +131,5 @@ impl Repository {
             })?;
         }
         Ok(ids)
-    }
-}
-
-/// A directory in which a pack is made, removed when it goes out of scope. A kill leaves it, and it is named so that pruning finds it.
-struct Scratch(std::path::PathBuf);
-
-impl Scratch {
-    fn new(pack_dir: &std::path::Path) -> Result<Self> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |time| time.as_nanos());
-        let path = pack_dir.join(format!(
-            "tmp_pack_dir_{}_{nanos}_{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir(&path).or_raise(|| message!("Could not create {}", path.display()))?;
-        Ok(Scratch(path))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
     }
 }

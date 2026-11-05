@@ -158,6 +158,10 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
             * [ ] 'wanted-ref'
             * [x] standard negotiation algorithms `consecutive`, `skipping` and `noop`.
             * [x] prune stale tracking references that the explicit refspecs cover, with `Prepare::with_prune()`; `remote.<name>.prune` isn't read
+            * [x] `fetch.fsckObjects`, `transfer.fsckObjects`, `fetch.fsck.<msg-id>` and `fetch.fsck.skipList`, for clones as well: the pack is checked in a directory of its own and moved into `objects/pack` only if it is accepted, so that a refused fetch leaves no objects, references or shallow changes (see `gix-fsck`)
+                * [ ] differs from Git: a skip list that can't be read, or an invalid severity, fails before the server is contacted, where Git notices an unreadable skip list only when it checks
+                * [ ] differs from Git: a clone of a path is checked as `file://` is, where Git's local copy skips the check
+                * [ ] differs from Git: in a repository that is a partial clone (`remote.<name>.promisor` or `extensions.partialClone`) the objects are checked one by one and links to objects that aren't there are accepted, whichever remote is fetched from, where Git does that only for fetches that send a filter
         * [x] push with the blocking client, see `gix::remote::push`
             * [x] create, update and delete several references, atomically if asked to, with leases that are checked against the advertisement
             * [x] fast-forward or rewrite policy per update, and refusal of a shallow source

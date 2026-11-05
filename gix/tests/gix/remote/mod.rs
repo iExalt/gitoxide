@@ -67,6 +67,8 @@ pub(crate) fn into_daemon_remote_if_async<'repo, 'a>(
 mod connect;
 mod default_branch;
 pub(crate) mod fetch;
+#[cfg(feature = "blocking-network-client")]
+mod fetch_fsck;
 #[cfg(all(feature = "blocking-network-client", feature = "receive"))]
 mod local_transport;
 #[cfg(feature = "blocking-network-client")]

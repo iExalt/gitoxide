@@ -1,6 +1,7 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_error::{ResultExt, bail, message};
+use gix_object::bstr::ByteSlice;
 use gix_odb::store::RefreshMode;
 use gix_protocol::fetch::{Arguments, negotiate};
 #[cfg(feature = "async-network-client")]
@@ -15,7 +16,7 @@ use crate::{
         tree::{Clone, Fetch},
     },
     remote::{
-        connection::fetch::{PrepareDetached, config},
+        connection::fetch::{PrepareDetached, config, object_check},
         fetch,
         fetch::{Outcome, Prepare, RefLogMessage, Status, negotiate::Algorithm, outcome, refs},
     },
@@ -194,25 +195,50 @@ where
             fsync: repo.config.fsync_options()?,
         };
         let mut write_pack_bundle = None;
+        let mut object_warnings = gix_object::bstr::BString::default();
+        // What Git is configured to check is known before the server is bothered, as it knows it when it starts the program that checks.
+        let fsck = crate::fsck::Settings::from_repository(repo, "fetch")?;
+        // Objects that are left out on purpose can be linked to, which is why Git only checks each object by itself.
+        let check_links = !object_check::is_promisor(
+            repo,
+            con.remote.name().map(|name| name.as_bstr().to_str_lossy()).as_deref(),
+        );
 
         let res = gix_protocol::fetch(
             &mut negotiate,
-            |reader, progress, should_interrupt, _shallow_boundary| -> Result<bool> {
+            |reader, progress, should_interrupt, shallow_boundary| -> Result<bool> {
                 let mut may_read_to_end = false;
                 write_pack_bundle = if matches!(self.dry_run, fetch::DryRun::No) {
-                    let res = gix_pack::Bundle::write_to_directory(
-                        reader,
-                        Some(&repo.objects.store_ref().path().join("pack")),
-                        progress,
-                        should_interrupt,
-                        Some(Box::new({
-                            let repo = repo.clone();
-                            repo.objects
-                        })),
-                        repo.object_hash(),
-                        write_pack_options,
-                    )
-                    .or_raise(|| message("Failed to write the received pack"))?;
+                    let res = if fsck.enabled {
+                        let (written, warnings) = object_check::write_pack(
+                            repo,
+                            reader,
+                            progress,
+                            should_interrupt,
+                            write_pack_options,
+                            object_check::Checking {
+                                options: &fsck.options,
+                                shallow_boundary,
+                                links: check_links,
+                            },
+                        )?;
+                        object_warnings = warnings;
+                        written
+                    } else {
+                        gix_pack::Bundle::write_to_directory(
+                            reader,
+                            Some(&repo.objects.store_ref().path().join("pack")),
+                            progress,
+                            should_interrupt,
+                            Some(Box::new({
+                                let repo = repo.clone();
+                                repo.objects
+                            })),
+                            repo.object_hash(),
+                            write_pack_options,
+                        )
+                        .or_raise(|| message("Failed to write the received pack"))?
+                    };
                     may_read_to_end = true;
                     Some(res)
                 } else {
@@ -259,6 +285,7 @@ where
         }
 
         let out = Outcome {
+            object_warnings,
             handshake,
             ref_map: std::mem::take(&mut self.ref_map),
             status: match write_pack_bundle {

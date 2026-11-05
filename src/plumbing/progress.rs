@@ -14,15 +14,12 @@ enum Usage {
     Planned(&'static str),
     /// The configuration is already used, possibly with a given `deviation`.
     InUse(&'static str),
-    /// Needs analysis, unclear how it works or what it does.
-    Puzzled,
 }
 use Usage::*;
 
 impl Display for Usage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Puzzled => f.write_str("❓")?,
             NotApplicable(reason) => write!(f, "not applicable because {reason}")?,
             NotPlanned(reason) => write!(f, "not planned || {reason}")?,
             Planned(note) => {
@@ -43,7 +40,6 @@ impl Display for Usage {
 impl Usage {
     pub const fn icon(&self) -> &'static str {
         match self {
-            Puzzled => "❓",
             NotApplicable(_) => "❌",
             Planned(_) => "🕒",
             NotPlanned(_) => "🤔",
@@ -239,15 +235,19 @@ static GIT_CONFIG: &[Record] = &[
     },
     Record {
         config: "fetch.fsckObjects",
-        usage: Puzzled,
+        usage: InUse(
+            "`transfer.fsckObjects` is the fallback. The configuration is read before the server is contacted",
+        ),
     },
     Record {
         config: "fetch.fsck.<msg-id>",
-        usage: Puzzled,
+        usage: InUse("an unknown message id is skipped with a warning, as in Git"),
     },
     Record {
         config: "fetch.fsck.skipList",
-        usage: Puzzled,
+        usage: InUse(
+            "a list that can't be read fails the fetch even if nothing was to be received, where Git only notices it when it checks",
+        ),
     },
     Record {
         config: "fetch.unpackLimit",
@@ -535,7 +535,6 @@ pub fn show_progress() -> Result<()> {
                     deviation += 1;
                 }
             }
-            Puzzled => {}
         }
     }
 

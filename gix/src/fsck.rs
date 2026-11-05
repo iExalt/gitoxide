@@ -91,8 +91,44 @@ fn skip_list_path(repo: &Repository, value: &gix_object::bstr::BStr) -> Result<P
     Ok(repo.git_dir().join(path))
 }
 
-/// Return the options for the check of a pack that is received in `repo`, as `receive-pack` or `fetch` run it, with `shallow`
+/// Check the objects of the pack that `inspection` shows the way the program `program` of Git does with `options`, with `shallow` as the
+/// commits whose parents are missing so that checking the links doesn't need them, and return what it says about them.
+/// If `links` is `false`, what the objects link to isn't required to exist.
+///
+/// Fail if checking is interrupted through `should_interrupt`, which is something else than refusing the pack.
+pub(crate) fn check(
+    options: &gix_fsck::Options,
+    object_hash: gix_hash::Kind,
+    program: gix_fsck::Program,
+    shallow: &[gix_hash::ObjectId],
+    links: bool,
+    inspection: &gix_odb::inspect::Inspection<'_>,
+    should_interrupt: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<gix_fsck::Outcome> {
+    let mut transfer =
+        gix_fsck::Transfer::new(options.clone(), object_hash, program).with_shallow(shallow.iter().copied());
+    if !links {
+        transfer = transfer.without_links();
+    }
+    inspection.objects(&mut |object| {
+        if should_interrupt.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+            gix_error::bail!(gix_error::cancelled("Interrupted while checking the received objects"));
+        }
+        let (kind, size) = (object.kind(), object.size());
+        let id = object.id().to_owned();
+        let data = if transfer.needs_content(&id, kind, size) {
+            Some(object.data()?)
+        } else {
+            None
+        };
+        Ok(transfer.object(&id, kind, size, data))
+    })?;
+    Ok(transfer.finish(&inspection.find()))
+}
+
+/// Return the options for the check of a pack that is received in `repo`, as `receive-pack` runs it, with `shallow`
 /// as the commits whose parents are missing, so that checking the links doesn't need them.
+#[cfg(feature = "receive")]
 pub(crate) fn inspector(
     options: gix_fsck::Options,
     object_hash: gix_hash::Kind,
@@ -104,19 +140,7 @@ pub(crate) fn inspector(
         } else {
             gix_fsck::Program::UnpackObjects
         };
-        let mut transfer =
-            gix_fsck::Transfer::new(options.clone(), object_hash, program).with_shallow(shallow.iter().copied());
-        inspection.objects(&mut |object| {
-            let (kind, size) = (object.kind(), object.size());
-            let id = object.id().to_owned();
-            let data = if transfer.needs_content(&id, kind, size) {
-                Some(object.data()?)
-            } else {
-                None
-            };
-            Ok(transfer.object(&id, kind, size, data))
-        })?;
-        let outcome = transfer.finish(&inspection.find());
+        let outcome = check(&options, object_hash, program, &shallow, true, inspection, None)?;
         Ok(gix_odb::quarantine::Inspected {
             accepted: outcome.accepted,
             report: outcome.report.into(),
