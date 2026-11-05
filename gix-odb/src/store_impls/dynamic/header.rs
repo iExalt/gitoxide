@@ -169,9 +169,11 @@ where
             }
 
             for lodb in snapshot.loose_dbs.iter() {
-                // TODO: remove this double-lookup once the borrow checker allows it.
                 if lodb.contains(id) {
-                    return lodb.try_header(id).map(|opt| opt.map(Into::into));
+                    // It may have been removed since as a pack has it now, which the refresh below finds.
+                    if let Some(header) = lodb.try_header(id)? {
+                        return Ok(Some(header.into()));
+                    }
                 }
             }
 

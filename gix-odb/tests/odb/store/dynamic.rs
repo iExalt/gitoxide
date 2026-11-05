@@ -1350,3 +1350,43 @@ mod verify {
         );
     }
 }
+
+/// `git prune-packed` and `git repack -d` remove the loose copies of objects that a pack has while others read. A handle that
+/// hasn't seen the pack yet looks at the loose objects first, so it can see the object there and find it gone when it reads it.
+/// That's no miss, as the pack has it.
+#[test]
+fn an_object_whose_loose_copy_is_removed_while_it_is_read_is_found_in_the_pack() -> Result {
+    let dir = crate::scripted_fixture_writable("make_loose_and_packed.sh")?;
+    let objects_dir = dir.path().join(".git/objects");
+    let id: ObjectId = gix_testtools::git(dir.path(), "rev-parse HEAD")?.trim().parse()?;
+    let hex = id.to_string();
+    let loose = objects_dir.join(&hex[..2]).join(&hex[2..]);
+    let (done, scratch) = (std::sync::atomic::AtomicBool::new(false), objects_dir.join("scratch"));
+
+    let misses = std::thread::scope(|scope| -> Result<usize> {
+        scope.spawn(|| {
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                // the loose object is there and then gone, and never partially written
+                std::fs::rename(&loose, &scratch).expect("rename works");
+                std::thread::yield_now();
+                std::fs::rename(&scratch, &loose).expect("rename works");
+                std::thread::yield_now();
+            }
+        });
+        let mut misses = 0;
+        let mut buf = Vec::new();
+        for _ in 0..4000 {
+            let handle = odb_at(&objects_dir)?;
+            if gix_object::Find::try_find(&handle, &id, &mut buf)?.is_none() {
+                misses += 1;
+            }
+            if handle.try_header(&id)?.is_none() {
+                misses += 1;
+            }
+        }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(misses)
+    })?;
+    assert_eq!(misses, 0, "an object that exists is never reported to be missing");
+    Ok(())
+}
