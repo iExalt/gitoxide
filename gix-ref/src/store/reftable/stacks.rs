@@ -66,6 +66,29 @@ impl Cell {
 }
 
 impl Cell {
+    /// Return `true` if the sizes of the tables of the stack violate the geometric sequence, so that `auto` compaction would
+    /// merge some of them.
+    pub fn compaction_required(&self) -> Result<bool> {
+        let mut guard = gix_parallel::lock(&self.stack);
+        match guard.as_mut() {
+            Some(stack) => {
+                stack
+                    .reload()
+                    .or_raise(|| message("Could not reload the reftable stack").with("path", self.dir.as_path()))?;
+            }
+            None => {
+                *guard = Some(
+                    Stack::open(&self.dir, self.hash)
+                        .or_raise(|| message("Could not read the reftable stack").with("path", self.dir.as_path()))?,
+                );
+            }
+        }
+        Ok(guard
+            .as_ref()
+            .expect("the stack was opened above")
+            .compaction_required())
+    }
+
     /// Merge tables of the stack like `git pack-refs` does: the ones the geometric policy suggests if `auto` is set, all of them
     /// otherwise, and remove the tables that nothing lists anymore. Return the number of tables that were merged away.
     pub fn compact(&self, auto: bool) -> Result<usize> {
@@ -208,6 +231,17 @@ impl Store {
             merged_tables: self.stacks.cell(&id)?.compact(options.auto)?,
             ..Default::default()
         })
+    }
+
+    /// Return `true` if merging the tables of the stack of this worktree is due, which is what `--auto` decides.
+    pub(crate) fn pack_refs_required_inner(&self) -> Result<bool> {
+        self.assure_backend_supported()?;
+        let id = if self.stacks.has_worktree_stack() {
+            StackId::Worktree
+        } else {
+            StackId::Main
+        };
+        self.stacks.cell(&id)?.compaction_required()
     }
 
     pub(crate) fn stack_snapshot(&self, id: &StackId, reload: bool) -> Result<Snapshot> {
