@@ -26,6 +26,7 @@ use super::{
         self, Ancestry, CheckedOut, Command, Level, Message, Messages, Plan, Policy, Queued, Refs, Resolved,
         StoreFailure, World,
     },
+    worktree::{self, Refusal},
 };
 use crate::Repository;
 
@@ -590,6 +591,25 @@ fn worktree_uses(repo: &Repository, name: &BStr) -> bool {
 }
 
 impl RepoWorld<'_> {
+    /// The repository of the work tree whose `HEAD` is the branch `name`, in the main work tree or a linked one.
+    fn checked_out_repository(&self, name: &BStr) -> Option<Repository> {
+        let has_head_at = |repo: &Repository| {
+            repo.head_name()
+                .ok()
+                .flatten()
+                .is_some_and(|head| head.as_bstr() == name)
+        };
+        if !self.repo.is_bare() && has_head_at(self.repo) {
+            return Some(self.repo.clone());
+        }
+        self.repo.worktrees().ok()?.into_iter().find_map(|worktree| {
+            worktree
+                .into_repo_with_possibly_inaccessible_worktree()
+                .ok()
+                .filter(|linked| has_head_at(linked))
+        })
+    }
+
     /// The name of a reference in full, which is what the namespace makes of what a client calls it.
     fn full(&self, name: &BStr) -> BString {
         let mut full = self.prefix.clone();
@@ -650,6 +670,22 @@ impl World for RepoWorld<'_> {
 
     fn update_hook(&self, command: &Command, messages: &mut Messages) -> bool {
         self.update_hook.is_some_and(|hook| hook(command, messages))
+    }
+
+    fn update_worktree(&self, name: &BStr, command: &Command, messages: &mut Messages) -> Option<&'static str> {
+        let mut notes = Vec::new();
+        let result = match self.checked_out_repository(name) {
+            Some(worktree) => worktree::update_instead(&worktree, &command.new_id, &mut notes),
+            None => {
+                notes.push(format!("no work tree has HEAD at '{name}', which is what is supported"));
+                Err(Refusal::Update)
+            }
+        };
+        // What the commands of Git say goes to its standard error, which isn't for the pusher.
+        for note in notes {
+            messages.diagnostic(note);
+        }
+        result.err().map(Refusal::reason)
     }
 
     fn head_name(&self) -> Option<BString> {

@@ -644,12 +644,12 @@ Fetching and pushing as a client runs no `git` and none of its credential helper
 * [ ] upload-pack / receive-pack server plumbing for in-process transports
     * [x] receive-pack advertisement, request parsing, status reports and side bands, see `receive`
     * [x] receive-pack object ingestion into a quarantine, connectivity, reference policy and atomic or partial updates, see `gix::receive`
-        * [x] `receive.denyDeletes`, `receive.denyNonFastForwards`, `receive.denyCurrentBranch` (not `updateInstead`), `receive.denyDeleteCurrent`, `receive.hideRefs`, `transfer.hideRefs`
+        * [x] `receive.denyDeletes`, `receive.denyNonFastForwards`, `receive.denyCurrentBranch`, including `updateInstead` without a `push-to-checkout` hook, `receive.denyDeleteCurrent`, `receive.hideRefs`, `transfer.hideRefs`
         * [x] `pre-receive`, `update`, `post-receive` and `post-update` hooks, with push options, the quarantine environment, output on the side band and keep-alive packets while they run (`receive.keepAlive`)
-        * [x] refusing what isn't supported yet instead of ignoring it: `push-to-checkout` hooks, signed pushes, `proc-receive`, shallow and partial repositories, `core.alternateRefs*`
+        * [x] refusing what isn't supported yet instead of ignoring it: `push-to-checkout` hooks, `updateInstead` where the work tree is sparse, has entries marked skip-worktree or assume-unchanged, or filters that run programs, signed pushes, `proc-receive`, shallow and partial repositories, `core.alternateRefs*`
         * [x] the `reference-transaction` hook while receiving, with the refusal of Git, which ends the push without a report
         * [x] namespaces, with `.have` for what is outside of them and `GIT_NAMESPACE` for hooks
-        * [ ] `receive.denyCurrentBranch=updateInstead` and `push-to-checkout`, shallow pushes, and fetching through a local transport
+        * [ ] `push-to-checkout`, shallow pushes, and fetching through a local transport
     * [ ] push certificates
     * [ ] upload-pack
         * [x] protocol version 2 advertisement, requests, and the answers for `ls-refs` and the start of the pack of `fetch`, see `upload`
