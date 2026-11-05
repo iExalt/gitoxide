@@ -41,6 +41,8 @@ mod reference_hook;
 #[cfg(feature = "maintenance")]
 mod reflog_expire;
 mod remote;
+#[cfg(feature = "maintenance")]
+mod repack;
 mod shallow;
 mod state;
 #[cfg(feature = "attributes")]

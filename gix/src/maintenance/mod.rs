@@ -5,3 +5,4 @@
 pub mod prune;
 pub mod reachable;
 pub mod reflog;
+pub mod repack;

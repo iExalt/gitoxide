@@ -72,13 +72,13 @@ pub struct PackedOptions {
     pub dry_run: bool,
 }
 
-struct Loose {
-    id: ObjectId,
-    path: PathBuf,
-    mtime: i64,
+pub(super) struct Loose {
+    pub(super) id: ObjectId,
+    pub(super) path: PathBuf,
+    pub(super) mtime: i64,
 }
 
-fn mtime_of(metadata: &std::fs::Metadata) -> i64 {
+pub(super) fn mtime_of(metadata: &std::fs::Metadata) -> i64 {
     metadata
         .modified()
         .ok()
@@ -92,7 +92,7 @@ fn is_still_old(path: &Path, expire: i64) -> bool {
 }
 
 /// Everything that is in the directories of loose objects: what is an object, and what is a leftover of a writer.
-fn scan_loose(objects_dir: &Path, hash: gix_hash::Kind) -> Result<(Vec<Loose>, Vec<PathBuf>)> {
+pub(super) fn scan_loose(objects_dir: &Path, hash: gix_hash::Kind) -> Result<(Vec<Loose>, Vec<PathBuf>)> {
     let (mut loose, mut temporary) = (Vec::new(), Vec::new());
     for fan_out in 0..=255u8 {
         let dir = objects_dir.join(format!("{fan_out:02x}"));
@@ -174,7 +174,7 @@ fn recent_in_packs(objects_dir: &Path, hash: gix_hash::Kind, expire: i64) -> Res
 }
 
 /// Read the times of the objects of a cruft pack, in the order of its index, from the `.mtimes` file `data`.
-fn cruft_mtimes(data: &[u8], hash: gix_hash::Kind, num_objects: usize) -> Result<Vec<u32>> {
+pub(super) fn cruft_mtimes(data: &[u8], hash: gix_hash::Kind, num_objects: usize) -> Result<Vec<u32>> {
     const HEADER: usize = 12;
     let id_len = hash.len_in_bytes();
     let expected_hash_version: u32 = if id_len == 20 { 1 } else { 2 };
@@ -228,14 +228,14 @@ fn recent_objects_from_hooks(repo: &Repository) -> Result<Vec<ObjectId>> {
 }
 
 /// Remove the directories for loose objects that are empty, which `rmdir` leaves alone if they are not.
-fn remove_empty_fan_out_dirs(objects_dir: &Path) {
+pub(super) fn remove_empty_fan_out_dirs(objects_dir: &Path) {
     for fan_out in 0..=255u8 {
         std::fs::remove_dir(objects_dir.join(format!("{fan_out:02x}"))).ok();
     }
 }
 
 impl Repository {
-    fn refuse_to_delete_objects(&self) -> Result<()> {
+    pub(super) fn refuse_to_delete_objects(&self) -> Result<()> {
         if self
             .config_snapshot()
             .boolean("extensions.preciousObjects")
@@ -413,7 +413,7 @@ impl Repository {
 
     /// Remove the commit-graph if it names any of `ids`, and return `true` if it was removed. It's an error if it can't be removed,
     /// as the objects must not be removed then.
-    fn remove_commit_graph_naming(&self, ids: impl Iterator<Item = ObjectId>) -> Result<bool> {
+    pub(super) fn remove_commit_graph_naming(&self, ids: impl Iterator<Item = ObjectId>) -> Result<bool> {
         if !self.commit_graph_names(ids) {
             return Ok(false);
         }
