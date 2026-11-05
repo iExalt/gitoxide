@@ -71,6 +71,13 @@ fn hfs_dotgit() {
         ".git\u{feff}".as_bytes(),
         "\u{202a}.\u{202b}g\u{202c}i\u{202d}t\u{202e}".as_bytes(),
         ".\u{206a}git\u{206f}".as_bytes(),
+        // Malformed UTF-8 after the name ends it, which is how Git sees it.
+        b".git\xff",
+        b".git\xc0",
+        b".git\xc3",
+        b".git\xe2\x80",
+        b".GIT\xf0\x80\x80\x80",
+        b".g\xe2\x80\x8cit\xff",
     ] {
         assert!(hfs(DotFile::Git, name), "{:?} is .git", name.as_bstr());
     }
@@ -84,6 +91,8 @@ fn hfs_dotgit() {
         b".git.",
         b".gi\xc0t",
         b".gi\xe2\x80t",
+        b".\xffgit",
+        b"\xff.git",
         ".gi\u{2010}t".as_bytes(),
         ".gİt".as_bytes(),
         b"x.git",
@@ -184,9 +193,20 @@ fn hfs_special_files() {
             assert!(!hfs(file, name.as_bytes()), "{name:?} isn't {file:?}");
         }
     }
+    for (file, name) in [
+        (DotFile::Gitmodules, ".gitmodules"),
+        (DotFile::Gitattributes, ".gitattributes"),
+        (DotFile::Gitignore, ".gitignore"),
+        (DotFile::Mailmap, ".mailmap"),
+    ] {
+        assert!(
+            hfs(file, &[name.as_bytes(), b"\xff"].concat()),
+            "invalid UTF-8 after the name ends it like the end of the string does: {name}"
+        );
+    }
+    assert!(!hfs(DotFile::Gitmodules, b".git\xc0modules"), "but not within it");
     assert!(
-        !hfs(DotFile::Gitmodules, b".gitmodules\xff"),
-        "invalid UTF-8 doesn't match"
+        !hfs(DotFile::Gitmodules, b".gitmodule\xff"),
+        "and not before the name is complete"
     );
-    assert!(!hfs(DotFile::Gitmodules, b".git\xc0modules"));
 }

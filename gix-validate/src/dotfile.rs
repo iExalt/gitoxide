@@ -50,19 +50,23 @@ impl DotFile {
 /// Return `true` if `name` is `file` or what HFS+ makes the same, which are spellings that contain code points
 /// that HFS+ ignores, like a zero-width joiner. Only the case folding that matters for these names is applied.
 ///
-/// `name` is a single path component, but a directory separator (`/`) ends it. Malformed UTF-8 is never a match.
+/// `name` is a single path component, but a directory separator (`/`) ends it. Only `/` does, as is the case for Git on Linux,
+/// while Git for Windows has `\` as well.
+///
+/// Malformed UTF-8 ends the name like the end of the string does, which makes `.git` followed by an invalid byte a match,
+/// just like it is for Git, while it can't be part of what is matched.
 pub fn is_hfs(file: DotFile, name: &BStr) -> bool {
     let mut rest = name.as_bytes();
-    if next_hfs_char(&mut rest) != Some(u32::from(b'.')) {
+    if next_hfs_char(&mut rest) != u32::from(b'.') {
         return false;
     }
     for expected in file.needle() {
-        match next_hfs_char(&mut rest) {
-            Some(c) if c < 128 && (c as u8).to_ascii_lowercase() == *expected => {}
-            _ => return false,
+        let c = next_hfs_char(&mut rest);
+        if c >= 128 || (c as u8).to_ascii_lowercase() != *expected {
+            return false;
         }
     }
-    matches!(next_hfs_char(&mut rest), Some(0 | 0x2f))
+    matches!(next_hfs_char(&mut rest), 0 | 0x2f)
 }
 
 /// Return `true` if `name` is `file` or what NTFS makes the same: a different case, a trailing run of spaces and dots, an
@@ -160,10 +164,13 @@ fn is_ntfs_dotgit(name: &[u8]) -> bool {
 }
 
 /// Decode one character like Git's `next_hfs_char()`, skipping the code points HFS+ ignores.
-/// Return `None` for malformed UTF-8, and `Some(0)` at the end of `input`.
-fn next_hfs_char(input: &mut &[u8]) -> Option<u32> {
+/// Return `0` for malformed UTF-8 and at the end of `input`, which is what Git does as that is good enough for it
+/// to realize that it can't be what is looked for, or that it's the end of it.
+fn next_hfs_char(input: &mut &[u8]) -> u32 {
     loop {
-        let (c, len) = pick_one_utf8_char(input)?;
+        let Some((c, len)) = pick_one_utf8_char(input) else {
+            return 0;
+        };
         // Past the end the character is the terminating NUL, which is not to be consumed.
         *input = input.get(len..).unwrap_or_default();
         if matches!(
@@ -172,7 +179,7 @@ fn next_hfs_char(input: &mut &[u8]) -> Option<u32> {
         ) {
             continue;
         }
-        return Some(c);
+        return c;
     }
 }
 
