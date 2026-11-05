@@ -73,8 +73,8 @@ impl Options {
     /// Read the settings from the configuration of `repo`.
     ///
     /// Fail if a setting has an invalid value or can't be honored, which is to refuse to receive instead of receiving in a
-    /// way that differs from what the configuration says. That's the case if there is a `push-to-checkout` hook, push certificates, `proc-receive`,
-    /// `updateInstead`, namespaces, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
+    /// way that differs from what the configuration says. That's the case if there is a `push-to-checkout` hook, push certificates,
+    /// `proc-receive`, `updateInstead`, object checking, or anything the [`quarantine`](gix_odb::quarantine::Options::from_config())
     /// can't handle, and if the repository is shallow.
     pub fn from_repository(repo: &Repository) -> Result<Self> {
         let config = repo.config_snapshot();
@@ -160,9 +160,6 @@ impl Options {
                     )));
                 }
             }
-        }
-        if repo.namespace().is_some() {
-            bail!(unsupported("namespaces aren't supported yet"));
         }
         if repo
             .is_shallow()

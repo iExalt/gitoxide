@@ -132,12 +132,11 @@ fn hooks_that_cannot_run_yet_are_refused_and_only_those_that_exist() -> TestResu
 }
 
 #[test]
-fn namespaces_and_shallow_repositories_are_refused() -> TestResult {
+fn shallow_repositories_are_refused_and_namespaces_are_not() -> TestResult {
     let (dir, _repo) = bare()?;
     let mut repo = open(dir.path(), &[])?;
     repo.set_namespace("ns")?;
-    let err = repo.receive().err().expect("namespaces change every reference name");
-    assert!(err.is_unsupported(), "namespaces: {err}");
+    repo.receive().expect("namespaces are supported");
 
     std::fs::write(dir.path().join("shallow"), "1111111111111111111111111111111111111111\n")?;
     let err = open(dir.path(), &[])?

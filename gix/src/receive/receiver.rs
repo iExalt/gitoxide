@@ -32,6 +32,10 @@ use crate::Repository;
 /// Receives pushes into a repository, see [`Repository::receive()`].
 pub struct Receiver<'repo> {
     repo: &'repo Repository,
+    /// What references are looked up and changed in: `repo` without its namespace, with the names of all references in full.
+    global: Repository,
+    /// What names of the namespace begin with, which is empty without one.
+    prefix: BString,
     options: Options,
     fault: Option<Fault>,
     auto_maintenance: Option<AutoMaintenance<'repo>>,
@@ -77,8 +81,14 @@ impl Repository {
     /// Fail if the configuration of the repository asks for something that isn't supported, instead of ignoring it,
     /// see [`Options::from_repository()`].
     pub fn receive(&self) -> crate::Result<Receiver<'_>> {
+        let mut global = self.clone();
+        let prefix = global
+            .clear_namespace()
+            .map_or_else(BString::default, |namespace| namespace.as_bstr().to_owned());
         Ok(Receiver {
             repo: self,
+            global,
+            prefix,
             options: Options::from_repository(self)?,
             fault: None,
             auto_maintenance: None,
@@ -106,6 +116,18 @@ impl<'repo> Receiver<'repo> {
         self
     }
 
+    /// The name of `full` in the namespace of the receiver, or `None` if it is in another one. Without namespace, that's the name.
+    fn strip<'n>(&self, full: &'n BStr) -> Option<&'n BStr> {
+        full.strip_prefix(self.prefix.as_slice()).map(ByteSlice::as_bstr)
+    }
+
+    /// The namespace as it is passed to hooks in `GIT_NAMESPACE`, like `a/b` for the one that `refs/namespaces/a/refs/namespaces/b/` is.
+    fn namespace_name(&self) -> Option<String> {
+        let prefix = self.prefix.to_str_lossy();
+        let name = prefix.strip_prefix("refs/namespaces/")?.trim_end_matches('/');
+        Some(name.replace("/refs/namespaces/", "/"))
+    }
+
     /// Return what to tell clients about the repository: its references that aren't hidden, and what it offers.
     ///
     /// The references of alternates that are repositories are added as `.have`, which clients ignore other than to send less.
@@ -117,12 +139,20 @@ impl<'repo> Receiver<'repo> {
 
         let mut seen = HashSet::new();
         let mut references = Vec::new();
-        for (name, id) in all_references(self.repo)? {
-            if self.options.hidden.is_hidden(name.as_bstr()) {
+        for (full, id) in all_references(&self.global)? {
+            let name = self.strip(full.as_bstr());
+            if self.options.hidden.is_hidden_in(name, full.as_bstr()) {
                 continue;
             }
-            seen.insert(id);
-            references.push(Reference::new(name, id));
+            // What isn't in the namespace is only there to tell the client what the repository has, once for each object.
+            match name {
+                Some(name) => {
+                    seen.insert(id);
+                    references.push(Reference::new(name.to_owned(), id));
+                }
+                None if seen.insert(id) => references.push(Reference::new(".have", id)),
+                None => {}
+            }
         }
         for alternate in alternate_repositories(self.repo)? {
             for (_, id) in all_references(&alternate)? {
@@ -223,7 +253,8 @@ impl<'repo> Receiver<'repo> {
         let heartbeat = heartbeat
             .zip(self.options.keep_alive)
             .map(|(beat, interval)| (interval, beat));
-        Runner::new(self.repo, &outcome.push_options, heartbeat)?.post(&outcome.commands, &mut messages);
+        Runner::new(self.repo, &outcome.push_options, self.namespace_name(), heartbeat)?
+            .post(&outcome.commands, &mut messages);
         if outcome.maintenance_due
             && let Some(maintenance) = &self.auto_maintenance
         {
@@ -254,7 +285,7 @@ impl<'repo> Receiver<'repo> {
         let heartbeat = heartbeat
             .zip(self.options.keep_alive)
             .map(|(beat, interval)| (interval, beat));
-        let runner = Runner::new(repo, &request.push_options, heartbeat)?;
+        let runner = Runner::new(repo, &request.push_options, self.namespace_name(), heartbeat)?;
         let mut unpack_failure = None;
         let mut quarantine = None;
         let mut objects_migrated = false;
@@ -282,7 +313,11 @@ impl<'repo> Receiver<'repo> {
             }
         } else {
             self.verify_connectivity(&mut commands, quarantine.as_ref())?;
-            policy::reject_hidden(&mut commands, &|name| self.options.hidden.is_hidden(name));
+            policy::reject_hidden(&mut commands, &|name| {
+                let mut full = self.prefix.clone();
+                full.extend_from_slice(name);
+                self.options.hidden.is_hidden_in(Some(name), full.as_bstr())
+            });
             // The hook sees all commands, including those that failed already, and decides about all of them.
             if runner.pre_receive(&commands, quarantine.as_ref(), &mut messages) {
                 for command in commands.iter_mut().filter(|command| command.error.is_none()) {
@@ -357,13 +392,14 @@ impl<'repo> Receiver<'repo> {
         let view;
         let repo = match quarantine {
             Some(quarantine) => {
-                view = self.repo.with_quarantine(quarantine);
+                view = self.global.with_quarantine(quarantine);
                 &view
             }
-            None => self.repo,
+            None => &self.global,
         };
         let hidden = &self.options.hidden;
-        let cutoffs = Cutoffs::collect(repo, &|name| hidden.is_hidden(name)).ok();
+        // Like `--all`, all namespaces are looked at, and hiding is decided by the name in the namespace of those that are in it.
+        let cutoffs = Cutoffs::collect(repo, &|full| hidden.is_hidden_in(self.strip(full), full)).ok();
         let all_connected = cutoffs
             .as_ref()
             .is_some_and(|cutoffs| connectivity::verify(repo, cutoffs, &tips).is_ok());
@@ -388,10 +424,11 @@ impl<'repo> Receiver<'repo> {
         runner: &Runner<'_, '_>,
         messages: &mut Messages,
     ) -> Result<Option<String>> {
-        let repo = self.repo;
+        let repo = &self.global;
         let update_hook = |command: &Command, messages: &mut Messages| runner.update(command, messages);
         let world = RepoWorld {
             repo,
+            prefix: &self.prefix,
             update_hook: Some(&update_hook),
         };
         policy::check_aliased_updates(
@@ -411,6 +448,8 @@ impl<'repo> Receiver<'repo> {
         let _ = identity.committer_or_set_generic_fallback();
         let mut refs = RepoRefs {
             repo,
+            prefix: &self.prefix,
+            namespace: self.namespace_name(),
             identity: &identity,
             commands: commands
                 .iter()
@@ -498,7 +537,9 @@ type UpdateHook<'a> = dyn Fn(&Command, &mut Messages) -> bool + 'a;
 
 /// What decisions about commands need to know about the repository.
 struct RepoWorld<'a> {
+    /// The repository without namespace, which is why names are put in front of what its prefix says.
     repo: &'a Repository,
+    prefix: &'a BString,
     update_hook: Option<&'a UpdateHook<'a>>,
 }
 
@@ -525,25 +566,34 @@ fn worktree_uses(repo: &Repository, name: &BStr) -> bool {
 }
 
 impl RepoWorld<'_> {
+    /// The name of a reference in full, which is what the namespace makes of what a client calls it.
+    fn full(&self, name: &BStr) -> BString {
+        let mut full = self.prefix.clone();
+        full.extend_from_slice(name);
+        full
+    }
+
+    /// What `full` is called in the namespace, if it is in it.
+    fn relative(&self, full: &BStr) -> Option<BString> {
+        full.strip_prefix(self.prefix.as_slice()).map(Into::into)
+    }
+
     fn resolve(&self, name: &BStr) -> Resolved {
         // Like Git, follow symbolic references for as long as they lead somewhere, to the name of the last one.
-        let mut current = name.to_owned();
+        let mut current = self.full(name);
         let mut first = true;
+        // A symbolic reference that leads out of the namespace is as good as a broken one. Git crashes when it sees one.
+        let target = |current: BString| match self.relative(current.as_bstr()) {
+            Some(relative) => Resolved::Target(relative),
+            None => Resolved::Broken,
+        };
         for _ in 0..6 {
             let Ok(Some(reference)) = self.repo.try_find_reference(current.as_bstr()) else {
-                return if first {
-                    Resolved::Direct
-                } else {
-                    Resolved::Target(current)
-                };
+                return if first { Resolved::Direct } else { target(current) };
             };
             match reference.target() {
                 gix_ref::TargetRef::Object(_) => {
-                    return if first {
-                        Resolved::Direct
-                    } else {
-                        Resolved::Target(current)
-                    };
+                    return if first { Resolved::Direct } else { target(current) };
                 }
                 gix_ref::TargetRef::Symbolic(next) => {
                     current = next.as_bstr().to_owned();
@@ -558,8 +608,10 @@ impl RepoWorld<'_> {
 impl World for RepoWorld<'_> {
     fn checked_out(&self, name: &BStr) -> Option<CheckedOut> {
         let repo = self.repo;
-        if worktree_uses(repo, name) {
-            return Some(CheckedOut { bare: repo.is_bare() });
+        // Git looks at the name as the client sent it here, so the branch of a worktree isn't free in a namespace.
+        // A bare repository has no worktree to protect, and it's the current branch of `HEAD` that its policy is about.
+        if !repo.is_bare() && worktree_uses(repo, name) {
+            return Some(CheckedOut { bare: false });
         }
         repo.worktrees()
             .ok()?
@@ -581,7 +633,7 @@ impl World for RepoWorld<'_> {
             .head_name()
             .ok()
             .flatten()
-            .map(|name| name.as_bstr().to_owned())
+            .and_then(|name| self.relative(name.as_bstr()))
     }
 
     fn alias_target(&self, name: &BStr) -> Option<BString> {
@@ -600,6 +652,7 @@ impl World for RepoWorld<'_> {
     }
 
     fn ref_exists(&self, name: &BStr) -> bool {
+        // Git asks for the name as the client sent it, without the namespace.
         matches!(self.repo.try_find_reference(name), Ok(Some(_)))
     }
 
@@ -635,6 +688,9 @@ impl World for RepoWorld<'_> {
     }
 
     fn invalid_new_value(&self, name: &BStr, new: &oid) -> Option<String> {
+        // It's the reference store that decides, which knows the name in full, and which sees no branch in a namespace.
+        let full = self.full(name);
+        let name = full.as_bstr();
         let Ok(object) = self.repo.find_object(new) else {
             return Some(format!("trying to write ref '{name}' with nonexistent object {new}"));
         };
@@ -656,7 +712,11 @@ fn as_git_says(text: String) -> String {
 
 /// Updates the references of a repository.
 struct RepoRefs<'a> {
+    /// The repository without namespace, with names that are put behind its prefix.
     repo: &'a Repository,
+    prefix: &'a BString,
+    /// What hooks are told about the namespace.
+    namespace: Option<String>,
     /// The repository to get the committer of reflog entries from, which has a fallback.
     identity: &'a Repository,
     /// The name, old and new id of the commands, which are what edits are made from.
@@ -691,7 +751,9 @@ impl Refs for RepoRefs<'_> {
                     force_create_reflog: false,
                     message: "push".into(),
                 };
-                let name = gix_ref::FullName::try_from(name.as_bstr()).expect("the name was validated");
+                let mut full = self.prefix.clone();
+                full.extend_from_slice(name);
+                let name = gix_ref::FullName::try_from(full.as_bstr()).expect("the name was validated");
                 match &queued.plan {
                     Plan::Update => RefEdit {
                         change: gix_ref::transaction::Change::Update {
@@ -742,6 +804,7 @@ impl Refs for RepoRefs<'_> {
             transaction = transaction.observer(crate::repository::ReferenceTransactionHook {
                 repo: self.repo,
                 side: gix_hook::Side::Receive,
+                namespace: self.namespace.clone(),
             });
         }
         let prepared = match transaction.prepare(
