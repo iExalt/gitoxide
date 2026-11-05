@@ -58,6 +58,8 @@
 //! * Loose copies of objects that a kept pack has stay, while Git's `prune-packed` removes them.
 //! * The index of a pack that is removed is renamed to end in `.idx.removing` first, which Git ignores, and the next run finishes
 //!   what a killed one left. A pack that has no index otherwise is left alone, like Git does, as somebody may be about to make one.
+//! * An unreachable object that is written loose is dated after it is written, as in Git, so a process that is killed in between leaves
+//!   it with the time of the writing until the next run, which doesn't lower times. Such an object is kept for longer by `prune`.
 //! * Setting the time of loose objects needs write access on Windows, where this was not tried.
 //! * Whether the process of an interrupted run is gone is only known on Linux, so elsewhere its marker blocks the next run until it is 12 hours old.
 //! * `gc.maxCruftSize` and `--max-cruft-size` aren't supported, so there is one cruft pack, which is what Git writes without them.
@@ -116,6 +118,51 @@ fn marker_content() -> String {
         host_name().unwrap_or_default(),
         now_seconds()
     )
+}
+
+/// The start of the name of the file that a marker is written to before it gets its name, which is a scratch file.
+const MARKER_SCRATCH_PREFIX: &str = "tmp_gix_marker_";
+
+/// Create the marker at `path` with its content, unless there is a file of that name, and return whether it was created.
+///
+/// The content is written before the marker has its name, so that a process that is killed doesn't leave a marker that is
+/// empty, which no run could tell from the `.keep` file of somebody else and would keep its pack for good.
+fn create_marker(path: &Path) -> std::io::Result<bool> {
+    // The name has the time as well, as processes of other hosts on a shared file system may have the same id, and each file is
+    // created and not truncated, so nobody ever writes into the scratch file of somebody else.
+    let mut attempt = 0u32;
+    let scratch = loop {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let scratch = path.with_file_name(format!(
+            "{MARKER_SCRATCH_PREFIX}{}_{nanos}_{attempt}",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&scratch) {
+            Ok(mut file) => {
+                std::io::Write::write_all(&mut file, marker_content().as_bytes())?;
+                break scratch;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists && attempt < 100 => attempt += 1,
+            Err(err) => return Err(err),
+        }
+    };
+    let linked = std::fs::hard_link(&scratch, path);
+    std::fs::remove_file(&scratch).ok();
+    match linked {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        // Where files can't be linked there is no better way than to create the marker where it belongs.
+        Err(_) => match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(mut file) => {
+                std::io::Write::write_all(&mut file, marker_content().as_bytes())?;
+                Ok(true)
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(err) => Err(err),
+        },
+    }
 }
 
 /// Return `None` if `content` isn't a marker of this module, and otherwise whether the process that wrote it is gone, which is
@@ -363,6 +410,22 @@ fn remove_stale_markers(pack_dir: &Path) -> Result<()> {
         return Ok(());
     };
     for path in entries.flatten().map(|entry| entry.path()) {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(MARKER_SCRATCH_PREFIX))
+        {
+            // What a process that was killed while it made a marker left, which is there for a moment otherwise.
+            let old_enough = std::fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > STALE_MARKER_SECONDS);
+            if old_enough {
+                std::fs::remove_file(&path).ok();
+            }
+            continue;
+        }
         if path.extension().and_then(|ext| ext.to_str()) != Some("keep") {
             continue;
         }
@@ -995,19 +1058,8 @@ impl Repository {
         // It's marked before it can be found, so that a repack by somebody else leaves it alone while this runs, and so that this
         // knows it if it's left behind. A `.keep` file that is there already protects the pack for somebody else, say a receiver
         // that has yet to install the same pack and update its references, and stays as it is.
-        let marked = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(stem.with_extension("keep"))
-        {
-            Ok(mut file) => {
-                std::io::Write::write_all(&mut file, marker_content().as_bytes())
-                    .or_raise(|| message("Could not write the marker of the new pack"))?;
-                true
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => false,
-            Err(err) => return Err(err.and_raise(message("Could not create the marker of the new pack"))),
-        };
+        let marked = create_marker(&stem.with_extension("keep"))
+            .or_raise(|| message("Could not create the marker of the new pack"))?;
         std::fs::rename(&data_path, stem.with_extension("pack"))
             .or_raise(|| message("Could not move the new pack into place"))?;
         // The times are in place before the pack can be found, as the index makes it known.
