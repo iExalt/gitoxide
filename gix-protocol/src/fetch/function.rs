@@ -4,6 +4,7 @@ use std::{
 };
 
 use gix_error::{Result, ResultExt, bail, message, validation};
+use gix_hash::ObjectId;
 use gix_utils::progress::DynNestedProgress;
 
 use crate::fetch::{
@@ -18,10 +19,13 @@ use crate::transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Tra
 /// `negotiate` is used to run the negotiation of objects that should be contained in the pack, *if* one is to be received.
 /// `progress` and `should_interrupt` is passed to all potentially long-running parts of the operation.
 ///
-/// `consume_pack(pack_read, progress, interrupt) -> bool` is always called to consume all bytes that are sent by the server, returning `true` if we should assure the pack is read to the end,
+/// `consume_pack(pack_read, progress, interrupt, shallow_boundary) -> bool` is always called to consume all bytes that are sent by the server, returning `true` if we should assure the pack is read to the end,
 /// or `false` to do nothing. Dropping the reader without reading to EOF (i.e. returning `false`) is an offense to the server, and
 /// `transport` won't be in the correct state to perform additional operations, or indicate the end of operation.
 /// Note that the passed reader blocking as the pack-writing is blocking as well.
+/// `shallow_boundary` are the commits that the `shallow` file will have if the operation succeeds, which are those that it has
+/// now with the updates of the server applied. They are what is known to have no parents, and are what someone who looks at the
+/// pack needs to know to not miss them. Nothing is written to that file before `consume_pack` returns successfully.
 ///
 /// The `Context` and `Options` further define parts of this `fetch` operation.
 ///
@@ -39,7 +43,12 @@ use crate::transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Tra
 #[crate::bisync::bisync]
 pub async fn fetch<P, T>(
     negotiate: &mut impl Negotiate,
-    consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
+    consume_pack: impl FnOnce(
+        &mut dyn std::io::BufRead,
+        &mut dyn DynNestedProgress,
+        &AtomicBool,
+        &[ObjectId],
+    ) -> Result<bool>,
     mut progress: P,
     should_interrupt: &AtomicBool,
     Context {
@@ -164,8 +173,12 @@ where
                 shallow_lock = acquire_shallow_lock(&shallow_file).map(Some)?;
             }
 
+            let shallow_boundary = gix_shallow::apply(
+                shallow_commits.iter().flat_map(|commits| commits.iter().copied()),
+                previous_response.shallow_updates(),
+            );
             let (mut reader, may_read_to_end) =
-                consume_received_pack(reader, consume_pack, &mut progress, should_interrupt)?;
+                consume_received_pack(reader, consume_pack, &mut progress, should_interrupt, &shallow_boundary)?;
 
             if may_read_to_end {
                 // Assure the final flush packet is consumed.
@@ -196,15 +209,16 @@ where
 #[crate::bisync::only_async]
 fn consume_received_pack<R>(
     reader: R,
-    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
+    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool, &[ObjectId]) -> Result<bool>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
+    shallow_boundary: &[ObjectId],
 ) -> Result<(R, bool)>
 where
     R: crate::futures_io::AsyncBufRead + Unpin,
 {
     let mut reader = crate::futures_lite::io::BlockOn::new(reader);
-    let may_read_to_end = consume(&mut reader, progress, should_interrupt)
+    let may_read_to_end = consume(&mut reader, progress, should_interrupt, shallow_boundary)
         .or_raise(|| message("Failed to consume the pack sent by the remote"))?;
     Ok((reader.into_inner(), may_read_to_end))
 }
@@ -212,14 +226,15 @@ where
 #[crate::bisync::only_sync]
 fn consume_received_pack<R>(
     mut reader: R,
-    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
+    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool, &[ObjectId]) -> Result<bool>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
+    shallow_boundary: &[ObjectId],
 ) -> Result<(R, bool)>
 where
     R: std::io::BufRead,
 {
-    let may_read_to_end = consume(&mut reader, progress, should_interrupt)
+    let may_read_to_end = consume(&mut reader, progress, should_interrupt, shallow_boundary)
         .or_raise(|| message("Failed to consume the pack sent by the remote"))?;
     Ok((reader, may_read_to_end))
 }

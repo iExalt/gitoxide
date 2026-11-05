@@ -71,7 +71,7 @@ async fn fetch_receives_pack_after_ready_with_no_done() -> TestResult {
         let mut pack = Vec::new();
         let outcome = gix_protocol::fetch(
             &mut Negotiation,
-            |reader, _, _| {
+            |reader, _, _, _| {
                 reader.read_to_end(&mut pack).or_error()?;
                 Ok(true)
             },

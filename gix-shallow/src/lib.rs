@@ -45,6 +45,21 @@ pub enum Update {
     Unshallow(gix_hash::ObjectId),
 }
 
+/// Return the shallow boundary that results from applying `updates` to the `current` one, in the order of the commits that were
+/// given, followed by those that were added.
+///
+/// This is what [`write()`] puts into the `shallow` file, without sorting it.
+pub fn apply(current: impl IntoIterator<Item = gix_hash::ObjectId>, updates: &[Update]) -> Vec<gix_hash::ObjectId> {
+    let mut commits: Vec<_> = current.into_iter().collect();
+    for update in updates {
+        match update {
+            Update::Shallow(id) => commits.push(*id),
+            Update::Unshallow(id) => commits.retain(|oid| oid != id),
+        }
+    }
+    commits
+}
+
 /// Return a list of shallow commits as unconditionally read from `shallow_file`.
 ///
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
@@ -94,15 +109,7 @@ pub mod write {
             shallow_commits: Option<nonempty::NonEmpty<gix_hash::ObjectId>>,
             updates: &[Update],
         ) -> Result {
-            let mut shallow_commits = shallow_commits.map(Vec::from).unwrap_or_default();
-            for update in updates {
-                match update {
-                    Update::Shallow(id) => {
-                        shallow_commits.push(*id);
-                    }
-                    Update::Unshallow(id) => shallow_commits.retain(|oid| oid != id),
-                }
-            }
+            let mut shallow_commits = crate::apply(shallow_commits.map(Vec::from).unwrap_or_default(), updates);
             if shallow_commits.is_empty() {
                 if let Err(err) = std::fs::remove_file(file.resource_path())
                     && err.kind() != std::io::ErrorKind::NotFound
