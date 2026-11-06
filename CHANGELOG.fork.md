@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.4.0...gitoxide-fork-v0.4.1) (2026-11-06)
+
+
+### Bug fixes
+
+* **gix-odb:** touch a pack once for all the objects a handle freshens in it ([caaa20a](https://github.com/iExalt/gitoxide/commit/caaa20aa40725fa4356777872080b34315a83f2e))
+
 ## [0.4.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.3.0...gitoxide-fork-v0.4.0) (2026-11-05)
 
 
