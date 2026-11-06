@@ -783,6 +783,55 @@ fn freshen_without_refresh() -> gix_testtools::TestResult {
     Ok(())
 }
 
+/// Git touches a pack once for all the objects it skips writing because the pack has them, rather than once for each:
+/// a writer that relies on many objects in one pack opens it once.
+#[test]
+fn freshen_without_refresh_touches_a_pack_once_for_all_its_objects() -> gix_testtools::TestResult {
+    use filetime::{FileTime, set_file_mtime};
+
+    let objects_dir = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::copy_recursively_into_existing_dir(fixture_path("objects"), &objects_dir)?;
+    let handle = gix_odb::at(objects_dir.path(), gix_hash::Kind::Sha1)?;
+    let long_ago = FileTime::from_unix_time(1_000_000_000, 0);
+    let mtime = |path: &std::path::Path| -> std::io::Result<FileTime> {
+        Ok(FileTime::from_last_modification_time(&std::fs::metadata(path)?))
+    };
+    let packs: Vec<_> = std::fs::read_dir(objects_dir.path().join("pack"))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "pack"))
+        .collect();
+    for path in &packs {
+        set_file_mtime(path, long_ago)?;
+    }
+    let packed_id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
+    assert!(handle.freshen_without_refresh(&packed_id));
+    let pack = packs
+        .iter()
+        .find(|path| mtime(path).expect("pack exists") > long_ago)
+        .expect("the pack with the object was touched")
+        .clone();
+
+    set_file_mtime(&pack, long_ago)?;
+    assert!(
+        handle.freshen_without_refresh(&packed_id),
+        "the object can still be relied upon"
+    );
+    assert_eq!(
+        mtime(&pack)?,
+        long_ago,
+        "the pack this handle just touched isn't touched again"
+    );
+
+    assert!(handle.clone().freshen_without_refresh(&packed_id));
+    assert!(
+        mtime(&pack)? > long_ago,
+        "another handle touches it, as another Git process does"
+    );
+    Ok(())
+}
+
 /// An object that a multi-pack index names is found through it, and the pack it belongs to is the one to touch.
 #[test]
 fn freshen_without_refresh_touches_the_pack_that_a_multi_pack_index_names() -> gix_testtools::TestResult {

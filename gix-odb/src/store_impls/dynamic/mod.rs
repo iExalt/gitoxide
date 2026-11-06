@@ -39,6 +39,9 @@ where
     snapshot: RefCell<load_index::Snapshot>,
     inflate: RefCell<gix_zlib::Inflate>,
     packed_object_count: RefCell<Option<u64>>,
+    /// The packs this handle set the modification time of, and when, so that freshening many objects in one pack
+    /// touches it once, as Git does. A list, as a handle touches few packs and a repository is meant to stay small.
+    freshened_packs: RefCell<Vec<(std::path::PathBuf, std::time::Instant)>>,
 }
 
 /// Context for [`Store::load_one_index()`].

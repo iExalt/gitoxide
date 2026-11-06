@@ -28,6 +28,10 @@ impl<'a> DeltaBaseRecursion<'a> {
 
 use crate::store::types::PackId;
 
+/// How long a pack this handle touched counts as fresh, so that it is touched again, rather than once for the life of a
+/// long-lived handle, well before any expiry that pruning uses.
+const FRESHENED_FOR: std::time::Duration = std::time::Duration::from_hours(1);
+
 /// The raised error's [metadata](gix_error::Error::metadata()) `max_depth` (unsigned) and `object_id` (hex text) identify
 /// the recursion limit and original object.
 pub(super) fn delta_base_recursion_limit_error(max_depth: usize, object_id: &gix_hash::oid) -> Message {
@@ -308,6 +312,7 @@ where
 
     /// Like [`exists_without_refresh()`](Self::exists_without_refresh()), but also set the modification time of the loose object
     /// file or of the `.pack` file that holds `id` to now, like Git does when it skips writing an object it already has.
+    /// Like Git, a pack is touched once for all its objects: this handle touches a pack again only an hour after it last did.
     ///
     /// Without that, pruning of objects older than its expiry (by Git or by this crate's maintenance) can remove an
     /// unreachable object between the moment a writer decides to rely on it and the moment a reference makes it reachable.
@@ -327,7 +332,18 @@ where
                 if pack_path.with_extension("mtimes").is_file() {
                     continue;
                 }
+                let recently = self
+                    .freshened_packs
+                    .borrow()
+                    .iter()
+                    .any(|(path, at)| *path == pack_path && at.elapsed() < FRESHENED_FOR);
+                if recently {
+                    return true;
+                }
                 if filetime::set_file_mtime(&pack_path, now()).is_ok() {
+                    let mut freshened = self.freshened_packs.borrow_mut();
+                    freshened.retain(|(path, _)| *path != pack_path);
+                    freshened.push((pack_path, std::time::Instant::now()));
                     return true;
                 }
             }
