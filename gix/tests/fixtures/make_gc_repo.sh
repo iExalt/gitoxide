@@ -17,6 +17,11 @@ set -eu -o pipefail
 #   use the same ages.
 format=${1:?the object format to use}
 ref_format=${2:?the reference format to use}
+case "$format" in
+  sha1) payloads=(1169 1556 1934 2065) ;;
+  sha256) payloads=(1034 1204 1914 2118) ;;
+  *) echo "unsupported object format: $format (expected sha1 or sha256)" >&2; exit 2 ;;
+esac
 
 git init -q --object-format="$format" --ref-format="$ref_format" -b main repo
 cd repo
@@ -48,22 +53,16 @@ while read -r id; do
   if [ -e "$loose" ]; then touch -t 200101010000 "$loose"; fi
 done <../scratch-ids
 
-# blobs whose ids start with `17`, found without writing the others
-mkdir ../blobs
-for i in $(seq 1 2600); do echo "blob $i" >"../blobs/$i"; done
-paste -d' ' <(ls -d ../blobs/* | git hash-object --stdin-paths) <(ls -d ../blobs/*) |
-  awk '$1 ~ /^17/ { print $2 }' | head -4 >../blobs-17
-[ "$(wc -l <../blobs-17)" -ge 3 ] || {
-  echo "the fixture needs at least 3 blobs in objects/17" >&2
+# blobs whose ids start with `17`, with the exact payloads selected for each object format
+mkdir seventeen
+for n in "${!payloads[@]}"; do
+  printf 'blob %s\n' "${payloads[$n]}" >"seventeen/$((n + 1))"
+done
+git hash-object seventeen/* | sort -u | awk '$1 ~ /^17/ { count++ } END { exit count != 4 }' || {
+  echo "the fixture needs four distinct blobs in objects/17" >&2
   exit 1
 }
-mkdir seventeen
-n=0
-while read -r path; do
-  n=$((n + 1))
-  cp "$path" "seventeen/$n"
-done <../blobs-17
-rm -rf ../blobs ../blobs-17 ../scratch-ids
+rm -f ../scratch-ids
 export GIT_AUTHOR_DATE="2002-01-01T00:00:00+0000" GIT_COMMITTER_DATE="2002-01-01T00:00:00+0000"
 git add -A
 git commit -q -m "loose, with blobs in objects/17"
