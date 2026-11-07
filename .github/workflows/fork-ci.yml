@@ -35,6 +35,7 @@ jobs:
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           version: 2026.10.17
+          install_args: rust node
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-plan
@@ -50,7 +51,7 @@ jobs:
         env:
           QA_MODE: ${{ steps.mode.outputs.mode }}
           QA_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.sha }}
-        run: mise run ci:plan
+        run: mise run --skip-tools ci:plan
 
   run:
     name: ${{ matrix.id }}
@@ -78,15 +79,16 @@ jobs:
         with:
           shared-key: ${{ matrix.cache }}
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-      - name: Install archive test dependencies
-        if: matrix.xz
+      - name: Install test dependencies
+        env:
+          NEEDS_XZ: ${{ matrix.xz }}
         run: |
+          packages=(strace)
+          if [[ "$NEEDS_XZ" == "true" ]]; then
+            packages+=(liblzma-dev)
+          fi
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends liblzma-dev
-      - name: Install strace
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends strace
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Run the lane
         run: mise run ci:job
       # Planning doesn't depend on workflow lint, so it runs here, off the plan job's critical
@@ -124,4 +126,5 @@ jobs:
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           version: 2026.10.17
-      - run: mise run check:msrv
+          install_args: rust just
+      - run: mise run --skip-tools check:msrv
