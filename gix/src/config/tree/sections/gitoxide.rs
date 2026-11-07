@@ -416,6 +416,20 @@ mod subsections {
     pub struct Ssh;
 
     impl Ssh {
+        /// The `gitoxide.ssh.nonInteractive` key, disabled by default.
+        ///
+        /// When enabled, blocking [`Remote::connect()`](crate::Remote::connect()) adds `-oBatchMode=yes` for OpenSSH or
+        /// `-batch` for Plink and TortoisePlink. Putty and Simple variants are rejected. Unknown executable names need
+        /// an explicit `ssh.variant`, and wrappers must forward these options. This policy does not guarantee that
+        /// wrappers or programs they launch won't prompt.
+        ///
+        /// A `core.sshCommand` value must be a finite executable invocation. Shell metacharacters (`|`, `&`, `;`, `<`,
+        /// `>`, `(`, `)`, `$`, backticks, `*`, `?`, brackets, braces, `#`, `~`, CR, and LF) are rejected even when
+        /// quoted or escaped. Quoted paths, arguments, and leading static environment assignments are accepted.
+        /// `gitoxide.ssh.commandWithoutShellFallback` remains one literal executable path: spaces and metacharacters
+        /// are preserved without argument splitting. NUL and other non-tab control bytes are rejected. This setting
+        /// governs the initial SSH process only; it makes no prompting guarantee for downstream hooks or other programs.
+        pub const NON_INTERACTIVE: keys::Boolean = keys::Boolean::new_boolean("nonInteractive", &Gitoxide::SSH);
         /// The `gitoxide.ssh.commandWithoutShellFallback` key.
         pub const COMMAND_WITHOUT_SHELL_FALLBACK: keys::Executable =
             keys::Executable::new_executable("commandWithoutShellFallback", &Gitoxide::SSH)
@@ -429,7 +443,7 @@ mod subsections {
         }
 
         fn keys(&self) -> &[&dyn Key] {
-            &[&Self::COMMAND_WITHOUT_SHELL_FALLBACK]
+            &[&Self::NON_INTERACTIVE, &Self::COMMAND_WITHOUT_SHELL_FALLBACK]
         }
 
         fn parent(&self) -> Option<&dyn Section> {

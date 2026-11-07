@@ -33,6 +33,9 @@ pub struct SpawnProcessOnDemand {
     /// The environment variables to set in the invoked command.
     envs: Vec<(&'static str, String)>,
     ssh_disallow_shell: bool,
+    ssh_args: Vec<OsString>,
+    ssh_env: Vec<(OsString, OsString)>,
+    ssh_prompt_policy: ssh::PromptPolicy,
     connection: Option<Connection<Box<dyn std::io::Read + Send>, process::ChildStdin>>,
     /// The server process, shared with the handles that interrupt the transport.
     child: Arc<ChildProcess>,
@@ -75,11 +78,26 @@ impl SpawnProcessOnDemand {
             ssh_cmd: Some((program.into(), ssh_kind)),
             envs: Default::default(),
             ssh_disallow_shell,
+            ssh_args: Vec::new(),
+            ssh_env: Vec::new(),
+            ssh_prompt_policy: ssh::PromptPolicy::Interactive,
             child: Default::default(),
             connection: None,
             desired_version: version,
             trace,
         }
+    }
+
+    pub(crate) fn with_ssh_invocation(
+        mut self,
+        ssh_args: Vec<OsString>,
+        ssh_env: Vec<(OsString, OsString)>,
+        ssh_prompt_policy: ssh::PromptPolicy,
+    ) -> SpawnProcessOnDemand {
+        self.ssh_args = ssh_args;
+        self.ssh_env = ssh_env;
+        self.ssh_prompt_policy = ssh_prompt_policy;
+        self
     }
 
     fn new_local(path: BString, version: Protocol, trace: bool) -> SpawnProcessOnDemand {
@@ -94,6 +112,9 @@ impl SpawnProcessOnDemand {
                 Default::default()
             },
             ssh_disallow_shell: false,
+            ssh_args: Vec::new(),
+            ssh_env: Vec::new(),
+            ssh_prompt_policy: ssh::PromptPolicy::Interactive,
             child: Default::default(),
             connection: None,
             desired_version: version,
@@ -106,13 +127,29 @@ impl SpawnProcessOnDemand {
         service: Service,
     ) -> std::result::Result<(gix_command::Prepare, Option<ssh::ProgramKind>, OsString), client::Error> {
         let (mut cmd, ssh_kind, cmd_name) = match &self.ssh_cmd {
-            Some((command, kind)) => (
-                kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)
+            Some((command, kind)) => {
+                let mut prepare = kind
+                    .prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)
                     .map_err(client::Error::SshInvocation)?
-                    .stderr(Stdio::piped()),
-                Some(*kind),
-                command.to_owned(),
-            ),
+                    .stderr(Stdio::piped());
+                if self.ssh_prompt_policy == ssh::PromptPolicy::NonInteractive {
+                    let mut generated = std::mem::take(&mut prepare.args);
+                    if *kind == ssh::ProgramKind::TortoisePlink && generated.first().is_some_and(|arg| arg == "-batch")
+                    {
+                        generated.remove(0);
+                    }
+                    let mut enforced = match kind {
+                        ssh::ProgramKind::Ssh => vec!["-oBatchMode=yes".into()],
+                        ssh::ProgramKind::Plink | ssh::ProgramKind::TortoisePlink => vec!["-batch".into()],
+                        ssh::ProgramKind::Putty | ssh::ProgramKind::Simple => unreachable!("validated SSH variant"),
+                    };
+                    enforced.extend(self.ssh_args.iter().cloned());
+                    enforced.extend(generated);
+                    prepare.args = enforced;
+                    prepare.env.extend(self.ssh_env.iter().cloned());
+                }
+                (prepare, Some(*kind), command.to_owned())
+            }
             None => (
                 gix_command::prepare(service.as_str()).stderr(Stdio::null()),
                 None,
@@ -436,6 +473,67 @@ pub fn connect(
 
 #[cfg(test)]
 mod tests {
+    mod non_interactive_invocation {
+        use crate::{
+            Protocol, Service,
+            client::blocking_io::ssh::{self, ProgramKind, PromptPolicy},
+        };
+
+        #[test]
+        fn enforced_flags_precede_caller_options_without_duplicate_tortoise_flag() -> gix_error::TestResult {
+            for (program, kind, expected) in [
+                (
+                    "ssh",
+                    ProgramKind::Ssh,
+                    vec![
+                        "-oBatchMode=yes",
+                        "-o",
+                        "BatchMode=no",
+                        "-o",
+                        "SendEnv=GIT_PROTOCOL",
+                        "-p2222",
+                    ],
+                ),
+                (
+                    "plink",
+                    ProgramKind::Plink,
+                    vec!["-batch", "-o", "BatchMode=no", "-P", "2222"],
+                ),
+                (
+                    "tortoiseplink.exe",
+                    ProgramKind::TortoisePlink,
+                    vec!["-batch", "-o", "BatchMode=no", "-P", "2222"],
+                ),
+            ] {
+                let url = gix_url::parse("ssh://host.example:2222/repo.git")?;
+                let connection = ssh::connect_with_policy(
+                    url,
+                    Protocol::V2,
+                    ssh::connect::Options {
+                        command: Some(format!("{program} -o BatchMode=no").into()),
+                        kind: Some(kind),
+                        ..Default::default()
+                    },
+                    false,
+                    PromptPolicy::NonInteractive,
+                )?;
+                let (prepare, _, _) = connection.prepare_command(Service::UploadPack)?;
+                let actual = prepare
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let expected = expected.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>();
+                assert_eq!(
+                    &actual[..expected.len()],
+                    expected.as_slice(),
+                    "required mode precedes caller options for {program}"
+                );
+            }
+            Ok(())
+        }
+    }
+
     #[cfg(unix)]
     mod wait_for_exit {
         use std::{process::Command, time::Duration};

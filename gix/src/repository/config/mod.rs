@@ -252,6 +252,26 @@ impl crate::Repository {
         Ok(opts)
     }
 
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn ssh_prompt_policy(&self) -> Result<gix_protocol::transport::client::blocking_io::ssh::PromptPolicy> {
+        use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
+
+        let mut trusted = self.filter_config_section();
+        let enabled = gitoxide::Ssh::NON_INTERACTIVE
+            .enrich_error(
+                self.config
+                    .resolved
+                    .boolean_filter(gitoxide::Ssh::NON_INTERACTIVE, &mut trusted),
+            )
+            .with_leniency(self.options.lenient_config)?
+            .unwrap_or_default();
+        Ok(if enabled {
+            gix_protocol::transport::client::blocking_io::ssh::PromptPolicy::NonInteractive
+        } else {
+            gix_protocol::transport::client::blocking_io::ssh::PromptPolicy::Interactive
+        })
+    }
+
     /// Return the context to be passed to any spawned program that is supposed to interact with the repository, like
     /// hooks or filters. Repository paths are made absolute using the captured
     /// [current directory][Self::current_dir], so they remain valid if the process changes its working directory.

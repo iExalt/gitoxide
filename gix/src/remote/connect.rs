@@ -54,6 +54,27 @@ impl<'repo> Remote<'repo> {
             return Ok(self.to_connection_with_transport(Box::new(transport)));
         }
         #[cfg(feature = "blocking-network-client")]
+        if url.scheme == gix_url::Scheme::Ssh {
+            use gix_protocol::transport::client::blocking_io::ssh::PromptPolicy;
+
+            let prompt_policy = self.repo.ssh_prompt_policy()?;
+            if prompt_policy == PromptPolicy::NonInteractive {
+                let ssh = self
+                    .repo
+                    .ssh_connect_options()
+                    .or_raise(|| message("Could not obtain options for connecting via ssh"))?;
+                let transport = gix_protocol::transport::client::blocking_io::ssh::connect_with_policy(
+                    url,
+                    version,
+                    ssh,
+                    self.repo.config.trace_packet(),
+                    prompt_policy,
+                )
+                .or_raise(|| message("connection failed"))?;
+                return Ok(self.to_connection_with_transport(Box::new(transport)));
+            }
+        }
+        #[cfg(feature = "blocking-network-client")]
         let scheme_is_ssh = url.scheme == gix_url::Scheme::Ssh;
         let transport = connect::connect(
             url,

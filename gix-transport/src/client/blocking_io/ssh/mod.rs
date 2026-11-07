@@ -59,6 +59,16 @@ pub enum ProgramKind {
     Simple,
 }
 
+/// Whether SSH may ask an interactive question while connecting.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
+pub enum PromptPolicy {
+    /// Allow the configured SSH program to prompt as usual.
+    #[default]
+    Interactive,
+    /// Require a supported SSH program to avoid prompting.
+    NonInteractive,
+}
+
 mod program_kind;
 
 ///
@@ -162,21 +172,189 @@ pub fn connect(
     options: connect::Options,
     trace: bool,
 ) -> Result<SpawnProcessOnDemand, Error> {
+    connect_with_policy(url, desired_version, options, trace, PromptPolicy::Interactive)
+}
+
+/// Connect using an explicit policy for whether the SSH program may prompt.
+///
+/// In non-interactive mode, OpenSSH receives `-oBatchMode=yes`, and Plink and TortoisePlink receive `-batch`.
+/// Putty and Simple variants are rejected. Unknown executable names are accepted only with an explicit supported
+/// [`ProgramKind`]; wrappers must forward the generated options. This does not guarantee that a wrapper or a program it
+/// launches will avoid prompting.
+///
+/// The command is parsed as a finite executable, arguments, and optional leading static environment assignments. Quotes
+/// can preserve literal spaces in paths and values. Shell metacharacters (`|`, `&`, `;`, `<`, `>`, `(`, `)`, `$`,
+/// backticks, `*`, `?`, brackets, braces, `#`, `~`, CR, and LF) are rejected even when quoted or escaped. When
+/// `options.disallow_shell` is set, the entire command is treated as one literal executable path, preserving spaces
+/// and metacharacters without splitting it into arguments. NUL and other non-tab control bytes are rejected in either
+/// mode.
+#[expect(
+    clippy::result_large_err,
+    reason = "will be removed once `gix-error` is used consistently"
+)]
+pub fn connect_with_policy(
+    url: Url,
+    desired_version: Protocol,
+    options: connect::Options,
+    trace: bool,
+    prompt_policy: PromptPolicy,
+) -> Result<SpawnProcessOnDemand, Error> {
     if url.scheme != gix_url::Scheme::Ssh || url.host().is_none() {
         return Err(Error::UnsupportedScheme(url));
     }
     let ssh_cmd = options.ssh_command();
-    let kind = determine_client_kind(options.kind, ssh_cmd, &url, options.disallow_shell)?;
+    let (program, kind, args, env) = match prompt_policy {
+        PromptPolicy::Interactive => (
+            ssh_cmd.to_owned(),
+            determine_client_kind(options.kind, ssh_cmd, &url, options.disallow_shell)?,
+            Vec::new(),
+            Vec::new(),
+        ),
+        PromptPolicy::NonInteractive => {
+            let invocation = LiteralInvocation::parse(ssh_cmd, options.disallow_shell)?;
+            let kind = noninteractive_kind(options.kind, &invocation.program)?;
+            (invocation.program, kind, invocation.args, invocation.env)
+        }
+    };
     let path = gix_url::expand_path::for_shell(url.path.clone());
     Ok(SpawnProcessOnDemand::new_ssh(
         url,
-        ssh_cmd,
+        program,
         path,
         kind,
-        options.disallow_shell,
+        options.disallow_shell || prompt_policy == PromptPolicy::NonInteractive,
         desired_version,
         trace,
-    ))
+    )
+    .with_ssh_invocation(args, env, prompt_policy))
+}
+
+fn prepare_error(message: &'static str) -> Error {
+    use gix_error::ErrorExt;
+
+    Error::PrepareCommand(gix_error::message(message).raise())
+}
+
+fn noninteractive_kind(known_kind: Option<ProgramKind>, program: &OsStr) -> Result<ProgramKind, Error> {
+    let kind = known_kind.unwrap_or_else(|| ProgramKind::from(program));
+    if !matches!(kind, ProgramKind::Ssh | ProgramKind::Plink | ProgramKind::TortoisePlink) {
+        return Err(prepare_error("non-interactive mode requires a supported SSH variant"));
+    }
+    if is_shell_or_builtin(program) {
+        return Err(prepare_error(
+            "non-interactive mode does not accept shell programs or builtins",
+        ));
+    }
+    Ok(kind)
+}
+
+struct LiteralInvocation {
+    program: std::ffi::OsString,
+    args: Vec<std::ffi::OsString>,
+    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+
+impl LiteralInvocation {
+    fn parse(command: &OsStr, disallow_shell: bool) -> Result<Self, Error> {
+        use bstr::ByteSlice;
+        use gix_error::ResultExt;
+
+        let bytes = command.as_encoded_bytes();
+        let invalid_control = |byte: u8| (byte < b' ' && byte != b'\t') || byte == 0x7f;
+        if bytes.iter().copied().any(invalid_control) {
+            return Err(prepare_error("SSH command contains a control character"));
+        }
+        let (program, args, env) = if disallow_shell {
+            (command.to_owned(), Vec::new(), Vec::new())
+        } else {
+            const SHELL_SYNTAX: &[u8] = b"|&;<>()$`*?[]{}#~\r\n";
+            if bytes.iter().any(|byte| SHELL_SYNTAX.contains(byte)) {
+                return Err(prepare_error("SSH command contains shell syntax"));
+            }
+            let parsed = gix_command::parse::command_line(bytes.as_bstr())
+                .or_error()
+                .map_err(Error::PrepareCommand)?;
+            let env = parsed.env.into_iter().map(|(key, value)| (key.into(), value)).collect();
+            (parsed.command, parsed.args, env)
+        };
+        if program.is_empty() {
+            return Err(prepare_error("SSH command has no executable"));
+        }
+        Ok(Self { program, args, env })
+    }
+}
+
+fn is_shell_or_builtin(program: &OsStr) -> bool {
+    let name = std::path::Path::new(program)
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "sh" | "bash"
+            | "dash"
+            | "zsh"
+            | "ksh"
+            | "fish"
+            | "csh"
+            | "tcsh"
+            | "cmd"
+            | "powershell"
+            | "pwsh"
+            | ":"
+            | "alias"
+            | "bg"
+            | "break"
+            | "cd"
+            | "continue"
+            | "declare"
+            | "dirs"
+            | "disown"
+            | "echo"
+            | "enable"
+            | "eval"
+            | "exec"
+            | "exit"
+            | "export"
+            | "fc"
+            | "fg"
+            | "getopts"
+            | "hash"
+            | "help"
+            | "history"
+            | "jobs"
+            | "kill"
+            | "let"
+            | "local"
+            | "logout"
+            | "mapfile"
+            | "popd"
+            | "printf"
+            | "pushd"
+            | "pwd"
+            | "read"
+            | "readonly"
+            | "return"
+            | "set"
+            | "shift"
+            | "shopt"
+            | "command"
+            | "builtin"
+            | "source"
+            | "suspend"
+            | "test"
+            | "times"
+            | "trap"
+            | "type"
+            | "typeset"
+            | "ulimit"
+            | "umask"
+            | "."
+            | "unalias"
+            | "unset"
+            | "wait"
+    )
 }
 
 #[expect(
