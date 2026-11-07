@@ -42,6 +42,142 @@ mod options {
     }
 }
 
+mod non_interactive_command {
+    use std::ffi::OsStr;
+
+    use crate::client::blocking_io::ssh::{Error, LiteralInvocation, ProgramKind, noninteractive_kind};
+
+    #[test]
+    fn parses_quoted_paths_arguments_and_static_environment() -> gix_error::TestResult {
+        let invocation = LiteralInvocation::parse(
+            OsStr::new("SSH_AUTH_SOCK='/tmp/agent socket' '/opt/ssh client/ssh' -o BatchMode=no"),
+            false,
+        )?;
+        assert_eq!(invocation.program.as_os_str(), OsStr::new("/opt/ssh client/ssh"));
+        assert_eq!(
+            invocation
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["-o".to_owned(), "BatchMode=no".to_owned()]
+        );
+        assert_eq!(
+            invocation.env,
+            [(
+                OsStr::new("SSH_AUTH_SOCK").to_owned(),
+                OsStr::new("/tmp/agent socket").to_owned()
+            )]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_shell_syntax_even_when_quoted_or_escaped() {
+        for command in ["ssh; touch marker", "'ssh; touch marker'", r"ssh \$HOME"] {
+            assert!(
+                matches!(
+                    LiteralInvocation::parse(OsStr::new(command), false),
+                    Err(Error::PrepareCommand(_))
+                ),
+                "shell syntax in {command:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_is_one_literal_executable_path() -> gix_error::TestResult {
+        use crate::{
+            Protocol,
+            client::blocking_io::ssh::{self, PromptPolicy, connect::Options},
+        };
+
+        let command = OsStr::new("/path with spaces/ssh$[name]");
+        let invocation = LiteralInvocation::parse(command, true)?;
+        assert_eq!(invocation.program.as_os_str(), command);
+        assert!(invocation.args.is_empty());
+        assert!(invocation.env.is_empty());
+        let transport = ssh::connect_with_policy(
+            gix_url::parse("ssh://host.example/repo.git")?,
+            Protocol::V2,
+            Options {
+                command: Some(command.to_owned()),
+                disallow_shell: true,
+                kind: Some(ProgramKind::Ssh),
+            },
+            false,
+            PromptPolicy::NonInteractive,
+        );
+        assert!(transport.is_ok(), "fallback paths stay literal and are not split");
+        Ok(())
+    }
+
+    #[test]
+    fn only_known_supported_variants_are_accepted() {
+        for (program, explicit, expected) in [
+            (OsStr::new("ssh"), None, Some(ProgramKind::Ssh)),
+            (OsStr::new("plink"), None, Some(ProgramKind::Plink)),
+            (OsStr::new("tortoiseplink.exe"), None, Some(ProgramKind::TortoisePlink)),
+            (OsStr::new("putty"), None, None),
+            (OsStr::new("wrapper"), None, None),
+            (OsStr::new("wrapper"), Some(ProgramKind::Ssh), Some(ProgramKind::Ssh)),
+            (OsStr::new("sh"), Some(ProgramKind::Ssh), None),
+        ] {
+            let actual = noninteractive_kind(explicit, program).ok();
+            assert_eq!(actual, expected, "classification of {program:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsupported_command_is_rejected_before_feature_probe() -> gix_error::TestResult {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::{
+            Protocol,
+            client::blocking_io::ssh::{self, PromptPolicy, connect::Options},
+        };
+
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let marker = dir.path().join("executed");
+        let wrapper = dir.path().join("wrapper");
+        std::fs::write(&wrapper, format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display()))?;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))?;
+        let url = gix_url::parse("ssh://host.example/repo.git")?;
+        let result = ssh::connect_with_policy(
+            url,
+            Protocol::V2,
+            Options {
+                command: Some(wrapper.as_os_str().to_owned()),
+                ..Default::default()
+            },
+            false,
+            PromptPolicy::NonInteractive,
+        );
+        assert!(result.is_err(), "an unknown variant has no non-interactive mapping");
+        assert!(
+            !marker.exists(),
+            "an unsupported command is rejected before `-G` probing"
+        );
+        let result = ssh::connect_with_policy(
+            gix_url::parse("ssh://host.example/repo.git")?,
+            Protocol::V2,
+            Options {
+                command: Some(format!("{}; touch {}", wrapper.display(), marker.display()).into()),
+                ..Default::default()
+            },
+            false,
+            PromptPolicy::NonInteractive,
+        );
+        assert!(result.is_err(), "shell operators are rejected");
+        assert!(
+            !marker.exists(),
+            "invalid shell syntax is rejected before process creation"
+        );
+        Ok(())
+    }
+}
+
 mod build_client_feature_check_command {
     use std::ffi::OsStr;
 
