@@ -520,6 +520,27 @@ const SPLITTABLE: &[&str] = &[
 
 /// The number of independently assignable units `shard()` deals out.
 fn units(tasks: &[Task]) -> usize {
+    if feature_affinity_shape(tasks) {
+        tasks
+            .iter()
+            .map(|task| {
+                if task.id == "feature-builds" {
+                    task.commands.len()
+                } else {
+                    task.commands
+                        .iter()
+                        .map(feature_test_key)
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                }
+            })
+            .sum()
+    } else {
+        raw_units(tasks)
+    }
+}
+
+fn raw_units(tasks: &[Task]) -> usize {
     tasks
         .iter()
         .map(|task| {
@@ -532,30 +553,147 @@ fn units(tasks: &[Task]) -> usize {
         .sum()
 }
 
-/// Keep shard `index` (1-based) of `count`: splittable tasks contribute each command as a unit,
-/// other tasks one unit each, and units are dealt round-robin so every unit runs exactly once.
+fn feature_affinity_shape(tasks: &[Task]) -> bool {
+    tasks.iter().all(|task| task.group == "features")
+        && (matches!(tasks, [task] if task.id == "feature-tests")
+            || matches!(tasks, [builds, tests] if builds.id == "feature-builds" && tests.id == "feature-tests"))
+}
+
+/// Commands that differ only in the test-time fixture hash can share a shard's Cargo artifacts.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FeatureTestKey {
+    program: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    requires: Vec<String>,
+}
+
+fn feature_test_key(command: &Command) -> FeatureTestKey {
+    FeatureTestKey {
+        program: command.program.clone(),
+        args: command.args.clone(),
+        env: command
+            .env
+            .iter()
+            .filter(|(key, _)| key.as_str() != "GIX_TEST_FIXTURE_HASH")
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        requires: command.requires.clone(),
+    }
+}
+
+struct FeatureTestGroup {
+    first_index: usize,
+    weight: usize,
+    members: Vec<(usize, usize)>,
+}
+
+// Relative wall-cost estimates; affinity members each pay their full case cost.
+const FEATURE_CHECK_WEIGHT: usize = 5;
+const GIX_TEST_WEIGHT: usize = 50;
+const OTHER_TEST_WEIGHT: usize = 10;
+
+fn feature_test_weight(command: &Command) -> usize {
+    if command.args.windows(2).any(|args| args == ["-p", "gix"]) {
+        GIX_TEST_WEIGHT
+    } else {
+        OTHER_TEST_WEIGHT
+    }
+}
+
+/// Keep shard `index` (1-based); ordinary cases retain round-robin ownership while matching
+/// feature tests are bundled and assigned by descending estimated cost.
 pub fn shard(tasks: Vec<Task>, index: usize, count: usize) -> Result<Vec<Task>> {
     if count == 0 || index == 0 || index > count {
         bail!(message!("Invalid QA shard {index}/{count}"));
     }
-    let mut unit = 0;
-    let mut owned = || {
-        let mine = unit % count == index - 1;
-        unit += 1;
-        mine
-    };
-    let mut out = Vec::new();
-    for mut task in tasks {
-        if SPLITTABLE.contains(&task.id) {
-            task.commands.retain(|_| owned());
-            if !task.commands.is_empty() {
+    if !feature_affinity_shape(&tasks) {
+        let mut unit = 0;
+        let mut owned = || {
+            let mine = unit % count == index - 1;
+            unit += 1;
+            mine
+        };
+        let mut out = Vec::new();
+        for mut task in tasks {
+            if SPLITTABLE.contains(&task.id) {
+                task.commands.retain(|_| owned());
+                if !task.commands.is_empty() {
+                    out.push(task);
+                }
+            } else if owned() {
                 out.push(task);
             }
-        } else if owned() {
+        }
+        return Ok(out);
+    }
+
+    Ok(feature_shard(tasks, index - 1, count))
+}
+
+fn feature_shard(tasks: Vec<Task>, lane: usize, count: usize) -> Vec<Task> {
+    let mut unit = 0;
+    let mut test_index = 0;
+    let mut owners: Vec<Vec<Option<usize>>> = tasks.iter().map(|task| vec![None; task.commands.len()]).collect();
+    let mut feature_test_lookup = BTreeMap::new();
+    let mut feature_test_groups: Vec<FeatureTestGroup> = Vec::new();
+    let mut lane_loads = vec![0usize; count];
+
+    for (task_index, task) in tasks.iter().enumerate() {
+        for (command_index, command) in task.commands.iter().enumerate() {
+            if task.id == "feature-builds" {
+                let round_robin_owner = unit % count;
+                unit += 1;
+                owners[task_index][command_index] = Some(round_robin_owner);
+                lane_loads[round_robin_owner] += FEATURE_CHECK_WEIGHT;
+            } else {
+                let key = feature_test_key(command);
+                let group_index = *feature_test_lookup.entry(key).or_insert_with(|| {
+                    let group_index = feature_test_groups.len();
+                    feature_test_groups.push(FeatureTestGroup {
+                        first_index: test_index,
+                        weight: 0,
+                        members: Vec::new(),
+                    });
+                    group_index
+                });
+                let group = &mut feature_test_groups[group_index];
+                group.weight += feature_test_weight(command);
+                group.members.push((task_index, command_index));
+                test_index += 1;
+            }
+        }
+    }
+
+    feature_test_groups.sort_by(|left, right| {
+        right
+            .weight
+            .cmp(&left.weight)
+            .then_with(|| left.first_index.cmp(&right.first_index))
+    });
+    for group in feature_test_groups {
+        let owner = (0..count)
+            .min_by_key(|&lane| (lane_loads[lane], lane))
+            .expect("a valid shard count is nonzero");
+        lane_loads[owner] += group.weight;
+        for (task_index, command_index) in group.members {
+            owners[task_index][command_index] = Some(owner);
+        }
+    }
+
+    let mut out = Vec::new();
+    for (task_index, mut task) in tasks.into_iter().enumerate() {
+        task.commands = task
+            .commands
+            .into_iter()
+            .enumerate()
+            .filter_map(|(command_index, command)| (owners[task_index][command_index] == Some(lane)).then_some(command))
+            .collect();
+        if !task.commands.is_empty() {
             out.push(task);
         }
     }
-    Ok(out)
+    out
 }
 
 /// Parse `LANE=GROUP+GROUP…` requests that run several small job groups as one CI lane.
@@ -961,41 +1099,371 @@ mod tests {
         Ok(())
     }
 
-    fn unit_list(tasks: &[Task]) -> Vec<(&'static str, Vec<String>)> {
-        tasks
-            .iter()
-            .flat_map(|task| task.commands.iter().map(move |command| (task.id, command.args.clone())))
-            .collect()
+    fn command_identities(tasks: &[Task]) -> BTreeMap<String, usize> {
+        let mut identities = BTreeMap::new();
+        for task in tasks {
+            for command in &task.commands {
+                let identity = format!(
+                    "{:?}",
+                    (
+                        task.id,
+                        task.group,
+                        task.stages,
+                        task.blocking,
+                        &task.requirements,
+                        command
+                    )
+                );
+                *identities.entry(identity).or_insert(0) += 1;
+            }
+        }
+        identities
     }
 
     #[test]
-    fn shards_run_every_case_exactly_once() -> gix_error::TestResult {
-        let case = |n: usize| Command::new("cargo", &["check", &n.to_string()]);
+    fn shards_preserve_cases_and_nonfeature_round_robin_ownership() -> gix_error::TestResult {
+        let check = |n: usize| Command::new("cargo", &["check", "--case", &n.to_string()]).requiring(&["check-tool"]);
+        let test = |package: &str, hash: &str| {
+            let mut command = Command::new("cargo", &["nextest", "run", "-p", package]).requiring(&["cargo-nextest"]);
+            command.env.insert("GIX_TEST_FIXTURE_HASH".into(), hash.into());
+            command
+        };
+        let isolated = |n: usize| Command::new("cargo", &["nextest", "run", "--case", &n.to_string()]);
+        let mut script = Task::new("whole-script", "features", &["check"], vec![check(100), check(101)]).optional();
+        script.requirements.tools.insert("script-tool".into());
         let tasks = vec![
-            Task::new("feature-builds", "features", &["check"], (0..7).map(case).collect()),
+            Task::new("feature-builds", "features", &["check"], (0..3).map(check).collect()),
             // Stands in for any unsplittable task in a sharded group.
-            Task::new("whole-script", "features", &["check"], vec![case(100), case(101)]),
-            Task::new("feature-tests", "features", &["tests"], (200..205).map(case).collect()),
+            script,
+            Task::new(
+                "feature-tests",
+                "features",
+                &["tests"],
+                vec![
+                    test("gix-blame", "sha1"),
+                    test("gix-blame", "sha256"),
+                    test("gix-commitgraph", "sha1"),
+                    test("gix-commitgraph", "sha256"),
+                ],
+            ),
+            Task::new("isolated-tests", "tests", &["tests"], (0..3).map(isolated).collect()),
         ];
-        let all = unit_list(&tasks);
-        for count in 1..=5 {
-            let mut seen = Vec::new();
-            for index in 1..=count {
-                let part = shard(tasks.clone(), index, count)?;
-                assert!(
-                    part.iter()
-                        .filter(|task| task.id == "whole-script")
-                        .all(|task| task.commands.len() == 2),
-                    "an unsplittable task keeps all of its commands in one shard"
-                );
-                seen.extend(unit_list(&part));
-            }
-            seen.sort();
-            let mut expected = all.clone();
-            expected.sort();
-            assert_eq!(seen, expected, "{count} shards are disjoint and complete");
+        let expected = command_identities(&tasks);
+        let parts = (1..=3)
+            .map(|index| shard(tasks.clone(), index, 3))
+            .collect::<Result<Vec<_>>>()?;
+        let actual = parts.iter().flat_map(|part| command_identities(part)).fold(
+            BTreeMap::new(),
+            |mut counts, (identity, count)| {
+                *counts.entry(identity).or_insert(0) += count;
+                counts
+            },
+        );
+        assert_eq!(actual, expected, "all commands and task metadata survive exactly once");
+        for part in &parts {
+            assert!(
+                part.iter()
+                    .filter(|task| task.id == "whole-script")
+                    .all(|task| task.commands.len() == 2 && !task.blocking),
+                "an unsplittable task retains its commands and optional status"
+            );
         }
-        assert!(shard(tasks, 3, 2).is_err(), "out-of-range shards are rejected");
+
+        let owner = |task_id: &str, args: &[String], hash: Option<&str>| {
+            parts
+                .iter()
+                .position(|part| {
+                    part.iter().any(|task| {
+                        task.id == task_id
+                            && task.commands.iter().any(|command| {
+                                command.args == args
+                                    && command.env.get("GIX_TEST_FIXTURE_HASH").map(String::as_str) == hash
+                            })
+                    })
+                })
+                .expect("command has one shard owner")
+        };
+        for index in 0..3 {
+            assert_eq!(
+                owner("feature-builds", &check(index).args, None),
+                index,
+                "feature-build checks retain their old round-robin ownership"
+            );
+            assert_eq!(
+                owner("isolated-tests", &isolated(index).args, None),
+                (8 + index) % 3,
+                "other split tasks retain their old unit positions after rebalanced tests"
+            );
+        }
+        assert_ne!(
+            owner("feature-tests", &test("gix-blame", "sha1").args, Some("sha1")),
+            owner("feature-tests", &test("gix-blame", "sha256").args, Some("sha256")),
+            "mixed task shapes keep the original raw-case round-robin assignment"
+        );
+        assert_eq!(
+            units(&tasks),
+            3 + 1 + 4 + 3,
+            "mixed task shapes use original raw-unit counts"
+        );
+        assert!(shard(tasks, 0, 3).is_err(), "zero-based shard indices are rejected");
+        assert!(shard(vec![], 1, 0).is_err(), "zero shard counts are rejected");
+        assert!(
+            shard(vec![], 2, 1).is_err(),
+            "indices above the shard count are rejected"
+        );
+        assert_eq!(units(&[]), 0, "an empty selection has no shard units");
+        Ok(())
+    }
+
+    #[test]
+    fn feature_test_affinity_keeps_build_inputs_and_requirements_distinct() -> gix_error::TestResult {
+        let baseline = Command::new("cargo", &["nextest", "run", "-p", "gix-blame"]).requiring(&["cargo-nextest"]);
+        let mut hash_twin = baseline.clone();
+        hash_twin.env.insert("GIX_TEST_FIXTURE_HASH".into(), "sha256".into());
+        assert_eq!(
+            feature_test_key(&baseline),
+            feature_test_key(&hash_twin),
+            "only the fixture hash is excluded from feature-test affinity"
+        );
+        assert_eq!(
+            units(&[
+                Task::new("feature-tests", "first", &["tests"], vec![baseline.clone()]),
+                Task::new("feature-tests", "second", &["tests"], vec![hash_twin.clone()]),
+            ]),
+            2,
+            "affinity never crosses a task boundary"
+        );
+        let task_scoped = vec![
+            Task::new(
+                "feature-builds",
+                "features",
+                &["check"],
+                vec![Command::new("cargo", &["check"])],
+            ),
+            Task::new("feature-tests", "first", &["tests"], vec![baseline.clone()]),
+            Task::new("feature-tests", "second", &["tests"], vec![hash_twin.clone()]),
+        ];
+        let parts = (1..=2)
+            .map(|index| shard(task_scoped.clone(), index, 2))
+            .collect::<Result<Vec<_>>>()?;
+        let task_owner = |task_group: &str, command: &Command| {
+            parts
+                .iter()
+                .position(|part| {
+                    part.iter()
+                        .any(|task| task.group == task_group && task.commands.contains(command))
+                })
+                .expect("task command has a shard owner")
+        };
+        assert_ne!(
+            task_owner("first", &baseline),
+            task_owner("second", &hash_twin),
+            "hash twins in separate Task records remain separate affinity bundles"
+        );
+
+        let mut rustflags = baseline.clone();
+        rustflags.env.insert("RUSTFLAGS".into(), "-C target-cpu=native".into());
+        let mut target = baseline.clone();
+        target.args.extend(["--target".into(), "wasm32-wasip1".into()]);
+        let mut features = baseline.clone();
+        features.args.extend(["--features".into(), "sha256".into()]);
+        let mut filter = baseline.clone();
+        filter.args.extend(["-E".into(), "test(one_case)".into()]);
+        let mut requirement = baseline.clone();
+        requirement.requires.push("xz".into());
+
+        for different in [rustflags, target, features, filter, requirement] {
+            assert_ne!(
+                feature_test_key(&baseline),
+                feature_test_key(&different),
+                "build flags, target, features, filters, and requirements each form separate affinity"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn feature_test_lpt_uses_check_seed_and_stable_ties() -> gix_error::TestResult {
+        let check = |n: usize| Command::new("cargo", &["check", "--case", &n.to_string()]);
+        let test = |package: &str, hash: Option<&str>| {
+            let mut command = Command::new("cargo", &["nextest", "run", "-p", package]);
+            if let Some(hash) = hash {
+                command.env.insert("GIX_TEST_FIXTURE_HASH".into(), hash.into());
+            }
+            command
+        };
+        let tasks = vec![
+            Task::new("feature-builds", "features", &["check"], (0..4).map(check).collect()),
+            Task::new(
+                "feature-tests",
+                "features",
+                &["tests"],
+                vec![
+                    test("gix", None),
+                    test("gix-blame", Some("sha1")),
+                    test("gix-blame", Some("sha256")),
+                    test("gix-filter", None),
+                    test("gix-merge", None),
+                ],
+            ),
+        ];
+        let parts = (1..=3)
+            .map(|index| shard(tasks.clone(), index, 3))
+            .collect::<Result<Vec<_>>>()?;
+        let owner = |args: &[String], hash: Option<&str>| {
+            parts
+                .iter()
+                .position(|part| {
+                    part.iter().any(|task| {
+                        task.id == "feature-tests"
+                            && task.commands.iter().any(|command| {
+                                command.args == args
+                                    && command.env.get("GIX_TEST_FIXTURE_HASH").map(String::as_str) == hash
+                            })
+                    })
+                })
+                .expect("feature test has one shard owner")
+        };
+        assert_eq!(
+            owner(&test("gix", None).args, None),
+            1,
+            "the heaviest test goes to the lightest lane after checks seed the loads"
+        );
+        assert_eq!(
+            owner(&test("gix-blame", Some("sha1")).args, Some("sha1")),
+            owner(&test("gix-blame", Some("sha256")).args, Some("sha256")),
+            "a hash twin bundle keeps both test runs together"
+        );
+        assert_eq!(
+            owner(&test("gix-blame", Some("sha1")).args, Some("sha1")),
+            2,
+            "the full-cost twin bundle goes to the next lightest lane"
+        );
+        assert_eq!(
+            owner(&test("gix-filter", None).args, None),
+            0,
+            "the first equal-cost group goes to the lightest seeded lane"
+        );
+        assert_eq!(
+            owner(&test("gix-merge", None).args, None),
+            0,
+            "an equal-cost tie keeps the lowest-index lightest lane"
+        );
+        assert_eq!(
+            parts,
+            (1..=3)
+                .map(|index| shard(tasks.clone(), index, 3))
+                .collect::<Result<Vec<_>>>()?,
+            "LPT assignment is deterministic"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn feature_affinity_shapes_clamp_without_empty_shards_and_other_shapes_fall_back() -> gix_error::TestResult {
+        let check = Command::new("cargo", &["check", "-p", "gix"]);
+        let doctest = Command::new("cargo", &["test", "--doc", "-p", "gix-blame"]);
+        let hash_test = |hash: &str| {
+            let mut command = Command::new("cargo", &["nextest", "run", "-p", "gix-blame"]);
+            command.env.insert("GIX_TEST_FIXTURE_HASH".into(), hash.into());
+            command
+        };
+
+        let mixed = vec![
+            Task::new("feature-builds", "features", &["check"], vec![check.clone()]),
+            Task::new(
+                "feature-tests",
+                "features",
+                &["tests"],
+                vec![hash_test("sha1"), hash_test("sha256")],
+            ),
+            Task::new("default-doctests", "features", &["doctests"], vec![doctest.clone()]),
+        ];
+        assert!(
+            !feature_affinity_shape(&mixed),
+            "doctests disable the affinity schedule"
+        );
+        assert_eq!(units(&mixed), 4, "the fallback counts every original command unit");
+        let parts = (1..=3)
+            .map(|index| shard(mixed.clone(), index, 3))
+            .collect::<Result<Vec<_>>>()?;
+        assert!(
+            parts.iter().all(|part| !part.is_empty()),
+            "the three-unit request produces three occupied lanes"
+        );
+        assert_eq!(
+            command_identities(&parts.concat()),
+            command_identities(&mixed),
+            "the fallback preserves the check, both hash runs, and doctest"
+        );
+
+        let pair_only = vec![Task::new(
+            "feature-tests",
+            "features",
+            &["tests"],
+            vec![hash_test("sha1"), hash_test("sha256")],
+        )];
+        assert_eq!(units(&pair_only), 1, "a pure affinity pair is one unit");
+        let pair_shards = (1..=units(&pair_only))
+            .map(|index| shard(pair_only.clone(), index, units(&pair_only)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            pair_shards.len(),
+            1,
+            "a six-shard request clamps to the affinity group count"
+        );
+        assert_eq!(
+            pair_shards[0][0].commands.len(),
+            2,
+            "both original hash cases remain in the occupied lane"
+        );
+
+        let check_and_pair = vec![
+            Task::new("feature-builds", "features", &["check"], vec![check.clone()]),
+            Task::new(
+                "feature-tests",
+                "features",
+                &["tests"],
+                vec![hash_test("sha1"), hash_test("sha256")],
+            ),
+        ];
+        assert_eq!(
+            units(&check_and_pair),
+            2,
+            "one check plus one affinity group are two units"
+        );
+        let check_pair_shards = (1..=units(&check_and_pair))
+            .map(|index| shard(check_and_pair.clone(), index, units(&check_and_pair)))
+            .collect::<Result<Vec<_>>>()?;
+        assert!(
+            check_pair_shards.iter().all(|part| !part.is_empty()),
+            "the check-seeded affinity bundle fills the second occupied lane"
+        );
+
+        let reordered = vec![pair_only[0].clone(), check_and_pair[0].clone()];
+        assert!(
+            !feature_affinity_shape(&reordered),
+            "reordered feature tasks use the old scheduler"
+        );
+        assert_eq!(units(&reordered), 3, "reordered tasks count raw cases");
+        let repeated = vec![pair_only[0].clone(), pair_only[0].clone()];
+        assert!(
+            !feature_affinity_shape(&repeated),
+            "repeated feature task records use the old scheduler"
+        );
+        let unknown = vec![
+            pair_only[0].clone(),
+            Task::new("extra", "features", &["check"], vec![check]),
+        ];
+        assert!(
+            !feature_affinity_shape(&unknown),
+            "unknown feature-group tasks use the old scheduler"
+        );
+        assert_eq!(
+            units(&unknown),
+            raw_units(&unknown),
+            "unknown tasks retain raw-unit clamping"
+        );
         Ok(())
     }
 
