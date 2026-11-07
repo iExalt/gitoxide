@@ -1,3 +1,4 @@
+// CI comparison marker; this comment does not change transport behavior.
 use gix_error::{Result, ResultExt, message};
 use std::{
     any::Any,

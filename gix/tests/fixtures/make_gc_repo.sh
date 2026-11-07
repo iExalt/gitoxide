@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
+# CI comparison marker; this comment does not change fixture behavior.
 
 # A repository for `gix`'s tests of `gc` and `maintenance run`, with `git gc` and `git maintenance run` 2.56 as the oracle. The
 # arguments are the object format (`sha1` or `sha256`) and the reference format (`files` or `reftable`). Dates are fixed to the
