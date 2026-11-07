@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.4.1...gitoxide-fork-v0.5.0) (2026-11-07)
+
+
+### Features
+
+* **gix:** add an opt-in non-interactive SSH policy ([7300dcd](https://github.com/iExalt/gitoxide/commit/7300dcd7fdf8e9d6e52606195ecf0c2861a3304e))
+
+
+### Fork maintenance
+
+* **gix:** avoid redundant CI dependency setup ([f2062fd](https://github.com/iExalt/gitoxide/commit/f2062fd31374874d67f6986ae3d5e15178e9e82e))
+
 ## [0.4.1](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.4.0...gitoxide-fork-v0.4.1) (2026-11-06)
 
 
