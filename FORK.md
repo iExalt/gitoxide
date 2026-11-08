@@ -212,7 +212,7 @@ it builds separate artifacts, so stick to the mise tasks to reuse their builds.
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
 comes from Cargo QA metadata: small, lean, lean-async, max, max-pure and declared
 crate-specific variants are distinct checks; `--all-features` is not a substitute.
-Rust 1.99.0 is the development and API-check toolchain. Every crate declares MSRV 1.99, the root CLI included. Explicit task toolchains override
+Rust 1.99.1 is the development and API-check toolchain. Every crate declares MSRV 1.99, the root CLI included. Explicit task toolchains override
 the inherited mise toolchain. Do not update the machine-wide `stable` alias to run QA.
 
 Fork CI runs on Ubuntu 24.04 for every PR and push to `dev`, in one of two modes chosen
@@ -252,9 +252,9 @@ audit, cargo-auditable build, or nightly minimal-dependency MSRV resolution.
 The existing `just`/QA entry points remain available for those investigations.
 The fork MSRV job checks the committed dependency lockfile. Dependency policy
 (bans, licenses and sources) remains blocking. Advisory scanning remains available
-through `just audit`; there is no scheduled advisory job. Tool pins mostly match
-upstream QA metadata; cargo-deny uses 0.20.2 because the declared 0.20.0 release
-was unavailable from its GitHub release endpoint.
+through `just audit`; there is no scheduled advisory job. Development tool pins in
+`mise.toml` are updated independently of upstream QA metadata. The MSRV task keeps
+Rust 1.99.0 to test the declared minimum.
 
 ## Fork releases
 
