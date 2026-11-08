@@ -252,9 +252,18 @@ audit, cargo-auditable build, or nightly minimal-dependency MSRV resolution.
 The existing `just`/QA entry points remain available for those investigations.
 The fork MSRV job checks the committed dependency lockfile. Dependency policy
 (bans, licenses and sources) remains blocking. Advisory scanning remains available
-through `just audit`; there is no scheduled advisory job. Development tool pins in
-`mise.toml` are updated independently of upstream QA metadata. The MSRV task keeps
-Rust 1.99.0 to test the declared minimum.
+through `just audit`; there is no scheduled advisory job. `mise.toml` is the fork's installation authority. Shared tools in
+`workspace.metadata.qa.tool-versions` must match those exact pins; housekeeping
+checks them before running workflow lint. The catalog includes workflow lint's
+Node, actionlint and ShellCheck requirements, including empty fast selections and
+combined lanes. The MSRV task keeps Rust 1.99.0 to test the declared minimum.
+
+Catalog tool requirements describe the commands in each QA lane, rather than a
+complete runner bootstrap: Mise, Git and the development Rust toolchain are
+provided separately, as are OS packages such as strace. The planner and required
+jobs also invoke Node outside the catalog. QA-only tools such as cargo-auditable
+and cargo-diet retain their own metadata pins. CI still installs the complete Mise
+tool set; no selective installation is derived from this metadata.
 
 ## Fork releases
 

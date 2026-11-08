@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::Path};
 
-use gix_error::{OptionExt, Result, bail, message};
+use gix_error::{OptionExt, Result, ResultExt, bail, message};
 use serde_json::{Value, json};
+use toml_edit::DocumentMut;
 
 use super::run::Command;
 
@@ -129,9 +130,88 @@ fn version<'a>(metadata: &'a Value, tool: &str) -> Result<&'a str> {
     Ok(version)
 }
 
+/// Mise provisions the fork; the catalog must report the same shared tool versions.
+pub fn check_tools(root: &Path) -> Result<()> {
+    let text = fs::read_to_string(root.join("mise.toml")).or_raise(|| message("Read fork tool pins"))?;
+    let mise = text
+        .parse::<DocumentMut>()
+        .or_raise(|| message("Parse fork tool pins"))?;
+    check_pins(&super::plan::metadata(root)?, &mise)
+}
+
+fn check_pins(metadata: &Value, mise: &DocumentMut) -> Result<()> {
+    // Other catalog tools are QA-only; Rust and Mise itself are bootstrap requirements.
+    for (tool, backend) in [
+        ("just", "just"),
+        ("cargo-nextest", "github:nextest-rs/nextest"),
+        ("cargo-deny", "github:EmbarkStudios/cargo-deny"),
+        ("cargo-machete", "github:bnjbvr/cargo-machete"),
+        ("cargo-semver-checks", "github:obi1kenobi/cargo-semver-checks"),
+        ("actionlint", "aqua:rhysd/actionlint"),
+        ("shellcheck", "aqua:koalaman/shellcheck"),
+        ("node", "node"),
+    ] {
+        let pin = mise.get("tools").and_then(|tools| tools.get(backend));
+        let installed = pin
+            .and_then(|pin| {
+                pin.as_str()
+                    .or_else(|| pin.get("version").and_then(toml_edit::Item::as_str))
+            })
+            .ok_or_raise(|| message!("Declare an exact version for {backend} in mise.toml"))?;
+        let declared = version(metadata, tool)?;
+        if installed != declared {
+            bail!(message!(
+                "QA metadata declares {tool}@{declared}, but mise.toml installs {installed}; align the metadata with the fork pin"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fork_pins_match_string_and_table_versions() -> gix_error::TestResult {
+        let text = r#"[tools]
+just = "1.2.3"
+"github:nextest-rs/nextest" = { version = "1.2.3", version_prefix = "cargo-nextest-" }
+"github:EmbarkStudios/cargo-deny" = "1.2.3"
+"github:bnjbvr/cargo-machete" = "1.2.3"
+"github:obi1kenobi/cargo-semver-checks" = "1.2.3"
+"aqua:rhysd/actionlint" = "1.2.3"
+"aqua:koalaman/shellcheck" = "1.2.3"
+node = "1.2.3"
+"#;
+        let mut metadata = json!({"metadata":{"qa":{"tool-versions":{
+            "just":"1.2.3", "cargo-nextest":"1.2.3", "cargo-deny":"1.2.3",
+            "cargo-machete":"1.2.3", "cargo-semver-checks":"1.2.3",
+            "actionlint":"1.2.3", "shellcheck":"1.2.3", "node":"1.2.3",
+            "cargo-auditable":"0.7.6", "cargo-diet":"1.2.7"
+        }}}});
+        check_pins(&metadata, &text.parse()?)?;
+        for replacement in [
+            "just = \"9.9.9\"",
+            "just = { version = \"9.9.9\" }",
+            "just = { version = 123 }",
+            "just = { version = \"\" }",
+            "just = {}",
+            "",
+        ] {
+            let changed = text.replace("just = \"1.2.3\"", replacement);
+            assert!(
+                check_pins(&metadata, &changed.parse()?).is_err(),
+                "invalid or differing fork pins fail: {replacement}"
+            );
+        }
+        metadata["metadata"]["qa"]["tool-versions"]["node"] = Value::Null;
+        assert!(
+            check_pins(&metadata, &text.parse()?).is_err(),
+            "shared tools need QA metadata"
+        );
+        Ok(())
+    }
 
     #[test]
     fn requirements_follow_commands_instead_of_task_names() -> gix_error::TestResult {
