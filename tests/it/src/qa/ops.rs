@@ -17,6 +17,7 @@ pub fn execute(root: &Path, args: &[String]) -> Result<()> {
     match operation.as_str() {
         "badge" if args.is_empty() => badge(root),
         "workflows" if args.is_empty() => workflows(root),
+        "tools" if args.is_empty() => super::requirements::check_tools(root),
         "mode" if args.is_empty() => mode(root),
         "msrv" if args.is_empty() => msrv(root),
         "msrv-version" if args.is_empty() => {

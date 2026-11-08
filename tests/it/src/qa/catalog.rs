@@ -164,6 +164,8 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             "housekeeping",
             &["housekeeping"],
             vec![
+                Command::new("@qa", &["tools"]),
+                Command::new("mise", &["run", "lint:workflows"]).requiring(&["actionlint", "shellcheck", "node"]),
                 Command::new("@qa", &["workflows"]),
                 Command::new("@qa", &["badge"]),
                 Command::new("@qa", &["mode"]),
@@ -839,8 +841,8 @@ mod tests {
             {"name":"internal-tools", "targets":[{"kind":["bin"],"test":true}], "metadata":{"qa":{"api-checker":true,"api-toolchain":"1.99.0"}}},
             {"name":"gitoxide", "targets":[{"kind":["bin"],"test":false}], "metadata":{"qa":{"journey":true,"auditable":true}}}
         ],"metadata":{"qa":{"tool-versions":{
-            "cargo-nextest":"0.9.122","cargo-deny":"0.20.0","cargo-machete":"0.9.1",
-            "cargo-semver-checks":"0.51.0","cargo-auditable":"0.7.6","cargo-diet":"1.2.7","just":"1.58.0"
+            "cargo-nextest":"0.9.151","cargo-deny":"0.20.2","cargo-machete":"0.9.2",
+            "cargo-semver-checks":"0.51.0","cargo-auditable":"0.7.6","cargo-diet":"1.2.7","just":"1.59.0", "actionlint":"1.7.12", "shellcheck":"0.11.0", "node":"26.13.0"
         }}}})
     }
 
@@ -852,6 +854,24 @@ mod tests {
             assert!(
                 tasks.iter().any(|task| task.id == "policy" && task.blocking),
                 "licenses cannot be selected away"
+            );
+            let housekeeping = tasks
+                .iter()
+                .find(|task| task.id == "housekeeping")
+                .expect("mandatory housekeeping");
+            assert_eq!(
+                housekeeping.requirements.tools,
+                ["actionlint", "node", "shellcheck"].map(str::to_owned).into(),
+                "empty selections retain workflow lint tools"
+            );
+            assert_eq!(
+                housekeeping
+                    .commands
+                    .iter()
+                    .filter(|command| command.program == "mise")
+                    .count(),
+                1,
+                "workflow lint runs once"
             );
             assert!(
                 !tasks.iter().any(|task| task.id == "native-tests"),
@@ -1093,6 +1113,16 @@ mod tests {
             jobs[0]["tasks"],
             json!(["self-test", "policy", "housekeeping"]),
             "the lane keeps every task of the combined groups"
+        );
+        assert_eq!(
+            jobs[0]["tools"],
+            json!([
+                "actionlint@1.7.12",
+                "cargo-deny@0.20.2",
+                "node@26.13.0",
+                "shellcheck@0.11.0"
+            ]),
+            "combined lanes retain policy and workflow tool pins"
         );
         assert!(
             combined_groups(&["a=lint".into(), "b=lint".into()]).is_err(),

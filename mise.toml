@@ -29,11 +29,11 @@ run = "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage local
 
 [tasks.check]
 description = "Affected-package QA; global inputs conservatively select the workspace"
-run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage {{vars.host_stages}}"]
+run = "bash etc/scripts/ci-check-local.sh --fast --base origin/dev --stage {{vars.host_stages}}"
 
 [tasks."check:thorough"]
 description = "Full host feature matrix, tests, docs, API compatibility and journeys"
-run = ["mise run lint:workflows", "bash etc/scripts/ci-check-local.sh --thorough --stage {{vars.host_stages}}"]
+run = "bash etc/scripts/ci-check-local.sh --thorough --stage {{vars.host_stages}}"
 
 [tasks."check:msrv"]
 description = "Build gix at its declared MSRV in both supported configurations"
