@@ -19,12 +19,14 @@ git init -q -b main source
   git add data
   git commit -qm one
   git tag one
-  sed -i 's/^line 17 .*/line 17 was changed in two/' data
+  sed 's/^line 17 .*/line 17 was changed in two/' data >data.next
+  mv data.next data
   echo two >two
   git add data two
   git commit -qm two
   git tag two
-  sed -i 's/^line 99 .*/line 99 was changed in three/' data
+  sed 's/^line 99 .*/line 99 was changed in three/' data >data.next
+  mv data.next data
   git commit -qam three
   git tag three
 )
