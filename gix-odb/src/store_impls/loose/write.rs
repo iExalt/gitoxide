@@ -173,7 +173,12 @@ impl Store {
                 }
             }
             match file.persist(&object_path) {
-                Err(err) if err.error.kind() == io::ErrorKind::NotFound && retries_left > 0 => {
+                Err(err)
+                    if retries_left > 0
+                        && (err.error.kind() == io::ErrorKind::NotFound
+                            // macOS can report EINVAL when the destination directory is removed during rename.
+                            || (cfg!(target_os = "macos") && err.error.kind() == io::ErrorKind::InvalidInput)) =>
+                {
                     retries_left -= 1;
                     file = err.file;
                 }
