@@ -212,7 +212,7 @@ it builds separate artifacts, so stick to the mise tasks to reuse their builds.
 The tasks delegate to the existing `justfile` and QA planner. Feature selection
 comes from Cargo QA metadata: small, lean, lean-async, max, max-pure and declared
 crate-specific variants are distinct checks; `--all-features` is not a substitute.
-Rust 1.99.1 is the development and API-check toolchain. Every crate declares MSRV 1.99, the root CLI included. Explicit task toolchains override
+Rust 1.99.1 is the development toolchain. API checks use the declared Rust 1.99.0 toolchain. Every crate declares MSRV 1.99, the root CLI included. Explicit task toolchains override
 the inherited mise toolchain. Do not update the machine-wide `stable` alias to run QA.
 
 Fork CI runs on Ubuntu 24.04 for every PR and push to `dev`, in one of two modes chosen
