@@ -18,5 +18,8 @@ theirs=$(printf 'conflict theirs\n' | git hash-object -w --stdin)
 printf '100644 %s 1\tconflicted\n100644 %s 2\tconflicted\n100644 %s 3\tconflicted\n' "$base" "$ours" "$theirs" |
   git update-index --index-info
 echo untracked >untracked
+# The visual snapshot includes exact modes, independent of the fixture creator's umask.
+chmod 755 nested nested/deep
+chmod 644 tracked nested/deep/tracked staged untracked
 commit=$(git commit-tree HEAD^{tree} -p HEAD -m detached)
 git update-ref refs/heads/side "$commit"
