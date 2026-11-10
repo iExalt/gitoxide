@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.4.1...gitoxide-fork-v0.5.0) (2026-11-10)
+
+
+### Features
+
+* **gix:** add an opt-in non-interactive SSH policy ([7300dcd](https://github.com/iExalt/gitoxide/commit/7300dcd7fdf8e9d6e52606195ecf0c2861a3304e))
+
+
+### Bug fixes
+
+* **gix-odb:** retry loose-object publication races on macOS ([8e3a125](https://github.com/iExalt/gitoxide/commit/8e3a12555d387462f26ff1115eeb69040e2d4cc9))
+* **internal-tools:** align QA tool requirements with fork pins ([4c1c5cd](https://github.com/iExalt/gitoxide/commit/4c1c5cdda70d7c3de72e62b0164ae21ca77ff998))
+
+
+### Performance
+
+* **internal-tools:** keep compatible feature tests on one CI shard ([977b324](https://github.com/iExalt/gitoxide/commit/977b3243c1e84aca9b14d63203825a9950253d7f))
+
+
+### Fork maintenance
+
+* **gix:** avoid redundant CI dependency setup ([f2062fd](https://github.com/iExalt/gitoxide/commit/f2062fd31374874d67f6986ae3d5e15178e9e82e))
+* **gix:** preselect maintenance fixture blob inputs ([f1dda41](https://github.com/iExalt/gitoxide/commit/f1dda4160327bb8ada41f590fe952b0271af681f))
+* **gix:** update development tools to latest releases ([3a25ce8](https://github.com/iExalt/gitoxide/commit/3a25ce8c849d181f3336f2808ba9ff3dfd254f1b))
+
 ## [0.4.1](https://github.com/iExalt/gitoxide/compare/gitoxide-fork-v0.4.0...gitoxide-fork-v0.4.1) (2026-11-06)
 
 
