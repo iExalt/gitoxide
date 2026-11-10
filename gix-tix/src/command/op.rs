@@ -86,7 +86,12 @@ mod tests {
 
     #[test]
     fn log_and_recovery_commands_share_the_persisted_queue() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        // Recreated checkout files must use the same umask as the initial fixture.
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "rebase_edit.sh",
+            None::<String>,
+            gix_testtools::Creation::Execute,
+        )?;
         let repository = crate::test_repository::open(fixture.path())?;
         let empty = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(

@@ -1690,7 +1690,12 @@ fn travel_collapse_onto_a_hidden_pending_input_preserves_the_boundary() -> gix_t
 #[test]
 fn travel_merge_collapse_preserves_pending_departure_and_local_changes() -> gix_testtools::Result {
     for (conflicting_base, shared_change_id) in [(false, false), (true, false), (false, true), (true, true)] {
-        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        // Recreated checkout files must use the same umask as the initial fixture.
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "auto_merge.sh",
+            None::<String>,
+            gix_testtools::Creation::Execute,
+        )?;
         let path = fixture.path();
         let repo = crate::test_repository::open(path)?;
         let a = input(&repo, "A")?;
