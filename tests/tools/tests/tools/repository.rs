@@ -649,13 +649,13 @@ mod snapshot {
 
     #[test]
     fn state_is_a_stable_visual_snapshot() -> gix_testtools::TestResult {
-        let fixture = gix_testtools::scripted_fixture_writable("make_repository_state.sh")?;
+        let fixture = gix_testtools::scripted_fixture_read_only("make_repository_state.sh")?;
         #[cfg(unix)]
         {
             let snapshot_name = format!("state_is_a_stable_visual_snapshot_{}", gix_testtools::object_hash());
-            insta::assert_snapshot!(snapshot_name, gix_testtools::repository::snapshot(fixture.path())?);
+            insta::assert_snapshot!(snapshot_name, gix_testtools::repository::snapshot(&fixture)?);
         }
-        insta::assert_snapshot!(gix_testtools::repository::snapshot_portable(fixture.path())?, @r#"
+        insta::assert_snapshot!(gix_testtools::repository::snapshot_portable(&fixture)?, @r#"
         HEAD refs/heads/main -> C0
 
         [config]
