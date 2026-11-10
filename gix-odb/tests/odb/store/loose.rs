@@ -245,21 +245,66 @@ mod write {
         let done = std::sync::atomic::AtomicBool::new(false);
 
         std::thread::scope(|scope| -> gix_testtools::TestResult {
-            scope.spawn(|| {
+            let pruner = scope.spawn(|| {
+                let mut removals = 0;
                 while !done.load(std::sync::atomic::Ordering::Relaxed) {
                     for fan_out in 0..=255u8 {
-                        // fails for all but the directories that are empty, which are the ones that matter
-                        std::fs::remove_dir(dir.path().join(format!("{fan_out:02x}"))).ok();
+                        if std::fs::remove_dir(dir.path().join(format!("{fan_out:02x}"))).is_ok() {
+                            removals += 1;
+                            // Bound interference to the writer's retry budget instead of starving it.
+                            if removals == 5 {
+                                return;
+                            }
+                        }
                     }
                 }
             });
-            let result = (0..3000u32).try_for_each(|idx| {
-                db.write_buf(gix_object::Kind::Blob, format!("object {idx}").as_bytes())
-                    .map(|_| ())
-            });
+            let mut buf = Vec::new();
+            let result =
+                (0..3000u32)
+                    .take_while(|_| !pruner.is_finished())
+                    .try_for_each(|idx| -> gix_testtools::TestResult {
+                        let data = format!("object {idx}");
+                        let id = db.write_buf(gix_object::Kind::Blob, data.as_bytes())?;
+                        let object = db.try_find(&id, &mut buf)?.ok_or("the published object is missing")?;
+                        if object.data != data.as_bytes() {
+                            return Err("a successful write must publish the complete object".into());
+                        }
+                        // Keep fan-outs removable throughout the test, not just before their first object.
+                        std::fs::remove_file(db.object_path(&id))?;
+                        Ok(())
+                    });
             done.store(true, std::sync::atomic::Ordering::Relaxed);
-            Ok(result?)
+            result
         })
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_permanent_publication_error_is_preserved() -> gix_testtools::TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let db = ldb_at_opts(dir.path(), gix_testtools::object_hash());
+        let object_id = gix_testtools::object_hash().empty_blob();
+        let object_path = db.object_path(&object_id);
+        std::fs::create_dir_all(&object_path)?;
+
+        let err = db
+            .write_buf(gix_object::Kind::Blob, &[])
+            .expect_err("a directory cannot be replaced by a loose object");
+        assert!(
+            err.downcast_any_ref::<std::io::Error>().is_some(),
+            "publication retains the original filesystem error"
+        );
+        assert_eq!(
+            err.metadata().next().expect("publication records the destination")["path"],
+            gix_error::MetadataValue::from(object_path.as_path()),
+            "the failed destination is retained"
+        );
+        assert!(
+            object_path.is_dir(),
+            "a failed publication leaves the obstruction intact"
+        );
+        Ok(())
     }
 }
 
