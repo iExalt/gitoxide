@@ -1377,7 +1377,12 @@ mod tests {
 
     #[test]
     fn attached_branch_checkout_follows_undo_and_redo() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("forget_commit.sh")?;
+        // Recreated checkout files must use the same umask as the initial fixture.
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "forget_commit.sh",
+            None::<String>,
+            gix_testtools::Creation::Execute,
+        )?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
         let repo = crate::test_repository::open(fixture.path())?;
         let top = repo.head_id()?.detach();
