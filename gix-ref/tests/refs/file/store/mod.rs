@@ -277,7 +277,18 @@ fn precompose_unicode_journey() -> gix_testtools::TestResult {
 
     let precomposed_u = "ü";
     for namespace in [decomposed_u, precomposed_u] {
-        let mut store_precomposed_with_namespace = store_precomposed.clone();
+        // Equivalent namespace spellings alias here, so each case needs the same fresh state.
+        let case = gix_testtools::tempfile::TempDir::new()?;
+        gix_testtools::copy_recursively_into_existing_dir(tmp.path(), case.path())?;
+        let mut store_precomposed_with_namespace = gix_ref::file::Store::at_opts(
+            case.path().join(precomposed_a),
+            crate::fixture_hash_kind(),
+            gix_ref::store::init::Options {
+                write_reflog: WriteReflog::Always,
+                precompose_unicode: true,
+                ..Default::default()
+            },
+        );
         store_precomposed_with_namespace.namespace = Some(gix_ref::namespace::expand(namespace)?.clone());
 
         // these edits are loose refs
